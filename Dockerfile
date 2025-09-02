@@ -18,6 +18,7 @@ WORKDIR /VJ-FILTER-BOT
 COPY . .
 
 # Run the bot
-CMD ["python", "bot."]
+CMD ["python", "bot.py"]
+
 
 
