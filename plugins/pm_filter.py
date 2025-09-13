@@ -1801,14 +1801,24 @@ async def cb_handler(client: Client, query: CallbackQuery):
         try:
             log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
             fileName = {quote_plus(get_name(log_msg))}
-            stream = f"{URL}watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-            download = f"{URL}{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+            # stream = f"{URL}watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+            # download = f"{URL}{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+            stream = f"{URL}/watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+            download = f"{URL}/download/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+
+            # button = [[
+            #     InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
+            #     InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
+            # ],[
+            #     InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
+            # ]]
             button = [[
                 InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
                 InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
-            ],[
+            ],[ 
                 InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
             ]]
+
             await query.message.edit_reply_markup(InlineKeyboardMarkup(button))
         except Exception as e:
             print(e)
@@ -3286,4 +3296,5 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
