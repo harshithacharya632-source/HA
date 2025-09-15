@@ -12,7 +12,7 @@ BOT_TOKEN = environ.get('BOT_TOKEN', "7011228023:AAG-cnuOaMMANjuV_hbDv3Ebfexd2Rm
 
 
 # This Pictures Is For Start Message Picture, You Can Add Multiple By Giving One Space Between Each.
-PICS = (environ.get('PICS', 'https://ibb.co/fYbMStJH')).split()
+PICS = (environ.get('PICS', 'https://ibb.co/0RQMzgyB')).split()
 
 
 # Admins & Users
@@ -184,6 +184,7 @@ else:
     OTHER_DB_URI = O_DB_URI       # This Db Is For Other Data Store
     FILE_DB_URI = F_DB_URI        # This Db Is For File Data Store
     SEC_FILE_DB_URI = S_DB_URI    # This Db is for File Data Store When First Db Is Going To Be Full.
+
 
 
 
