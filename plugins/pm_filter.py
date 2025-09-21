@@ -1812,9 +1812,9 @@ async def cb_handler(client: Client, query: CallbackQuery):
                   
           #      InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
          #       InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream)
-            ], [
+          #  ], [
           #      InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
-            ]]
+         #   ]]
 
 
             # button = [[
@@ -3302,6 +3302,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
