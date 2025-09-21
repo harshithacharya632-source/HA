@@ -83,7 +83,7 @@ PUBLIC_FILE_CHANNEL = environ.get('PUBLIC_FILE_CHANNEL', '') # Public Channel Us
 
 
 # Links
-GRP_LNK = environ.get('GRP_LNK', 'https://t.me/Goflix_Disscussion')
+GRP_LNK = environ.get('GRP_LNK', 'https://t.me/gofixmovie')
 CHNL_LNK = environ.get('CHNL_LNK', 'https://t.me/trendi_Backup')
 SUPPORT_CHAT = environ.get('SUPPORT_CHAT', 'Goflix_Disscussion') # Support Chat Link Without https:// or @
 OWNER_LNK = environ.get('OWNER_LNK', 'https://t.me/Goflix_AdminBot')
@@ -184,6 +184,7 @@ else:
     OTHER_DB_URI = O_DB_URI       # This Db Is For Other Data Store
     FILE_DB_URI = F_DB_URI        # This Db Is For File Data Store
     SEC_FILE_DB_URI = S_DB_URI    # This Db is for File Data Store When First Db Is Going To Be Full.
+
 
 
 
