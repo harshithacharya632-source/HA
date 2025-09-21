@@ -72,7 +72,7 @@ async def save_group(bot, message):
                     parse_mode=enums.ParseMode.HTML
                 )  
         if settings["auto_delete"]:
-            await asyncio.sleep(600)
+            await asyncio.sleep(60)
             await (temp.MELCOW['welcome']).delete()
 
 @Client.on_message(filters.command('leave') & filters.user(ADMINS))
@@ -296,3 +296,4 @@ async def list_chats(bot, message):
         with open('chats.txt', 'w+') as outfile:
             outfile.write(out)
         await message.reply_document('chats.txt', caption="List Of Chats")
+
