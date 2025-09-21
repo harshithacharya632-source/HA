@@ -246,7 +246,11 @@ Nᴀᴍᴇ - {}"""
 
     CAPTION = """<b>📂 ғɪʟᴇɴᴀᴍᴇ : {file_name}
 
-<b>⚙️ sɪᴢᴇ : {file_size}</b>""" 
+<b>⚙️ sɪᴢᴇ : {file_size}</b>
+      ♨️ Goflix
+🔗 <a href='https://t.me/trendi_Backup'>📢 Update Channel</a>
+🎬 <a href='https://t.me/gofixmovie'>🎥 Movie Group</a>
+"""
 
     IMDB_TEMPLATE_TXT = """
 <b>Query: {qurey}
@@ -752,4 +756,5 @@ Example:- /set_caption 📕 File Name: {filename}
 
 
     
+
 
