@@ -6,9 +6,9 @@ id_pattern = re.compile(r'^.\d+$')
 
 # Bot information
 SESSION = environ.get('SESSION', 'TechVJBot')
-API_ID = int(environ.get('API_ID', '25962591'))
-API_HASH = environ.get('API_HASH', '5d1dc00807bc62b346488a483bd3075d')
-BOT_TOKEN = environ.get('BOT_TOKEN', "7011228023:AAEkyjKftHr0XieSZbVSKF9qrsVQ4yi99Qg")
+API_ID = int(environ.get('API_ID', ''))
+API_HASH = environ.get('API_HASH', '')
+BOT_TOKEN = environ.get('BOT_TOKEN', "")
 
 
 # This Pictures Is For Start Message Picture, You Can Add Multiple By Giving One Space Between Each.
@@ -16,7 +16,7 @@ PICS = (environ.get('PICS', 'https://ibb.co/0RQMzgyB')).split()
 
 
 # Admins & Users
-ADMINS = [int(admin) if id_pattern.search(admin) else admin for admin in environ.get('ADMINS', '762638982').split()] # For Multiple Id Use One Space Between Each.
+ADMINS = [int(admin) if id_pattern.search(admin) else admin for admin in environ.get('ADMINS', '').split()] # For Multiple Id Use One Space Between Each.
 auth_users = [int(user) if id_pattern.search(user) else user for user in environ.get('AUTH_USERS', '').split()]  # For Multiple Id Use One Space Between Each.
 AUTH_USERS = (auth_users + ADMINS) if auth_users else []
 
@@ -184,6 +184,7 @@ else:
     OTHER_DB_URI = O_DB_URI       # This Db Is For Other Data Store
     FILE_DB_URI = F_DB_URI        # This Db Is For File Data Store
     SEC_FILE_DB_URI = S_DB_URI    # This Db is for File Data Store When First Db Is Going To Be Full.
+
 
 
 
