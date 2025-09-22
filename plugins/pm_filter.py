@@ -761,58 +761,70 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
             pass
     await query.answer()
     
-    
-    
+  #START HERE GPT  
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client: Client, query: CallbackQuery):
-
     try:
+        # Check if user is allowed to access this request
         if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\n"
+                "ᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\n"
+                "ʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
         pass
-    
+
+    # Get the key from callback_data
     _, key = query.data.split("#")
     search = FRESH.get(key)
     BUTTONS[key] = None
-    try:
+
+    # Safely replace spaces with underscores
+    if isinstance(search, str):
         search = search.replace(' ', '_')
-    except:
-        pass
+
     btn = []
-    for i in range(0, len(SEASONS)-1, 2):
-        btn.append([
-            InlineKeyboardButton(
-                text=SEASONS[i].title(),
-                callback_data=f"fs#{SEASONS[i].lower()}#{key}"
-            ),
-            InlineKeyboardButton(
+
+    # Add season buttons (robust for odd number of seasons)
+    for i in range(0, len(SEASONS), 2):
+        row = [InlineKeyboardButton(
+            text=SEASONS[i].title(),
+            callback_data=f"fs#{SEASONS[i].lower()}#{key}"
+        )]
+        if i + 1 < len(SEASONS):
+            row.append(InlineKeyboardButton(
                 text=SEASONS[i+1].title(),
                 callback_data=f"fs#{SEASONS[i+1].lower()}#{key}"
-            ),
-        ])
+            ))
+        btn.append(row)
 
+    # Header
     btn.insert(
         0,
-        [
-            InlineKeyboardButton(
-                text="👇 𝖲𝖾𝗅𝖾𝖼𝗍 Season 👇", callback_data="ident"
-            )
-        ],
+        [InlineKeyboardButton(
+            text="👇 𝖲𝖾𝗅𝖾𝖼𝗍 Season 👇",
+            callback_data="ident"
+        )]
     )
+
+    # Back button
     req = query.from_user.id
     offset = 0
-    btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ​↭", callback_data=f"next_{req}_{key}_{offset}")])
+    btn.append([InlineKeyboardButton(
+        text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭",
+        callback_data=f"next_{req}_{key}_{offset}"
+    )])
 
+    # Edit message with new inline keyboard
     try:
         await query.edit_message_reply_markup(
             reply_markup=InlineKeyboardMarkup(btn)
         )
     except MessageNotModified:
-        pass
+        pass    
+#END HERE GPT
 
 @Client.on_callback_query(filters.regex(r"^fs#"))
 async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
@@ -3302,6 +3314,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
