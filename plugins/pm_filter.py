@@ -905,28 +905,37 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         BUTTONS0[key] = f"{search} {seas}"
         temp.GETALL[key] = files
         
-        # Get episode numbers from filenames for display
-        episode_numbers = set()
-        for file in files:
-            # Extract episode number using regex
-            ep_match = re.search(r'e(\d+)', file["file_name"].lower())
-            if ep_match:
-                episode_numbers.add(int(ep_match.group(1)))
-        
         settings = await get_settings(query.message.chat.id)
         pre = 'filep' if settings['file_secure'] else 'file'
         
         if settings["button"]:
             # Create buttons for files
-            btn = [
-                [
+            btn = []
+            for file in files:
+                # Extract season and episode numbers
+                season_num = seas.split()[-1]
+                
+                # Extract episode number
+                ep_match = re.search(r'e(\d+)', file["file_name"].lower())
+                episode_num = ep_match.group(1) if ep_match else "??"
+                
+                # Clean filename for display
+                file_name_parts = file["file_name"].split()
+                clean_name_parts = []
+                for part in file_name_parts:
+                    if not (part.startswith('[') or part.startswith('@') or part.startswith('www.')):
+                        clean_name_parts.append(part)
+                clean_name = ' '.join(clean_name_parts)[:30]  # Limit length
+                
+                # Create button text
+                button_text = f"[{get_size(file['file_size'])}] S{season_num}E{episode_num} - {clean_name}"
+                
+                btn.append([
                     InlineKeyboardButton(
-                        text=f"[{get_size(file['file_size'])}] S{seas.split()[-1]}E{re.search(r'e(\d+)', file['file_name'].lower()).group(1) if re.search(r'e(\d+)', file['file_name'].lower()) else '??'} - {''.join(filter(lambda x: not x.startswith(('[')) and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))[:20]}",
+                        text=button_text,
                         callback_data=f'{pre}#{file["file_id"]}'
-                    ),
-                ]
-                for file in files
-            ]
+                    )
+                ])
             
             # Add header buttons
             btn.insert(0, [
@@ -3344,6 +3353,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
