@@ -825,167 +825,30 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
     except MessageNotModified:
         pass
 
-@Client.on_callback_query(filters.regex(r"^fs#"))
-async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
+@Client.on_callback_query(filters.regex(r"^debug#"))
+async def debug_files_handler(client: Client, query: CallbackQuery):
     try:
-        _, seas, key = query.data.split("#")
-        
-        # Check user permission
-        try:
-            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                return await query.answer(
-                    f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
-                    show_alert=True,
-                )
-        except:
-            pass
-
-        curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
+        _, key = query.data.split("#")
         search = FRESH.get(key)
         
         if not search:
-            await query.answer("❌ Invalid request!", show_alert=True)
+            await query.answer("No search query found!", show_alert=True)
             return
             
-        # Clean the search query from existing season patterns
-        search = search.replace(' ', '_')
-        
-        # Remove any existing season patterns from search
-        season_patterns = [
-            "s01", "s02", "s03", "s04", "s05", "s06", "s07", "s08", "s09", "s10",
-            "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10",
-            "season 01", "season 02", "season 03", "season 04", "season 05", 
-            "season 06", "season 07", "season 08", "season 09", "season 10",
-            "season 1", "season 2", "season 3", "season 4", "season 5",
-            "season 6", "season 7", "season 8", "season 9", "season 10"
-        ]
-        
-        for pattern in season_patterns:
-            search = search.replace(pattern, "").replace(pattern.upper(), "").replace(pattern.title(), "")
-        
-        # Clean up any double spaces
-        search = ' '.join(search.split())
-        
-        # Map season names to search patterns
-        season_mapping = {
-            "season 1": ["s01", "s1", "season 01", "season 1"],
-            "season 2": ["s02", "s2", "season 02", "season 2"],
-            "season 3": ["s03", "s3", "season 03", "season 3"],
-            "season 4": ["s04", "s4", "season 04", "season 4"],
-            "season 5": ["s05", "s5", "season 05", "season 5"],
-            "season 6": ["s06", "s6", "season 06", "season 6"],
-            "season 7": ["s07", "s7", "season 07", "season 7"],
-            "season 8": ["s08", "s8", "season 08", "season 8"],
-            "season 9": ["s09", "s9", "season 09", "season 9"],
-            "season 10": ["s10", "season 10", "season 10"]
-        }
-        
         chat_id = query.message.chat.id
-        files = []
+        # Get all files for this search
+        all_files, _, _ = await get_search_results(chat_id, search, max_results=50)
         
-        # Search with all possible season patterns
-        if seas in season_mapping:
-            for pattern in season_mapping[seas]:
-                search_query = f"{search} {pattern}"
-                search_files, _, _ = await get_search_results(chat_id, search_query, max_results=20)
-                
-                # Filter files that actually contain the season pattern in filename
-                for file in search_files:
-                    file_name_lower = file["file_name"].lower()
-                    if any(patt in file_name_lower for patt in season_mapping[seas]):
-                        # Check if file is not already in the list
-                        if not any(f["file_id"] == file["file_id"] for f in files):
-                            files.append(file)
-        
-        if not files:
-            await query.answer("🚫 𝗡𝗼 𝗙𝗶𝗹𝗲𝘀 𝗙𝗼𝘂𝗻𝗱 𝗳𝗼𝗿 𝘁𝗵𝗶𝘀 𝗦𝗲𝗮𝘀𝗼𝗻 🚫", show_alert=True)
+        if not all_files:
+            await query.answer("No files found at all!", show_alert=True)
             return
             
-        # Store files for this season
-        BUTTONS0[key] = f"{search} {seas}"
-        temp.GETALL[key] = files
+        # Show file names for debugging
+        file_list = "\n".join([f["file_name"] for f in all_files[:10]])  # First 10 files
+        await query.answer(f"Found {len(all_files)} files. First 10:\n{file_list}", show_alert=True)
         
-        settings = await get_settings(query.message.chat.id)
-        pre = 'filep' if settings['file_secure'] else 'file'
-        
-        if settings["button"]:
-            # Create buttons for files
-            btn = []
-            for file in files:
-                # Extract season and episode numbers
-                season_num = seas.split()[-1]
-                
-                # Extract episode number
-                ep_match = re.search(r'e(\d+)', file["file_name"].lower())
-                episode_num = ep_match.group(1) if ep_match else "??"
-                
-                # Clean filename for display
-                file_name_parts = file["file_name"].split()
-                clean_name_parts = []
-                for part in file_name_parts:
-                    if not (part.startswith('[') or part.startswith('@') or part.startswith('www.')):
-                        clean_name_parts.append(part)
-                clean_name = ' '.join(clean_name_parts)[:30]  # Limit length
-                
-                # Create button text
-                button_text = f"[{get_size(file['file_size'])}] S{season_num}E{episode_num} - {clean_name}"
-                
-                btn.append([
-                    InlineKeyboardButton(
-                        text=button_text,
-                        callback_data=f'{pre}#{file["file_id"]}'
-                    )
-                ])
-            
-            # Add header buttons
-            btn.insert(0, [
-                InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
-                InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{seas}#{key}"),
-                InlineKeyboardButton("sᴇᴀsᴏɴs", callback_data=f"seasons#{key}")
-            ])
-            
-            btn.insert(0, [
-                InlineKeyboardButton("ʟᴀɴɢᴜᴀɢᴇs", callback_data=f"languages#{key}"),
-                InlineKeyboardButton("ʏᴇᴀʀs", callback_data=f"years#{key}")
-            ])
-        else:
-            btn = []
-            btn.insert(0, [
-                InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
-                InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{seas}#{key}"),
-                InlineKeyboardButton("sᴇᴀsᴏɴs", callback_data=f"seasons#{key}")
-            ])
-            btn.insert(0, [
-                InlineKeyboardButton("ʟᴀɴɢᴜᴀɢᴇs", callback_data=f"languages#{key}"),
-                InlineKeyboardButton("ʏᴇᴀʀs", callback_data=f"years#{key}")
-            ])
-        
-        # Add back button
-        req = query.from_user.id
-        offset = 0
-        btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ꜱᴇᴀꜱᴏɴꜱ ↭", callback_data=f"seasons#{key}")])
-        btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"next_{req}_{key}_{offset}")])
-        
-        # Update the message
-        if not settings["button"]:
-            cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
-            time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
-            remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
-            total_results = len(files)
-            cap = await get_cap(settings, remaining_seconds, files, query, total_results, search)
-            try:
-                await query.message.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
-            except MessageNotModified:
-                pass
-        else:
-            try:
-                await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
-            except MessageNotModified:
-                pass
-                
     except Exception as e:
-        logger.error(f"Error in filter_seasons_cb_handler: {e}")
-        await query.answer("❌ An error occurred!", show_alert=True)
+        await query.answer(f"Debug error: {str(e)}", show_alert=True)
 @Client.on_callback_query(filters.regex(r"^qualities#"))
 async def qualities_cb_handler(client: Client, query: CallbackQuery):
 
@@ -3353,6 +3216,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
