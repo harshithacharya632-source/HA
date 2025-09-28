@@ -834,7 +834,7 @@ from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
 from pyrogram.errors import MessageNotModified, FloodWait
 
 # Assuming these are defined elsewhere in your codebase
-# from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, logger
+# from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, logger, SEASONS
 
 # Simple dict cache for search results (async-safe)
 SEARCH_CACHE = {}
@@ -845,9 +845,13 @@ async def get_cached_search_results(chat_id, query, max_results):
         logger.info(f"Cache hit for query: {query}")
         return SEARCH_CACHE[cache_key]
     logger.info(f"Cache miss, executing search for: {query}")
-    result = await get_search_results(chat_id, query, max_results)
-    SEARCH_CACHE[cache_key] = result
-    return result
+    try:
+        result = await get_search_results(chat_id, query, max_results)
+        SEARCH_CACHE[cache_key] = result
+        return result
+    except Exception as e:
+        logger.error(f"Search error for query {query}: {e}")
+        return [], 0, 0
 
 @Client.on_callback_query(filters.regex(r"^fs#"))
 async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
@@ -886,67 +890,66 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         chat_id = query.message.chat.id
         files = []
         
-        # Expanded season patterns to match more file naming conventions, including "2x01" style
+        # Expanded season patterns to match Game of Thrones file names
         season_patterns_map = {
             "season 1": [
                 r"s\s*0?1", r"season\s*0?1", r"season-?1\b", r"s-?1\b", r"s01", r"s1e", r"season1e", 
                 r"season 01", r"season 1\b", r"season1\b", r"s 01", r"s 1\b", r"1st season", 
                 r"first season", r"season one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1",
-                r"\b1x", r"1\s*x"
+                r"\b1x", r"1\s*x", r"s01e", r"season\s*1\s*e", r"s\s*1\s*e"
             ],
             "season 2": [
                 r"s\s*0?2", r"season\s*0?2", r"season-?2\b", r"s-?2\b", r"s02", r"s2e", r"season2e", 
                 r"season 02", r"season 2\b", r"season2\b", r"s 02", r"s 2\b", r"2nd season", 
                 r"second season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2",
-                r"\b2x", r"2\s*x"
+                r"\b2x", r"2\s*x", r"s02e", r"season\s*2\s*e", r"s\s*2\s*e"
             ],
             "season 3": [
                 r"s\s*0?3", r"season\s*0?3", r"season-?3\b", r"s-?3\b", r"s03", r"s3e", r"season3e", 
                 r"season 03", r"season 3\b", r"season3\b", r"s 03", r"s 3\b", r"3rd season", 
                 r"third season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3",
-                r"\b3x", r"3\s*x"
+                r"\b3x", r"3\s*x", r"s03e", r"season\s*3\s*e", r"s\s*3\s*e"
             ],
             "season 4": [
                 r"s\s*0?4", r"season\s*0?4", r"season-?4\b", r"s-?4\b", r"s04", r"s4e", r"season4e", 
                 r"season 04", r"season 4\b", r"season4\b", r"s 04", r"s 4\b", r"4th season", 
                 r"fourth season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4",
-                r"\b4x", r"4\s*x"
+                r"\b4x", r"4\s*x", r"s04e", r"season\s*4\s*e", r"s\s*4\s*e"
             ],
             "season 5": [
                 r"s\s*0?5", r"season\s*0?5", r"season-?5\b", r"s-?5\b", r"s05", r"s5e", r"season5e", 
                 r"season 05", r"season 5\b", r"season5\b", r"s 05", r"s 5\b", r"5th season", 
                 r"fifth season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5",
-                r"\b5x", r"5\s*x"
+                r"\b5x", r"5\s*x", r"s05e", r"season\s*5\s*e", r"s\s*5\s*e"
             ],
             "season 6": [
                 r"s\s*0?6", r"season\s*0?6", r"season-?6\b", r"s-?6\b", r"s06", r"s6e", r"season6e", 
                 r"season 06", r"season 6\b", r"season6\b", r"s 06", r"s 6\b", r"6th season", 
                 r"sixth season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6",
-                r"\b6x", r"6\s*x"
+                r"\b6x", r"6\s*x", r"s06e", r"season\s*6\s*e", r"s\s*6\s*e"
             ],
             "season 7": [
                 r"s\s*0?7", r"season\s*0?7", r"season-?7\b", r"s-?7\b", r"s07", r"s7e", r"season7e", 
                 r"season 07", r"season 7\b", r"season7\b", r"s 07", r"s 7\b", r"7th season", 
                 r"seventh season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7",
-                r"\b7x", r"7\s*x"
+                r"\b7x", r"7\s*x", r"s07e", r"season\s*7\s*e", r"s\s*7\s*e"
             ],
             "season 8": [
                 r"s\s*0?8", r"season\s*0?8", r"season-?8\b", r"s-?8\b", r"s08", r"s8e", r"season8e", 
                 r"season 08", r"season 8\b", r"season8\b", r"s 08", r"s 8\b", r"8th season", 
                 r"eighth season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8",
-                r"\b8x", r"8\s*x"
+                r"\b8x", r"8\s*x", r"s08e", r"season\s*8\s*e", r"s\s*8\s*e"
             ],
             "season 9": [
                 r"s\s*0?9", r"season\s*0?9", r"season-?9\b", r"s-?9\b", r"s09", r"s9e", r"season9e", 
                 r"season 09", r"season 9\b", r"season9\b", r"s 09", r"s 9\b", r"9th season", 
                 r"ninth season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9",
-                r"\b9x", r"9\s*x"
+                r"\b9x", r"9\s*x", r"s09e", r"season\s*9\s*e", r"s\s*9\s*e"
             ],
             "season 10": [
                 r"s\s*10", r"season\s*10", r"season-?10\b", r"s-?10\b", r"s10", r"s10e", r"season10e", 
                 r"season 10\b", r"season10\b", r"s 10", r"10th season", r"tenth season", 
-                r"s10\b", r"season\s*-?\s*10",
-                r"\b10x", r"10\s*x"
+                r"s10\b", r"season\s*-?\s*10", r"\b10x", r"10\s*x", r"s10e", r"season\s*10\s*e"
             ]
         }
         
@@ -956,50 +959,61 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             season_num = seas.split()[-1]
             season_regex = re.compile("|".join(patterns), re.IGNORECASE)
             
-            # First, try direct search with each pattern
-            for pattern in patterns:
-                search_query = f"{original_search} {pattern}"
+            # Try direct searches with season-specific queries to mimic "Game of Thrones S03E7"
+            files = []
+            search_queries = [
+                f"{original_search} S{season_num.zfill(2)}",
+                f"{original_search} Season {season_num}",
+                f"{original_search} S {season_num}",
+                f"{original_search} {season_num}x",
+                f"{original_search} Season-{season_num}",
+                f"{original_search} S{season_num}e"
+            ]
+            for search_query in search_queries:
                 logger.info(f"Direct search query: {search_query}")
                 try:
                     search_files, _, _ = await asyncio.wait_for(
-                        get_cached_search_results(chat_id, search_query, max_results=200),
+                        get_cached_search_results(chat_id, search_query, max_results=500),
                         timeout=10.0
                     )
+                    logger.info(f"Found {len(search_files)} files for query: {search_query}")
+                    if search_files:
+                        for file in search_files:
+                            file_name_lower = file["file_name"].lower()
+                            if season_regex.search(file_name_lower):
+                                files.append(file)
+                                logger.debug(f"Matched file: {file['file_name']}")
+                            else:
+                                logger.debug(f"Unmatched file: {file['file_name']}")
                 except asyncio.TimeoutError:
                     logger.error(f"Timeout on search: {search_query}")
                     continue
                 except Exception as e:
                     logger.error(f"Search failed for {search_query}: {e}")
                     continue
-                logger.info(f"Found {len(search_files)} files in direct search")
-                if search_files:
-                    files.extend(search_files)
             
-            # If no files found with direct search, try broader search and filter
+            # Fallback to broad search if no files found
             if not files:
-                logger.info("No files from direct search, trying broad search")
+                logger.info("No files from direct searches, trying broad search")
                 try:
                     broad_files, _, _ = await asyncio.wait_for(
-                        get_cached_search_results(chat_id, original_search, max_results=1000),
-                        timeout=25.0
+                        get_cached_search_results(chat_id, original_search, max_results=2000),
+                        timeout=30.0
                     )
+                    logger.info(f"Broad search found {len(broad_files)} files")
+                    for file in broad_files:
+                        file_name_lower = file["file_name"].lower()
+                        if season_regex.search(file_name_lower):
+                            files.append(file)
+                            logger.debug(f"Matched file: {file['file_name']}")
+                        else:
+                            logger.debug(f"Unmatched file: {file['file_name']}")
                 except asyncio.TimeoutError:
                     logger.error("Timeout on broad search")
                     broad_files = []
                 except Exception as e:
                     logger.error(f"Broad search failed: {e}")
                     broad_files = []
-                
-                logger.info(f"Broad search found {len(broad_files)} files")
-                
-                # Filter files that match the season regex
-                for file in broad_files:
-                    file_name_lower = file["file_name"].lower()
-                    if season_regex.search(file_name_lower):
-                        files.append(file)
-                        logger.debug(f"Matched file: {file['file_name']}")
-                    else:
-                        logger.debug(f"Unmatched file: {file['file_name']}")
         
         # Remove duplicates
         unique_files = []
@@ -1050,7 +1064,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 season_num = seas.split()[-1]
                 file_name_lower = file["file_name"].lower()
                 
-                # Extract episode number with additional patterns
+                # Extract episode number
                 episode_num = "??"
                 ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)']
                 for pattern in ep_patterns:
@@ -1074,7 +1088,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 btn.append([
                     InlineKeyboardButton(
                         text=button_text,
-                        callback_data=f"{pre}#{file['file_id']}"  # Simplified to match common handler expectation
+                        callback_data=f"{pre}#{file['file_id']}"
                     )
                 ])
             
@@ -1084,7 +1098,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             ])
             
             btn.insert(1, [
-                InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{key}"),  # Match expected format
+                InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{key}"),
                 InlineKeyboardButton("🎭 Episodes", callback_data=f"episodes#{seas}#{key}"),
                 InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")
             ])
@@ -1129,6 +1143,79 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 
     except Exception as e:
         logger.error(f"Error in filter_seasons_cb_handler: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
+
+@Client.on_callback_query(filters.regex(r"^seasons#"))
+async def seasons_cb_handler(client: Client, query: CallbackQuery):
+    try:
+        # Check if user is allowed to access this request
+        if query.message.reply_to_message:
+            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+                logger.info(f"Permission denied for user {query.from_user.id}")
+                return await query.answer(
+                    f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\n"
+                    "ᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\n"
+                    "ʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                    show_alert=True,
+                )
+        
+        # Get the key from callback_data
+        _, key = query.data.split("#")
+        search = FRESH.get(key)
+        BUTTONS0[key] = None
+
+        # Safely replace spaces with underscores
+        if isinstance(search, str):
+            search = search.replace(' ', '_')
+
+        btn = []
+
+        # Add season buttons (robust for odd number of seasons)
+        for i in range(0, len(SEASONS), 2):
+            row = [InlineKeyboardButton(
+                text=SEASONS[i].title(),
+                callback_data=f"fs#{SEASONS[i].lower()}#{key}"
+            )]
+            if i + 1 < len(SEASONS):
+                row.append(InlineKeyboardButton(
+                    text=SEASONS[i+1].title(),
+                    callback_data=f"fs#{SEASONS[i+1].lower()}#{key}"
+                ))
+            btn.append(row)
+
+        # Header
+        btn.insert(
+            0,
+            [InlineKeyboardButton(
+                text="👇 𝖲𝖾𝗅𝖾𝖼𝗍 Season 👇",
+                callback_data="ident"
+            )]
+        )
+
+        # Back button
+        req = query.from_user.id
+        offset = 0
+        btn.append([InlineKeyboardButton(
+            text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭",
+            callback_data=f"next_{req}_{key}_{offset}"
+        )])
+
+        # Edit message with new inline keyboard
+        try:
+            await query.edit_message_reply_markup(
+                reply_markup=InlineKeyboardMarkup(btn)
+            )
+        except MessageNotModified:
+            logger.info("Message not modified in seasons_cb_handler")
+            pass
+        except Exception as e:
+            logger.error(f"Error in seasons_cb_handler: {e}")
+            await query.answer("❌ Failed to update seasons menu.", show_alert=True)
+                
+    except Exception as e:
+        logger.error(f"Error in seasons_cb_handler: {e}")
         import traceback
         logger.error(traceback.format_exc())
         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
@@ -3501,6 +3588,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
