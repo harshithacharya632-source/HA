@@ -824,102 +824,106 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
         )
     except MessageNotModified:
         pass
-
-import re
+#START HER GROKimport re
 import logging
+import asyncio
 from pyrogram import Client
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from pyrogram.errors import MessageNotModified
+from pyrogram.errors import MessageNotModified, FloodWait
+from functools import lru_cache
 
 # Assuming these are defined elsewhere in your codebase
 # from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, logger
 
+# Cache search results to avoid redundant calls (increased maxsize for better caching)
+@lru_cache(maxsize=500)
+async def cached_get_search_results(chat_id, query, max_results):
+    return await get_search_results(chat_id, query, max_results)
+
 @Client.on_callback_query(filters.regex(r"^fs#"))
 async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
     try:
-        _, seas, key = query.data.split("#")
+        data_parts = query.data.split("#")
+        seas = data_parts[1]
+        key = data_parts[2]
+        page = int(data_parts[3]) if len(data_parts) > 3 else 0
         
-        logger.info(f"Callback data: {query.data}, seas: {seas}, key: {key}")
+        logger.info(f"Callback data: {query.data}, seas: {seas}, key: {key}, page: {page}, user: {query.from_user.id}")
         
-        # Check user permission - modified to handle None reply_to_message
+        # Check user permission
         if query.message.reply_to_message:
             try:
                 if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+                    logger.info(f"Permission denied for user {query.from_user.id}")
                     return await query.answer(
-                        f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                        f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
                         show_alert=True,
                     )
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Permission check error: {e}")
         else:
             logger.warning("No reply_to_message found for permission check.")
-            # Optionally, allow or deny based on your logic; for now, proceed
 
         search = FRESH.get(key)
         
         logger.info(f"FRESH key: {key}, value: {search}")
         
         if not search:
-            await query.answer("❌ Invalid request!", show_alert=True)
+            logger.error(f"Invalid key: {key}")
+            await query.answer("❌ Invalid request! Key not found.", show_alert=True)
             return
             
-        # Get the original search query (without any modifications)
         original_search = search
-        
         chat_id = query.message.chat.id
         files = []
         
-        # Map season names to various search patterns - expanded for more variations
+        # Expanded season patterns with regex
         season_patterns_map = {
-            "season 1": ["s01", "s1", "season 01", "season 1", "season1", "s 01", "s 1", "1st season", "first season", "season one"],
-            "season 2": ["s02", "s2", "season 02", "season 2", "season2", "s 02", "s 2", "2nd season", "second season"],
-            "season 3": ["s03", "s3", "season 03", "season 3", "season3", "s 03", "s 3", "3rd season", "third season"],
-            "season 4": ["s04", "s4", "season 04", "season 4", "season4", "s 04", "s 4", "4th season", "fourth season"],
-            "season 5": ["s05", "s5", "season 05", "season 5", "season5", "s 05", "s 5", "5th season", "fifth season"],
-            "season 6": ["s06", "s6", "season 06", "season 6", "season6", "s 06", "s 6", "6th season", "sixth season"],
-            "season 7": ["s07", "s7", "season 07", "season 7", "season7", "s 07", "s 7", "7th season", "seventh season"],
-            "season 8": ["s08", "s8", "season 08", "season 8", "season8", "s 08", "s 8", "8th season", "eighth season"],
-            "season 9": ["s09", "s9", "season 09", "season 9", "season9", "s 09", "s 9", "9th season", "ninth season"],
-            "season 10": ["s10", "season 10", "season10", "s 10", "10th season", "tenth season"]
+            "season 1": [r"s01", r"s1\b", r"season 01", r"season 1\b", r"season1\b", r"s 01", r"s 1\b", r"1st season", r"first season", r"season one"],
+            "season 2": [r"s02", r"s2\b", r"season 02", r"season 2\b", r"season2\b", r"s 02", r"s 2\b", r"2nd season", r"second season"],
+            "season 3": [r"s03", r"s3\b", r"season 03", r"season 3\b", r"season3\b", r"s 03", r"s 3\b", r"3rd season", r"third season"],
+            "season 4": [r"s04", r"s4\b", r"season 04", r"season 4\b", r"season4\b", r"s 04", r"s 4\b", r"4th season", r"fourth season"],
+            "season 5": [r"s05", r"s5\b", r"season 05", r"season 5\b", r"season5\b", r"s 05", r"s 5\b", r"5th season", r"fifth season"],
+            "season 6": [r"s06", r"s6\b", r"season 06", r"season 6\b", r"season6\b", r"s 06", r"s 6\b", r"6th season", r"sixth season"],
+            "season 7": [r"s07", r"s7\b", r"season 07", r"season 7\b", r"season7\b", r"s 07", r"s 7\b", r"7th season", r"seventh season"],
+            "season 8": [r"s08", r"s8\b", r"season 08", r"season 8\b", r"season8\b", r"s 08", r"s 8\b", r"8th season", r"eighth season"],
+            "season 9": [r"s09", r"s9\b", r"season 09", r"season 9\b", r"season9\b", r"s 09", r"s 9\b", r"9th season", r"ninth season"],
+            "season 10": [r"s10", r"season 10\b", r"season10\b", r"s 10", r"10th season", r"tenth season"]
         }
         
         # Get patterns for the selected season
         if seas in season_patterns_map:
             patterns = season_patterns_map[seas]
+            season_num = seas.split()[-1]
+            season_regex = re.compile("|".join(patterns), re.IGNORECASE)
+            other_seasons_regex = re.compile(
+                "|".join(
+                    [p for s, ps in season_patterns_map.items() if s != seas for p in ps]
+                ), re.IGNORECASE
+            )
             
-            # First, try direct search with each pattern
-            for pattern in patterns:
-                search_query = f"{original_search} {pattern}"
-                logger.info(f"Direct search query: {search_query}")
-                search_files, _, _ = await get_search_results(chat_id, search_query, max_results=50)
-                
-                logger.info(f"Found {len(search_files)} files in direct search")
-                if search_files:
-                    files.extend(search_files)
+            # Perform a single broad search upfront to minimize calls
+            logger.info("Performing single broad search for efficiency")
+            try:
+                async with asyncio.timeout(15):  # Increased timeout slightly for reliability
+                    broad_files, _, _ = await cached_get_search_results(chat_id, original_search, max_results=200)
+            except asyncio.TimeoutError:
+                logger.error("Timeout on broad search")
+                broad_files = []
             
-            # If no files found with direct search, try broader search and filter
-            if not files:
-                logger.info("No files from direct search, trying broad search")
-                # Search for the series name broadly
-                broad_files, _, _ = await get_search_results(chat_id, original_search, max_results=100)
-                
-                logger.info(f"Broad search found {len(broad_files)} files")
-                
-                # Filter files that match any of the season patterns
-                for file in broad_files:
-                    file_name_lower = file["file_name"].lower()
-                    # Check if file matches any pattern for this season
-                    if any(pattern in file_name_lower for pattern in patterns):
-                        # Also check if it doesn't contain patterns for other seasons
-                        other_seasons = False
-                        for other_seas, other_patterns in season_patterns_map.items():
-                            if other_seas != seas:
-                                if any(op in file_name_lower for op in other_patterns):
-                                    other_seasons = True
-                                    break
-                        
-                        if not other_seasons and file not in files:
-                            files.append(file)
+            logger.info(f"Broad search found {len(broad_files)} files")
+            
+            # Filter files using regex (no direct pattern searches to speed up)
+            for file in broad_files:
+                file_name_lower = file["file_name"].lower()
+                if season_regex.search(file_name_lower) and not other_seasons_regex.search(file_name_lower):
+                    if (
+                        f"season {season_num}" in file_name_lower or 
+                        f"s{season_num.zfill(2)}" in file_name_lower or 
+                        f"s {season_num}" in file_name_lower or
+                        f"season{season_num}" in file_name_lower
+                    ):
+                        files.append(file)
         
         # Remove duplicates
         unique_files = []
@@ -934,27 +938,8 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         logger.info(f"After filtering and dedup: {len(files)} files")
         
         if not files:
-            # Try one more approach - search without any season filtering and then filter manually
-            logger.info("No files yet, trying all-files search")
-            all_files, _, _ = await get_search_results(chat_id, original_search, max_results=200)
-            
-            if seas in season_patterns_map:
-                patterns = season_patterns_map[seas]
-                for file in all_files:
-                    file_name_lower = file["file_name"].lower()
-                    # More flexible matching
-                    if any(pattern in file_name_lower for pattern in patterns):
-                        # Additional check to ensure it's the right season
-                        season_num = seas.split()[-1]
-                        if (f"season {season_num}" in file_name_lower or 
-                            f"s{season_num.zfill(2)}" in file_name_lower or  # Use zfill for consistency
-                            f"s {season_num}" in file_name_lower or
-                            f"season{season_num}" in file_name_lower):
-                            if file not in files:
-                                files.append(file)
-        
-        if not files:
-            await query.answer("🚫 𝗡𝗼 𝗙𝗶𝗹𝗲𝘀 𝗙𝗼𝘂𝗻𝗱 𝗳𝗼𝗿 𝘁𝗵𝗶𝘀 𝗦𝗲𝗮𝘀𝗼𝗻 🚫", show_alert=True)
+            logger.info("No files found for season")
+            await query.answer("🚫 No Files Found for this Season 🚫", show_alert=True)
             return
         
         # Store files for this season
@@ -964,38 +949,38 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         settings = await get_settings(query.message.chat.id)
         pre = 'filep' if settings['file_secure'] else 'file'
         
+        # Pagination: Show only 10 files per page for faster rendering
+        files_per_page = 10
+        start_idx = page * files_per_page
+        end_idx = start_idx + files_per_page
+        paginated_files = files[start_idx:end_idx]
+        total_pages = ((len(files) - 1) // files_per_page) + 1
+        
         if settings["button"]:
-            # Create buttons for files
             btn = []
-            for file in files:
-                # Extract season and episode numbers
+            for file in paginated_files:
                 season_num = seas.split()[-1]
-                
-                # Extract episode number with multiple pattern matching
-                episode_num = "??"
                 file_name_lower = file["file_name"].lower()
                 
-                # Try different episode patterns
+                # Extract episode number
+                episode_num = "??"
                 ep_patterns = [r'e(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]']
                 for pattern in ep_patterns:
-                    ep_match = re.search(pattern, file_name_lower)
+                    ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
                     if ep_match:
                         episode_num = ep_match.group(1)
                         break
                 
-                # Clean filename for display
+                # Clean filename
                 file_name = file["file_name"]
-                # Remove common prefixes and keep main title
                 clean_name = file_name
                 for prefix in ['[', '@', 'www.', 'http']:
                     if prefix in clean_name:
-                        clean_name = clean_name.split(prefix, 1)[-1].strip()  # Changed to split after prefix
+                        clean_name = clean_name.split(prefix, 1)[-1].strip()
                 
-                # Shorten if too long
                 if len(clean_name) > 30:
                     clean_name = clean_name[:30] + "..."
                 
-                # Create button text
                 button_text = f"S{season_num}E{episode_num} | {get_size(file['file_size'])} | {clean_name}"
                 
                 btn.append([
@@ -1005,7 +990,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                     )
                 ])
             
-            # Add header with season info
+            # Add header
             btn.insert(0, [
                 InlineKeyboardButton(f"🎬 {original_search} - {seas.title()}", callback_data="ident")
             ])
@@ -1016,6 +1001,15 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")
             ])
             
+            # Add pagination buttons
+            if total_pages > 1:
+                prev_data = f"fs#{seas}#{key}#{page-1}" if page > 0 else "ident"
+                next_data = f"fs#{seas}#{key}#{page+1}" if (page + 1) < total_pages else "ident"
+                btn.append([
+                    InlineKeyboardButton("⬅️ Prev", callback_data=prev_data),
+                    InlineKeyboardButton(f"Page {page+1}/{total_pages}", callback_data="ident"),
+                    InlineKeyboardButton("Next ➡️", callback_data=next_data)
+                ])
         else:
             btn = []
             btn.insert(0, [
@@ -1028,12 +1022,20 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         btn.append([InlineKeyboardButton(text="↩️ Back to Seasons", callback_data=f"seasons#{key}")])
         btn.append([InlineKeyboardButton(text="🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")])
         
-        # Update the message
+        # Update message with retry on FloodWait
         try:
+            async with asyncio.timeout(10):
+                await query.edit_message_reply_markup(
+                    reply_markup=InlineKeyboardMarkup(btn)
+                )
+        except FloodWait as e:
+            logger.warning(f"FloodWait: Waiting for {e.value} seconds")
+            await asyncio.sleep(e.value)
             await query.edit_message_reply_markup(
                 reply_markup=InlineKeyboardMarkup(btn)
             )
         except MessageNotModified:
+            logger.info("Message not modified")
             pass
                 
     except Exception as e:
@@ -3410,6 +3412,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
