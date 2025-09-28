@@ -910,12 +910,12 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 ), re.IGNORECASE
             )
             
-            # Single broad search for efficiency
+            # Single broad search for efficiency - increased max_results to 500 to capture more files
             logger.info("Performing single broad search")
             try:
                 broad_files, _, _ = await asyncio.wait_for(
-                    get_cached_search_results(chat_id, original_search, max_results=200),
-                    timeout=15.0
+                    get_cached_search_results(chat_id, original_search, max_results=500),
+                    timeout=20.0
                 )
             except asyncio.TimeoutError:
                 logger.error("Timeout on broad search")
@@ -930,25 +930,17 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             for file in broad_files:
                 logger.debug(f"File name: {file['file_name']}")
             
-            # Filter files using regex - loosened by making other_seasons check optional if needed
-            # Also made the specific season check OR instead of AND to match more files
+            # Filter files using regex - removed other_seasons check to show more files
+            # Made specific check optional to match more
             for file in broad_files:
                 file_name_lower = file["file_name"].lower()
                 if season_regex.search(file_name_lower):
-                    # Loosened: Only check for other seasons if present, but still add if main pattern matches
-                    if other_seasons_regex.search(file_name_lower):
-                        logger.debug(f"File {file['file_name']} matches other seasons, skipping")
-                        continue
-                    # Add if matches pattern or specific checks
-                    if (
-                        f"season {season_num}" in file_name_lower or 
-                        f"s{season_num.zfill(2)}" in file_name_lower or 
-                        f"s {season_num}" in file_name_lower or
-                        f"season{season_num}" in file_name_lower or
-                        True  # Temporarily always add if pattern matches to test
-                    ):
-                        files.append(file)
-                        logger.debug(f"Matched file: {file['file_name']}")
+                    # Commented out to show more files
+                    # if other_seasons_regex.search(file_name_lower):
+                    #     logger.debug(f"File {file['file_name']} matches other seasons, skipping")
+                    #     continue
+                    files.append(file)
+                    logger.debug(f"Matched file: {file['file_name']}")
         
         # Remove duplicates
         unique_files = []
@@ -960,7 +952,19 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         
         files = unique_files
         
-        logger.info(f"After filtering and dedup: {len(files)} files")
+        # Sort files by episode number for better display
+        def get_episode_num(file):
+            file_name_lower = file["file_name"].lower()
+            ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)']
+            for pattern in ep_patterns:
+                ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
+                if ep_match:
+                    return int(ep_match.group(1))
+            return 999  # Default to high number if no episode found
+        
+        files = sorted(files, key=get_episode_num)
+        
+        logger.info(f"After filtering, dedup, and sort: {len(files)} files")
         
         if not files:
             logger.info("No files found for season after filtering")
@@ -989,7 +993,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 
                 # Extract episode number with more patterns
                 episode_num = "??"
-                ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)']
+                ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)']
                 for pattern in ep_patterns:
                     ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
                     if ep_match:
@@ -1011,7 +1015,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 btn.append([
                     InlineKeyboardButton(
                         text=button_text,
-                        callback_data=f'{pre}#{file["file_id"]}'
+                        callback_data=f'{pre}#{file["file_id"]}#{key}'  # Added key if needed for file handler
                     )
                 ])
             
@@ -1021,7 +1025,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             ])
             
             btn.insert(1, [
-                InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{key}"),
+                InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{seas}#{key}"),  # Added seas if quality needs it
                 InlineKeyboardButton("🎭 Episodes", callback_data=f"episodes#{seas}#{key}"),
                 InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")
             ])
@@ -1038,7 +1042,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         else:
             btn = []
             btn.insert(0, [
-                InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{key}"),
+                InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{seas}#{key}"),
                 InlineKeyboardButton("🎭 Episodes", callback_data=f"episodes#{seas}#{key}"),
                 InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")
             ])
@@ -3438,6 +3442,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
