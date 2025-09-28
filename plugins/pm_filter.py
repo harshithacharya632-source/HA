@@ -824,6 +824,7 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
         )
     except MessageNotModified:
         pass
+        
 #START HER GROKimport re
 import re
 import logging
@@ -885,57 +886,67 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         chat_id = query.message.chat.id
         files = []
         
-        # Expanded season patterns to match more file naming conventions
+        # Expanded season patterns to match more file naming conventions, including "2x01" style
         season_patterns_map = {
             "season 1": [
                 r"s\s*0?1", r"season\s*0?1", r"season-?1\b", r"s-?1\b", r"s01", r"s1e", r"season1e", 
                 r"season 01", r"season 1\b", r"season1\b", r"s 01", r"s 1\b", r"1st season", 
-                r"first season", r"season one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1"
+                r"first season", r"season one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1",
+                r"\b1x", r"1\s*x"
             ],
             "season 2": [
                 r"s\s*0?2", r"season\s*0?2", r"season-?2\b", r"s-?2\b", r"s02", r"s2e", r"season2e", 
                 r"season 02", r"season 2\b", r"season2\b", r"s 02", r"s 2\b", r"2nd season", 
-                r"second season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2"
+                r"second season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2",
+                r"\b2x", r"2\s*x"
             ],
             "season 3": [
                 r"s\s*0?3", r"season\s*0?3", r"season-?3\b", r"s-?3\b", r"s03", r"s3e", r"season3e", 
                 r"season 03", r"season 3\b", r"season3\b", r"s 03", r"s 3\b", r"3rd season", 
-                r"third season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3"
+                r"third season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3",
+                r"\b3x", r"3\s*x"
             ],
             "season 4": [
                 r"s\s*0?4", r"season\s*0?4", r"season-?4\b", r"s-?4\b", r"s04", r"s4e", r"season4e", 
                 r"season 04", r"season 4\b", r"season4\b", r"s 04", r"s 4\b", r"4th season", 
-                r"fourth season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4"
+                r"fourth season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4",
+                r"\b4x", r"4\s*x"
             ],
             "season 5": [
                 r"s\s*0?5", r"season\s*0?5", r"season-?5\b", r"s-?5\b", r"s05", r"s5e", r"season5e", 
                 r"season 05", r"season 5\b", r"season5\b", r"s 05", r"s 5\b", r"5th season", 
-                r"fifth season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5"
+                r"fifth season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5",
+                r"\b5x", r"5\s*x"
             ],
             "season 6": [
                 r"s\s*0?6", r"season\s*0?6", r"season-?6\b", r"s-?6\b", r"s06", r"s6e", r"season6e", 
                 r"season 06", r"season 6\b", r"season6\b", r"s 06", r"s 6\b", r"6th season", 
-                r"sixth season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6"
+                r"sixth season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6",
+                r"\b6x", r"6\s*x"
             ],
             "season 7": [
                 r"s\s*0?7", r"season\s*0?7", r"season-?7\b", r"s-?7\b", r"s07", r"s7e", r"season7e", 
                 r"season 07", r"season 7\b", r"season7\b", r"s 07", r"s 7\b", r"7th season", 
-                r"seventh season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7"
+                r"seventh season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7",
+                r"\b7x", r"7\s*x"
             ],
             "season 8": [
                 r"s\s*0?8", r"season\s*0?8", r"season-?8\b", r"s-?8\b", r"s08", r"s8e", r"season8e", 
                 r"season 08", r"season 8\b", r"season8\b", r"s 08", r"s 8\b", r"8th season", 
-                r"eighth season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8"
+                r"eighth season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8",
+                r"\b8x", r"8\s*x"
             ],
             "season 9": [
                 r"s\s*0?9", r"season\s*0?9", r"season-?9\b", r"s-?9\b", r"s09", r"s9e", r"season9e", 
                 r"season 09", r"season 9\b", r"season9\b", r"s 09", r"s 9\b", r"9th season", 
-                r"ninth season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9"
+                r"ninth season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9",
+                r"\b9x", r"9\s*x"
             ],
             "season 10": [
                 r"s\s*10", r"season\s*10", r"season-?10\b", r"s-?10\b", r"s10", r"s10e", r"season10e", 
                 r"season 10\b", r"season10\b", r"s 10", r"10th season", r"tenth season", 
-                r"s10\b", r"season\s*-?\s*10"
+                r"s10\b", r"season\s*-?\s*10",
+                r"\b10x", r"10\s*x"
             ]
         }
         
@@ -945,34 +956,50 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             season_num = seas.split()[-1]
             season_regex = re.compile("|".join(patterns), re.IGNORECASE)
             
-            # Single broad search with higher max_results
-            logger.info("Performing single broad search")
-            try:
-                broad_files, _, _ = await asyncio.wait_for(
-                    get_cached_search_results(chat_id, original_search, max_results=1000),
-                    timeout=25.0
-                )
-            except asyncio.TimeoutError:
-                logger.error("Timeout on broad search")
-                broad_files = []
-            except Exception as e:
-                logger.error(f"Broad search failed: {e}")
-                broad_files = []
+            # First, try direct search with each pattern
+            for pattern in patterns:
+                search_query = f"{original_search} {pattern}"
+                logger.info(f"Direct search query: {search_query}")
+                try:
+                    search_files, _, _ = await asyncio.wait_for(
+                        get_cached_search_results(chat_id, search_query, max_results=200),
+                        timeout=10.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout on search: {search_query}")
+                    continue
+                except Exception as e:
+                    logger.error(f"Search failed for {search_query}: {e}")
+                    continue
+                logger.info(f"Found {len(search_files)} files in direct search")
+                if search_files:
+                    files.extend(search_files)
             
-            logger.info(f"Broad search found {len(broad_files)} files")
-            
-            # Log all file names for debugging
-            for file in broad_files:
-                logger.debug(f"File name: {file['file_name']}")
-            
-            # Filter files using regex - removed other_seasons check to show more files
-            for file in broad_files:
-                file_name_lower = file["file_name"].lower()
-                if season_regex.search(file_name_lower):
-                    files.append(file)
-                    logger.debug(f"Matched file: {file['file_name']}")
-                else:
-                    logger.debug(f"Unmatched file: {file['file_name']}")
+            # If no files found with direct search, try broader search and filter
+            if not files:
+                logger.info("No files from direct search, trying broad search")
+                try:
+                    broad_files, _, _ = await asyncio.wait_for(
+                        get_cached_search_results(chat_id, original_search, max_results=1000),
+                        timeout=25.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.error("Timeout on broad search")
+                    broad_files = []
+                except Exception as e:
+                    logger.error(f"Broad search failed: {e}")
+                    broad_files = []
+                
+                logger.info(f"Broad search found {len(broad_files)} files")
+                
+                # Filter files that match the season regex
+                for file in broad_files:
+                    file_name_lower = file["file_name"].lower()
+                    if season_regex.search(file_name_lower):
+                        files.append(file)
+                        logger.debug(f"Matched file: {file['file_name']}")
+                    else:
+                        logger.debug(f"Unmatched file: {file['file_name']}")
         
         # Remove duplicates
         unique_files = []
@@ -987,7 +1014,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         # Sort files by episode number
         def get_episode_num(file):
             file_name_lower = file["file_name"].lower()
-            ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)']
+            ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)']
             for pattern in ep_patterns:
                 ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
                 if ep_match:
@@ -1023,9 +1050,9 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 season_num = seas.split()[-1]
                 file_name_lower = file["file_name"].lower()
                 
-                # Extract episode number
+                # Extract episode number with additional patterns
                 episode_num = "??"
-                ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)']
+                ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)']
                 for pattern in ep_patterns:
                     ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
                     if ep_match:
@@ -3474,6 +3501,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
