@@ -4,7 +4,7 @@
 # Ask Doubt on telegram @KingVJ01
 
 from pyrogram import Client, filters, enums
-from info import LOG_CHANNEL
+from info import LOG_CHANNEL, CHANNELS
 from datetime import datetime
 import logging
 
@@ -25,7 +25,7 @@ async def log_search(client, user_id, username, query, num_results=0):
     )
     try:
         await client.send_message(LOG_CHANNEL, log_msg, parse_mode=enums.ParseMode.MARKDOWN)
-        logging.info(f"Logged search query '{query}' by {user_mention}")
+        logging.info(f"Logged search query '{query}' by {user_mention} to LOG_CHANNEL ({LOG_CHANNEL})")
     except Exception as e:
         logging.error(f"Failed to log search to LOG_CHANNEL ({LOG_CHANNEL}): {e}")
 
@@ -38,8 +38,16 @@ async def search_handler(client, message):
             await log_search(client, message.from_user.id, message.from_user.username, "Empty query", 0)
             return
         
-        # Replace with your actual search logic (e.g., database or channel search)
-        results = []  # Example: await db.search_files(query)
+        # Search logic: Search files in CHANNELS
+        results = []
+        for channel in CHANNELS:
+            try:
+                async for msg in client.search_messages(channel, query, limit=50):
+                    if msg.document:
+                        results.append(msg.document)
+            except Exception as e:
+                logging.error(f"Failed to search channel {channel}: {e}")
+        
         logging.info(f"User {message.from_user.id} searched for: {query}")
         
         if not results:
@@ -48,7 +56,8 @@ async def search_handler(client, message):
             return
         
         for file in results:
-            await message.reply_document(file.file_id, caption=file.file_name)
+            caption = file.file_name or "File"
+            await message.reply_document(file.file_id, caption=caption)
         
         await log_search(client, message.from_user.id, message.from_user.username, query, len(results))
     except Exception as e:
