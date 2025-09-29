@@ -766,23 +766,24 @@ import re
 import logging
 import asyncio
 from difflib import SequenceMatcher
-from pyrogram import Client
+from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram.errors import MessageNotModified, FloodWait
+import uuid
 
 # Assuming these are defined elsewhere in your codebase
-# from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, logger, SEASONS, LOG_CHANNEL
+# from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, LOG_CHANNEL
 
-# Define SEASONS to match season_patterns_map for consistency
+# Define SEASONS to match season_patterns_map
 SEASONS = [
     "season 1", "season 2", "season 3", "season 4", "season 5",
     "season 6", "season 7", "season 8", "season 9", "season 10"
 ]
 
-# Configure logging for debugging
+# Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Simple dict cache for search results (async-safe)
+# Cache for search results
 SEARCH_CACHE = {}
 
 async def get_cached_search_results(chat_id, query, max_results):
@@ -836,76 +837,86 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         chat_id = query.message.chat.id
         files = []
         
-        # Expanded season patterns to cover more naming conventions
+        # Expanded season patterns to match "Game of Thrones S04" style
         season_patterns_map = {
             "season 1": [
-                r"s\s*0?1", r"season\s*0?1", r"season-?1\b", r"s-?1\b", r"s01", r"s1e", r"season1e", 
-                r"season\s*01", r"season\s*1\b", r"season1\b", r"s\s*01", r"s\s*1\b", r"1st\s*season", 
+                r"s\s*0?1\b", r"season\s*0?1\b", r"season-?1\b", r"s-?1\b", r"s01\b", r"s1e", r"season1e", 
+                r"season\s*01\b", r"season\s*1\b", r"season1\b", r"s\s*01\b", r"s\s*1\b", r"1st\s*season", 
                 r"first\s*season", r"season\s*one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1",
-                r"\b1x", r"1\s*x", r"s01e", r"season\s*1\s*e", r"s\s*1\s*e", r"season\.1", r"s\.1",
-                r"part\s*1", r"part-?1\b", r"chapter\s*1", r"ch\s*1", r"\b01\b", r"\b1\b"
+                r"\b1x", r"1\s*x", r"s01e", r"season\s*1\s*e", r"s\s*1\s*e", r"season\.1\b", r"s\.1\b",
+                r"part\s*1\b", r"part-?1\b", r"chapter\s*1\b", r"ch\s*1\b", r"\b01\b", r"\b1\b",
+                r"s01\.e", r"s1\.e", r"season\.01\b", r"season_1\b", r"s_1\b"
             ],
             "season 2": [
-                r"s\s*0?2", r"season\s*0?2", r"season-?2\b", r"s-?2\b", r"s02", r"s2e", r"season2e", 
-                r"season\s*02", r"season\s*2\b", r"season2\b", r"s\s*02", r"s\s*2\b", r"2nd\s*season", 
+                r"s\s*0?2\b", r"season\s*0?2\b", r"season-?2\b", r"s-?2\b", r"s02\b", r"s2e", r"season2e", 
+                r"season\s*02\b", r"season\s*2\b", r"season2\b", r"s\s*02\b", r"s\s*2\b", r"2nd\s*season", 
                 r"second\s*season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2",
-                r"\b2x", r"2\s*x", r"s02e", r"season\s*2\s*e", r"s\s*2\s*e", r"season\.2", r"s\.2",
-                r"part\s*2", r"part-?2\b", r"chapter\s*2", r"ch\s*2", r"\b02\b", r"\b2\b"
+                r"\b2x", r"2\s*x", r"s02e", r"season\s*2\s*e", r"s\s*2\s*e", r"season\.2\b", r"s\.2\b",
+                r"part\s*2\b", r"part-?2\b", r"chapter\s*2\b", r"ch\s*2\b", r"\b02\b", r"\b2\b",
+                r"s02\.e", r"s2\.e", r"season\.02\b", r"season_2\b", r"s_2\b", r"s02-e", r"s2-e"
             ],
             "season 3": [
-                r"s\s*0?3", r"season\s*0?3", r"season-?3\b", r"s-?3\b", r"s03", r"s3e", r"season3e", 
-                r"season\s*03", r"season\s*3\b", r"season3\b", r"s\s*03", r"s\s*3\b", r"3rd\s*season", 
+                r"s\s*0?3\b", r"season\s*0?3\b", r"season-?3\b", r"s-?3\b", r"s03\b", r"s3e", r"season3e", 
+                r"season\s*03\b", r"season\s*3\b", r"season3\b", r"s\s*03\b", r"s\s*3\b", r"3rd\s*season", 
                 r"third\s*season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3",
-                r"\b3x", r"3\s*x", r"s03e", r"season\s*3\s*e", r"s\s*3\s*e", r"season\.3", r"s\.3",
-                r"part\s*3", r"part-?3\b", r"chapter\s*3", r"ch\s*3", r"\b03\b", r"\b3\b"
+                r"\b3x", r"3\s*x", r"s03e", r"season\s*3\s*e", r"s\s*3\s*e", r"season\.3\b", r"s\.3\b",
+                r"part\s*3\b", r"part-?3\b", r"chapter\s*3\b", r"ch\s*3\b", r"\b03\b", r"\b3\b",
+                r"s03\.e", r"s3\.e", r"season\.03\b", r"season_3\b", r"s_3\b", r"s03-e", r"s3-e"
             ],
             "season 4": [
-                r"s\s*0?4", r"season\s*0?4", r"season-?4\b", r"s-?4\b", r"s04", r"s4e", r"season4e", 
-                r"season\s*04", r"season\s*4\b", r"season4\b", r"s\s*04", r"s\s*4\b", r"4th\s*season", 
+                r"s\s*0?4\b", r"season\s*0?4\b", r"season-?4\b", r"s-?4\b", r"s04\b", r"s4e", r"season4e", 
+                r"season\s*04\b", r"season\s*4\b", r"season4\b", r"s\s*04\b", r"s\s*4\b", r"4th\s*season", 
                 r"fourth\s*season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4",
-                r"\b4x", r"4\s*x", r"s04e", r"season\s*4\s*e", r"s\s*4\s*e", r"season\.4", r"s\.4",
-                r"part\s*4", r"part-?4\b", r"chapter\s*4", r"ch\s*4", r"\b04\b", r"\b4\b"
+                r"\b4x", r"4\s*x", r"s04e", r"season\s*4\s*e", r"s\s*4\s*e", r"season\.4\b", r"s\.4\b",
+                r"part\s*4\b", r"part-?4\b", r"chapter\s*4\b", r"ch\s*4\b", r"\b04\b", r"\b4\b",
+                r"s04\.e", r"s4\.e", r"season\.04\b", r"season_4\b", r"s_4\b", r"s04-e", r"s4-e"
             ],
             "season 5": [
-                r"s\s*0?5", r"season\s*0?5", r"season-?5\b", r"s-?5\b", r"s05", r"s5e", r"season5e", 
-                r"season\s*05", r"season\s*5\b", r"season5\b", r"s\s*05", r"s\s*5\b", r"5th\s*season", 
+                r"s\s*0?5\b", r"season\s*0?5\b", r"season-?5\b", r"s-?5\b", r"s05\b", r"s5e", r"season5e", 
+                r"season\s*05\b", r"season\s*5\b", r"season5\b", r"s\s*05\b", r"s\s*5\b", r"5th\s*season", 
                 r"fifth\s*season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5",
-                r"\b5x", r"5\s*x", r"s05e", r"season\s*5\s*e", r"s\s*5\s*e", r"season\.5", r"s\.5",
-                r"part\s*5", r"part-?5\b", r"chapter\s*5", r"ch\s*5", r"\b05\b", r"\b5\b"
+                r"\b5x", r"5\s*x", r"s05e", r"season\s*5\s*e", r"s\s*5\s*e", r"season\.5\b", r"s\.5\b",
+                r"part\s*5\b", r"part-?5\b", r"chapter\s*5\b", r"ch\s*5\b", r"\b05\b", r"\b5\b",
+                r"s05\.e", r"s5\.e", r"season\.05\b", r"season_5\b", r"s_5\b", r"s05-e", r"s5-e"
             ],
             "season 6": [
-                r"s\s*0?6", r"season\s*0?6", r"season-?6\b", r"s-?6\b", r"s06", r"s6e", r"season6e", 
-                r"season\s*06", r"season\s*6\b", r"season6\b", r"s\s*06", r"s\s*6\b", r"6th\s*season", 
+                r"s\s*0?6\b", r"season\s*0?6\b", r"season-?6\b", r"s-?6\b", r"s06\b", r"s6e", r"season6e", 
+                r"season\s*06\b", r"season\s*6\b", r"season6\b", r"s\s*06\b", r"s\s*6\b", r"6th\s*season", 
                 r"sixth\s*season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6",
-                r"\b6x", r"6\s*x", r"s06e", r"season\s*6\s*e", r"s\s*6\s*e", r"season\.6", r"s\.6",
-                r"part\s*6", r"part-?6\b", r"chapter\s*6", r"ch\s*6", r"\b06\b", r"\b6\b"
+                r"\b6x", r"6\s*x", r"s06e", r"season\s*6\s*e", r"s\s*6\s*e", r"season\.6\b", r"s\.6\b",
+                r"part\s*6\b", r"part-?6\b", r"chapter\s*6\b", r"ch\s*6\b", r"\b06\b", r"\b6\b",
+                r"s06\.e", r"s6\.e", r"season\.06\b", r"season_6\b", r"s_6\b", r"s06-e", r"s6-e"
             ],
             "season 7": [
-                r"s\s*0?7", r"season\s*0?7", r"season-?7\b", r"s-?7\b", r"s07", r"s7e", r"season7e", 
-                r"season\s*07", r"season\s*7\b", r"season7\b", r"s\s*07", r"s\s*7\b", r"7th\s*season", 
+                r"s\s*0?7\b", r"season\s*0?7\b", r"season-?7\b", r"s-?7\b", r"s07\b", r"s7e", r"season7e", 
+                r"season\s*07\b", r"season\s*7\b", r"season7\b", r"s\s*07\b", r"s\s*7\b", r"7th\s*season", 
                 r"seventh\s*season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7",
-                r"\b7x", r"7\s*x", r"s07e", r"season\s*7\s*e", r"s\s*7\s*e", r"season\.7", r"s\.7",
-                r"part\s*7", r"part-?7\b", r"chapter\s*7", r"ch\s*7", r"\b07\b", r"\b7\b"
+                r"\b7x", r"7\s*x", r"s07e", r"season\s*7\s*e", r"s\s*7\s*e", r"season\.7\b", r"s\.7\b",
+                r"part\s*7\b", r"part-?7\b", r"chapter\s*7\b", r"ch\s*7\b", r"\b07\b", r"\b7\b",
+                r"s07\.e", r"s7\.e", r"season\.07\b", r"season_7\b", r"s_7\b", r"s07-e", r"s7-e"
             ],
             "season 8": [
-                r"s\s*0?8", r"season\s*0?8", r"season-?8\b", r"s-?8\b", r"s08", r"s8e", r"season8e", 
-                r"season\s*08", r"season\s*8\b", r"season8\b", r"s\s*08", r"s\s*8\b", r"8th\s*season", 
+                r"s\s*0?8\b", r"season\s*0?8\b", r"season-?8\b", r"s-?8\b", r"s08\b", r"s8e", r"season8e", 
+                r"season\s*08\b", r"season\s*8\b", r"season8\b", r"s\s*08\b", r"s\s*8\b", r"8th\s*season", 
                 r"eighth\s*season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8",
-                r"\b8x", r"8\s*x", r"s08e", r"season\s*8\s*e", r"s\s*8\s*e", r"season\.8", r"s\.8",
-                r"part\s*8", r"part-?8\b", r"chapter\s*8", r"ch\s*8", r"\b08\b", r"\b8\b"
+                r"\b8x", r"8\s*x", r"s08e", r"season\s*8\s*e", r"s\s*8\s*e", r"season\.8\b", r"s\.8\b",
+                r"part\s*8\b", r"part-?8\b", r"chapter\s*8\b", r"ch\s*8\b", r"\b08\b", r"\b8\b",
+                r"s08\.e", r"s8\.e", r"season\.08\b", r"season_8\b", r"s_8\b", r"s08-e", r"s8-e"
             ],
             "season 9": [
-                r"s\s*0?9", r"season\s*0?9", r"season-?9\b", r"s-?9\b", r"s09", r"s9e", r"season9e", 
-                r"season\s*09", r"season\s*9\b", r"season9\b", r"s\s*09", r"s\s*9\b", r"9th\s*season", 
+                r"s\s*0?9\b", r"season\s*0?9\b", r"season-?9\b", r"s-?9\b", r"s09\b", r"s9e", r"season9e", 
+                r"season\s*09\b", r"season\s*9\b", r"season9\b", r"s\s*09\b", r"s\s*9\b", r"9th\s*season", 
                 r"ninth\s*season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9",
-                r"\b9x", r"9\s*x", r"s09e", r"season\s*9\s*e", r"s\s*9\s*e", r"season\.9", r"s\.9",
-                r"part\s*9", r"part-?9\b", r"chapter\s*9", r"ch\s*9", r"\b09\b", r"\b9\b"
+                r"\b9x", r"9\s*x", r"s09e", r"season\s*9\s*e", r"s\s*9\s*e", r"season\.9\b", r"s\.9\b",
+                r"part\s*9\b", r"part-?9\b", r"chapter\s*9\b", r"ch\s*9\b", r"\b09\b", r"\b9\b",
+                r"s09\.e", r"s9\.e", r"season\.09\b", r"season_9\b", r"s_9\b", r"s09-e", r"s9-e"
             ],
             "season 10": [
-                r"s\s*10", r"season\s*10", r"season-?10\b", r"s-?10\b", r"s10", r"s10e", r"season10e", 
-                r"season\s*10\b", r"season10\b", r"s\s*10", r"10th\s*season", r"tenth\s*season", 
+                r"s\s*10\b", r"season\s*10\b", r"season-?10\b", r"s-?10\b", r"s10\b", r"s10e", r"season10e", 
+                r"season\s*10\b", r"season10\b", r"s\s*10\b", r"10th\s*season", r"tenth\s*season", 
                 r"s10\b", r"season\s*-?\s*10", r"\b10x", r"10\s*x", r"s10e", r"season\s*10\s*e",
-                r"season\.10", r"s\.10", r"part\s*10", r"part-?10\b", r"chapter\s*10", r"ch\s*10", r"\b10\b"
+                r"season\.10\b", r"s\.10\b", r"part\s*10\b", r"part-?10\b", r"chapter\s*10\b", r"ch\s*10\b", 
+                r"\b10\b", r"s10\.e", r"season\.10\b", r"season_10\b", r"s_10\b", r"s10-e"
             ]
         }
         
@@ -919,8 +930,8 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             logging.info(f"Performing broad search for: {original_search}")
             try:
                 broad_files, _, _ = await asyncio.wait_for(
-                    get_cached_search_results(chat_id, original_search, max_results=5000),
-                    timeout=12.0
+                    get_cached_search_results(chat_id, original_search, max_results=30000),
+                    timeout=25.0
                 )
                 logging.info(f"Broad search found {len(broad_files)} files")
             except asyncio.TimeoutError:
@@ -944,15 +955,37 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             
             files = exact_files
             
+            # Fallback search mimicking direct search (e.g., "Game of Thrones S04")
+            if not files and season_num:
+                fallback_query = f"{original_search} s{season_num.zfill(2)}"
+                logging.info(f"No exact matches, trying fallback search: {fallback_query}")
+                try:
+                    fallback_files, _, _ = await asyncio.wait_for(
+                        get_cached_search_results(chat_id, fallback_query, max_results=30000),
+                        timeout=25.0
+                    )
+                    logging.info(f"Fallback search found {len(fallback_files)} files")
+                    for file in fallback_files:
+                        file_name_lower = file["file_name"].lower()
+                        if season_regex.search(file_name_lower):
+                            exact_files.append(file)
+                            logging.debug(f"Fallback exact matched file: {file['file_name']}")
+                        else:
+                            unmatched_files.append(file["file_name"])
+                            logging.debug(f"Fallback unmatched file: {file['file_name']}")
+                    files = exact_files
+                except Exception as e:
+                    logging.error(f"Fallback search failed: {e}")
+            
             # If fewer than 10 exact matches, add similar files using fuzzy matching
             similar_files = []
             if len(files) < 10 and broad_files:
-                target_str = original_search.lower()
+                target_str = f"{original_search.lower()} s{season_num.zfill(2)}"
                 for file in broad_files:
                     file_name_lower = file["file_name"].lower()
                     if not season_regex.search(file_name_lower):
                         similarity = SequenceMatcher(None, target_str, file_name_lower).ratio()
-                        if similarity > 0.5:
+                        if similarity > 0.3:
                             file_copy = file.copy()
                             file_copy['is_similar'] = True
                             similar_files.append(file_copy)
@@ -960,18 +993,21 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             
             files += similar_files
             
-            # Log unmatched files for debugging (limited to 10 to avoid spam)
+            # Log unmatched files for debugging (paginated)
             if unmatched_files and LOG_CHANNEL:
                 try:
-                    await client.send_message(
-                        chat_id=LOG_CHANNEL,
-                        text=(
-                            f"🛠 **Debug: Unmatched Files for {original_search} {seas}**\n"
-                            f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
-                            f"📂 Sample Unmatched Files (up to 10):\n" +
-                            "\n".join([f"- {name}" for name in unmatched_files[:10]])
+                    batch_size = 50
+                    for i in range(0, len(unmatched_files), batch_size):
+                        batch = unmatched_files[i:i + batch_size]
+                        await client.send_message(
+                            chat_id=LOG_CHANNEL,
+                            text=(
+                                f"🛠 **Debug: Unmatched Files for {original_search} {seas} (Batch {i//batch_size + 1})**\n"
+                                f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
+                                f"📂 Unmatched Files:\n" +
+                                "\n".join([f"- {name}" for name in batch])
+                            )
                         )
-                    )
                     logging.info(f"Logged {len(unmatched_files)} unmatched files for debugging")
                 except Exception as e:
                     logging.error(f"Failed to log unmatched files: {e}")
@@ -1006,6 +1042,22 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         if not files:
             logging.info("No files found for season after filtering")
             await query.answer("🚫 No Files Found for this Season 🚫", show_alert=True)
+            # Log no files found to LOG_CHANNEL
+            if LOG_CHANNEL:
+                try:
+                    await client.send_message(
+                        chat_id=LOG_CHANNEL,
+                        text=(
+                            f"🛠 **Debug: No Files Found for {original_search} {seas}**\n"
+                            f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
+                            f"🔎 Series: `{original_search}`\n"
+                            f"📅 Season: `{seas}`\n"
+                            f"📝 Note: No exact or similar matches found"
+                        )
+                    )
+                    logging.info(f"Logged no files found for {original_search} {seas}")
+                except Exception as e:
+                    logging.error(f"Failed to log no files found: {e}")
             return
         
         # Log the series search to LOG_CHANNEL
@@ -1209,7 +1261,7 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
             try:
                 await asyncio.wait_for(
                     query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
-                    timeout=10.0  # Increased timeout
+                    timeout=10.0
                 )
                 logging.info("Seasons menu updated successfully")
                 return
@@ -1225,7 +1277,7 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
                 if attempt == max_retries - 1:
                     await query.answer("⚠️ Took too long to update seasons menu. Try again.", show_alert=True)
                 await asyncio.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
+                retry_delay *= 2
             except Exception as e:
                 logging.error(f"Unexpected error in seasons_cb_handler: {e}")
                 import traceback
@@ -1235,7 +1287,7 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
                 await asyncio.sleep(retry_delay)
                 retry_delay *= 2
 
-        # Log failure to LOG_CHANNEL if max retries exceeded
+        # Log failure to LOG_CHANNEL
         if LOG_CHANNEL:
             try:
                 await client.send_message(
@@ -1414,6 +1466,59 @@ async def quality_cb_handler(client: Client, query: CallbackQuery):
         import traceback
         logging.error(traceback.format_exc())
         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
+
+# Placeholder for search handler to log all user searches
+@Client.on_message(filters.command(["search"]))
+async def search_handler(client: Client, message):
+    try:
+        # Extract search query
+        query = " ".join(message.command[1:]).strip()
+        if not query:
+            await message.reply("Please provide a search query. Example: /search Game of Thrones S04")
+            return
+        
+        logging.info(f"Search initiated: query={query}, user={message.from_user.id}")
+        
+        # Generate a unique key (replace with your actual key logic)
+        key = str(uuid.uuid4())
+        
+        # Perform search
+        chat_id = message.chat.id
+        files, _, _ = await get_cached_search_results(chat_id, query, max_results=30000)
+        
+        # Log search to LOG_CHANNEL
+        if LOG_CHANNEL:
+            try:
+                await client.send_message(
+                    chat_id=LOG_CHANNEL,
+                    text=(
+                        f"📩 **User Search Log**\n"
+                        f"👤 User: {message.from_user.mention} (`{message.from_user.id}`)\n"
+                        f"🔎 Query: `{query}`\n"
+                        f"📂 Files Found: {len(files)}\n"
+                        f"📝 Key: `{key}`\n"
+                        f"⏰ Time: {message.date.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                    )
+                )
+                logging.info(f"Logged user search for {query} by {message.from_user.id}")
+            except Exception as e:
+                logging.error(f"Failed to log user search: {e}")
+        
+        # Store search in FRESH
+        FRESH[key] = query
+        
+        # Respond with results and seasons button
+        btn = [[InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")]]
+        await message.reply(
+            f"Search results for '{query}': {len(files)} files found.",
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in search_handler: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        await message.reply("❌ An error occurred during search. Check logs.")
 
 
 # END SEASON EDIT HERE
@@ -3835,6 +3940,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
