@@ -830,66 +830,76 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         chat_id = query.message.chat.id
         files = []
         
-        # Expanded season patterns to match Wednesday and Game of Thrones file names
+        # Expanded season patterns to cover more naming conventions
         season_patterns_map = {
             "season 1": [
                 r"s\s*0?1", r"season\s*0?1", r"season-?1\b", r"s-?1\b", r"s01", r"s1e", r"season1e", 
-                r"season 01", r"season 1\b", r"season1\b", r"s 01", r"s 1\b", r"1st season", 
-                r"first season", r"season one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1",
-                r"\b1x", r"1\s*x", r"s01e", r"season\s*1\s*e", r"s\s*1\s*e"
+                r"season\s*01", r"season\s*1\b", r"season1\b", r"s\s*01", r"s\s*1\b", r"1st\s*season", 
+                r"first\s*season", r"season\s*one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1",
+                r"\b1x", r"1\s*x", r"s01e", r"season\s*1\s*e", r"s\s*1\s*e", r"season\.1", r"s\.1",
+                r"part\s*1", r"part-?1\b", r"chapter\s*1", r"ch\s*1", r"\b01\b", r"\b1\b"
             ],
             "season 2": [
                 r"s\s*0?2", r"season\s*0?2", r"season-?2\b", r"s-?2\b", r"s02", r"s2e", r"season2e", 
-                r"season 02", r"season 2\b", r"season2\b", r"s 02", r"s 2\b", r"2nd season", 
-                r"second season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2",
-                r"\b2x", r"2\s*x", r"s02e", r"season\s*2\s*e", r"s\s*2\s*e"
+                r"season\s*02", r"season\s*2\b", r"season2\b", r"s\s*02", r"s\s*2\b", r"2nd\s*season", 
+                r"second\s*season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2",
+                r"\b2x", r"2\s*x", r"s02e", r"season\s*2\s*e", r"s\s*2\s*e", r"season\.2", r"s\.2",
+                r"part\s*2", r"part-?2\b", r"chapter\s*2", r"ch\s*2", r"\b02\b", r"\b2\b"
             ],
             "season 3": [
                 r"s\s*0?3", r"season\s*0?3", r"season-?3\b", r"s-?3\b", r"s03", r"s3e", r"season3e", 
-                r"season 03", r"season 3\b", r"season3\b", r"s 03", r"s 3\b", r"3rd season", 
-                r"third season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3",
-                r"\b3x", r"3\s*x", r"s03e", r"season\s*3\s*e", r"s\s*3\s*e"
+                r"season\s*03", r"season\s*3\b", r"season3\b", r"s\s*03", r"s\s*3\b", r"3rd\s*season", 
+                r"third\s*season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3",
+                r"\b3x", r"3\s*x", r"s03e", r"season\s*3\s*e", r"s\s*3\s*e", r"season\.3", r"s\.3",
+                r"part\s*3", r"part-?3\b", r"chapter\s*3", r"ch\s*3", r"\b03\b", r"\b3\b"
             ],
             "season 4": [
                 r"s\s*0?4", r"season\s*0?4", r"season-?4\b", r"s-?4\b", r"s04", r"s4e", r"season4e", 
-                r"season 04", r"season 4\b", r"season4\b", r"s 04", r"s 4\b", r"4th season", 
-                r"fourth season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4",
-                r"\b4x", r"4\s*x", r"s04e", r"season\s*4\s*e", r"s\s*4\s*e"
+                r"season\s*04", r"season\s*4\b", r"season4\b", r"s\s*04", r"s\s*4\b", r"4th\s*season", 
+                r"fourth\s*season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4",
+                r"\b4x", r"4\s*x", r"s04e", r"season\s*4\s*e", r"s\s*4\s*e", r"season\.4", r"s\.4",
+                r"part\s*4", r"part-?4\b", r"chapter\s*4", r"ch\s*4", r"\b04\b", r"\b4\b"
             ],
             "season 5": [
                 r"s\s*0?5", r"season\s*0?5", r"season-?5\b", r"s-?5\b", r"s05", r"s5e", r"season5e", 
-                r"season 05", r"season 5\b", r"season5\b", r"s 05", r"s 5\b", r"5th season", 
-                r"fifth season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5",
-                r"\b5x", r"5\s*x", r"s05e", r"season\s*5\s*e", r"s\s*5\s*e"
+                r"season\s*05", r"season\s*5\b", r"season5\b", r"s\s*05", r"s\s*5\b", r"5th\s*season", 
+                r"fifth\s*season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5",
+                r"\b5x", r"5\s*x", r"s05e", r"season\s*5\s*e", r"s\s*5\s*e", r"season\.5", r"s\.5",
+                r"part\s*5", r"part-?5\b", r"chapter\s*5", r"ch\s*5", r"\b05\b", r"\b5\b"
             ],
             "season 6": [
                 r"s\s*0?6", r"season\s*0?6", r"season-?6\b", r"s-?6\b", r"s06", r"s6e", r"season6e", 
-                r"season 06", r"season 6\b", r"season6\b", r"s 06", r"s 6\b", r"6th season", 
-                r"sixth season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6",
-                r"\b6x", r"6\s*x", r"s06e", r"season\s*6\s*e", r"s\s*6\s*e"
+                r"season\s*06", r"season\s*6\b", r"season6\b", r"s\s*06", r"s\s*6\b", r"6th\s*season", 
+                r"sixth\s*season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6",
+                r"\b6x", r"6\s*x", r"s06e", r"season\s*6\s*e", r"s\s*6\s*e", r"season\.6", r"s\.6",
+                r"part\s*6", r"part-?6\b", r"chapter\s*6", r"ch\s*6", r"\b06\b", r"\b6\b"
             ],
             "season 7": [
                 r"s\s*0?7", r"season\s*0?7", r"season-?7\b", r"s-?7\b", r"s07", r"s7e", r"season7e", 
-                r"season 07", r"season 7\b", r"season7\b", r"s 07", r"s 7\b", r"7th season", 
-                r"seventh season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7",
-                r"\b7x", r"7\s*x", r"s07e", r"season\s*7\s*e", r"s\s*7\s*e"
+                r"season\s*07", r"season\s*7\b", r"season7\b", r"s\s*07", r"s\s*7\b", r"7th\s*season", 
+                r"seventh\s*season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7",
+                r"\b7x", r"7\s*x", r"s07e", r"season\s*7\s*e", r"s\s*7\s*e", r"season\.7", r"s\.7",
+                r"part\s*7", r"part-?7\b", r"chapter\s*7", r"ch\s*7", r"\b07\b", r"\b7\b"
             ],
             "season 8": [
                 r"s\s*0?8", r"season\s*0?8", r"season-?8\b", r"s-?8\b", r"s08", r"s8e", r"season8e", 
-                r"season 08", r"season 8\b", r"season8\b", r"s 08", r"s 8\b", r"8th season", 
-                r"eighth season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8",
-                r"\b8x", r"8\s*x", r"s08e", r"season\s*8\s*e", r"s\s*8\s*e"
+                r"season\s*08", r"season\s*8\b", r"season8\b", r"s\s*08", r"s\s*8\b", r"8th\s*season", 
+                r"eighth\s*season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8",
+                r"\b8x", r"8\s*x", r"s08e", r"season\s*8\s*e", r"s\s*8\s*e", r"season\.8", r"s\.8",
+                r"part\s*8", r"part-?8\b", r"chapter\s*8", r"ch\s*8", r"\b08\b", r"\b8\b"
             ],
             "season 9": [
                 r"s\s*0?9", r"season\s*0?9", r"season-?9\b", r"s-?9\b", r"s09", r"s9e", r"season9e", 
-                r"season 09", r"season 9\b", r"season9\b", r"s 09", r"s 9\b", r"9th season", 
-                r"ninth season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9",
-                r"\b9x", r"9\s*x", r"s09e", r"season\s*9\s*e", r"s\s*9\s*e"
+                r"season\s*09", r"season\s*9\b", r"season9\b", r"s\s*09", r"s\s*9\b", r"9th\s*season", 
+                r"ninth\s*season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9",
+                r"\b9x", r"9\s*x", r"s09e", r"season\s*9\s*e", r"s\s*9\s*e", r"season\.9", r"s\.9",
+                r"part\s*9", r"part-?9\b", r"chapter\s*9", r"ch\s*9", r"\b09\b", r"\b9\b"
             ],
             "season 10": [
                 r"s\s*10", r"season\s*10", r"season-?10\b", r"s-?10\b", r"s10", r"s10e", r"season10e", 
-                r"season 10\b", r"season10\b", r"s 10", r"10th season", r"tenth season", 
-                r"s10\b", r"season\s*-?\s*10", r"\b10x", r"10\s*x", r"s10e", r"season\s*10\s*e"
+                r"season\s*10\b", r"season10\b", r"s\s*10", r"10th\s*season", r"tenth\s*season", 
+                r"s10\b", r"season\s*-?\s*10", r"\b10x", r"10\s*x", r"s10e", r"season\s*10\s*e",
+                r"season\.10", r"s\.10", r"part\s*10", r"part-?10\b", r"chapter\s*10", r"ch\s*10", r"\b10\b"
             ]
         }
         
@@ -899,12 +909,12 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             season_num = seas.split()[-1]
             season_regex = re.compile("|".join(patterns), re.IGNORECASE)
             
-            # Perform a single broad search for efficiency
-            logging.info("Performing broad search")
+            # Perform a single broad search with increased max_results
+            logging.info(f"Performing broad search for: {original_search}")
             try:
                 broad_files, _, _ = await asyncio.wait_for(
-                    get_cached_search_results(chat_id, original_search, max_results=2000),
-                    timeout=10.0
+                    get_cached_search_results(chat_id, original_search, max_results=5000),  # Increased limit
+                    timeout=12.0  # Increased timeout
                 )
                 logging.info(f"Broad search found {len(broad_files)} files")
             except asyncio.TimeoutError:
@@ -916,31 +926,49 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             
             # Filter exact matches
             exact_files = []
+            unmatched_files = []  # For debugging
             for file in broad_files:
                 file_name_lower = file["file_name"].lower()
                 if season_regex.search(file_name_lower):
                     exact_files.append(file)
                     logging.debug(f"Exact matched file: {file['file_name']}")
                 else:
+                    unmatched_files.append(file["file_name"])
                     logging.debug(f"Unmatched file: {file['file_name']}")
             
             files = exact_files
             
-            # If few exact matches, add similar files using fuzzy matching
+            # If fewer than 10 exact matches, add similar files using fuzzy matching
             similar_files = []
-            if len(files) < 5 and broad_files:
-                target_str = original_search.lower() + " " + seas.lower()
+            if len(files) < 10 and broad_files:
+                target_str = original_search.lower()  # Simplified target for better matching
                 for file in broad_files:
                     file_name_lower = file["file_name"].lower()
                     if not season_regex.search(file_name_lower):
                         similarity = SequenceMatcher(None, target_str, file_name_lower).ratio()
-                        if similarity > 0.6:  # Adjustable threshold
+                        if similarity > 0.5:  # Lowered threshold
                             file_copy = file.copy()
                             file_copy['is_similar'] = True
                             similar_files.append(file_copy)
                             logging.debug(f"Similar file added: {file['file_name']} (similarity: {similarity:.2f})")
             
             files += similar_files
+            
+            # Log unmatched files for debugging (limited to 10 to avoid spam)
+            if unmatched_files and LOG_CHANNEL:
+                try:
+                    await client.send_message(
+                        chat_id=LOG_CHANNEL,
+                        text=(
+                            f"🛠 **Debug: Unmatched Files for {original_search} {seas}**\n"
+                            f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
+                            f"📂 Sample Unmatched Files (up to 10):\n" +
+                            "\n".join([f"- {name}" for name in unmatched_files[:10]])
+                        )
+                    )
+                    logging.info(f"Logged {len(unmatched_files)} unmatched files for debugging")
+                except Exception as e:
+                    logging.error(f"Failed to log unmatched files: {e}")
         
         # Remove duplicates
         unique_files = []
@@ -955,7 +983,10 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         # Sort files by episode number
         def get_episode_num(file):
             file_name_lower = file["file_name"].lower()
-            ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)']
+            ep_patterns = [
+                r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', 
+                r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)', r'\.(\d+)\.'
+            ]
             for pattern in ep_patterns:
                 ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
                 if ep_match:
@@ -1010,7 +1041,10 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 
                 # Extract episode number
                 episode_num = "??"
-                ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)']
+                ep_patterns = [
+                    r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', 
+                    r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)', r'\.(\d+)\.'
+                ]
                 for pattern in ep_patterns:
                     ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
                     if ep_match:
@@ -1090,235 +1124,6 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 
     except Exception as e:
         logging.error(f"Error in filter_seasons_cb_handler: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
-        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
-
-@Client.on_callback_query(filters.regex(r"^seasons#"))
-async def seasons_cb_handler(client: Client, query: CallbackQuery):
-    try:
-        # Check if user is allowed to access this request
-        if query.message.reply_to_message:
-            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                logging.info(f"Permission denied for user {query.from_user.id}")
-                return await query.answer(
-                    f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\n"
-                    "ᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\n"
-                    "ʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
-                    show_alert=True,
-                )
-        
-        # Get the key from callback_data
-        _, key = query.data.split("#")
-        search = FRESH.get(key)
-        BUTTONS0[key] = None
-
-        # Safely replace spaces with underscores
-        if isinstance(search, str):
-            search = search.replace(' ', '_')
-
-        btn = []
-
-        # Add season buttons (robust for odd number of seasons)
-        for i in range(0, len(SEASONS), 2):
-            row = [InlineKeyboardButton(
-                text=SEASONS[i].title(),
-                callback_data=f"fs#{SEASONS[i].lower()}#{key}"
-            )]
-            if i + 1 < len(SEASONS):
-                row.append(InlineKeyboardButton(
-                    text=SEASONS[i+1].title(),
-                    callback_data=f"fs#{SEASONS[i+1].lower()}#{key}"
-                ))
-            btn.append(row)
-
-        # Header
-        btn.insert(
-            0,
-            [InlineKeyboardButton(
-                text="👇 𝖲𝖾𝗅𝖾𝖼𝗍 Season 👇",
-                callback_data="ident"
-            )]
-        )
-
-        # Back button
-        req = query.from_user.id
-        offset = 0
-        btn.append([InlineKeyboardButton(
-            text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭",
-            callback_data=f"next_{req}_{key}_{offset}"
-        )])
-
-        # Edit message with new inline keyboard
-        try:
-            await asyncio.wait_for(
-                query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
-                timeout=8.0
-            )
-        except MessageNotModified:
-            logging.info("Message not modified in seasons_cb_handler")
-            pass
-        except Exception as e:
-            logging.error(f"Error in seasons_cb_handler: {e}")
-            await query.answer("❌ Failed to update seasons menu.", show_alert=True)
-                
-    except Exception as e:
-        logging.error(f"Error in seasons_cb_handler: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
-        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
-
-@Client.on_callback_query(filters.regex(r"^qualities#"))
-async def qualities_cb_handler(client: Client, query: CallbackQuery):
-    try:
-        # Parse callback data
-        _, seas, key = query.data.split("#")
-        
-        # Check user permission
-        if query.message.reply_to_message:
-            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                logging.info(f"Permission denied for user {query.from_user.id}")
-                return await query.answer(
-                    f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
-                    show_alert=True,
-                )
-        
-        files = temp.GETALL.get(key)
-        
-        if not files:
-            logging.error(f"No files found in temp.GETALL for key: {key}")
-            await query.answer("No files found.", show_alert=True)
-            return
-        
-        # Group files by quality
-        quality_map = {}
-        for file in files:
-            file_name_lower = file["file_name"].lower()
-            quality = "Unknown"
-            if "480p" in file_name_lower:
-                quality = "480p"
-            elif "720p" in file_name_lower:
-                quality = "720p"
-            elif "1080p" in file_name_lower:
-                quality = "1080p"
-            elif "2160p" in file_name_lower:
-                quality = "4K"
-            # Add more quality patterns if needed, e.g., "hd", "sd"
-            if quality not in quality_map:
-                quality_map[quality] = []
-            quality_map[quality].append(file)
-        
-        if not quality_map:
-            logging.error(f"No qualities found for files with key: {key}")
-            await query.answer("No qualities found.", show_alert=True)
-            return
-        
-        btn = []
-        for quality, q_files in sorted(quality_map.items()):
-            btn.append([
-                InlineKeyboardButton(
-                    text=f"{quality} ({len(q_files)} files)",
-                    callback_data=f"quality#{quality}#{seas}#{key}"
-                )
-            ])
-        
-        btn.insert(0, [
-            InlineKeyboardButton(f"🎬 {FRESH.get(key)} - {seas.title()} Qualities", callback_data="ident")
-        ])
-        
-        btn.append([InlineKeyboardButton(text="↩️ Back to Episodes", callback_data=f"episodes#{seas}#{key}")])
-        
-        await asyncio.wait_for(
-            query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
-            timeout=8.0
-        )
-        
-    except Exception as e:
-        logging.error(f"Error in qualities_cb_handler: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
-        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
-
-@Client.on_callback_query(filters.regex(r"^quality#"))
-async def quality_cb_handler(client: Client, query: CallbackQuery):
-    try:
-        # Parse callback data
-        _, quality, seas, key = query.data.split("#")
-        
-        # Check user permission
-        if query.message.reply_to_message:
-            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                logging.info(f"Permission denied for user {query.from_user.id}")
-                return await query.answer(
-                    f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
-                    show_alert=True,
-                )
-        
-        files = temp.GETALL.get(key)
-        
-        if not files:
-            logging.error(f"No files found in temp.GETALL for key: {key}")
-            await query.answer("No files found.", show_alert=True)
-            return
-        
-        # Filter files by quality
-        filtered_files = [
-            f for f in files 
-            if quality.lower() in f["file_name"].lower() or 
-            (quality == "Unknown" and all(q not in f["file_name"].lower() for q in ["480p", "720p", "1080p", "2160p"]))
-        ]
-        
-        if not filtered_files:
-            logging.error(f"No files found for quality: {quality}, season: {seas}")
-            await query.answer("No files found for this quality.", show_alert=True)
-            return
-        
-        settings = await get_settings(query.message.chat.id)
-        pre = 'filep' if settings['file_secure'] else 'file'
-        
-        btn = []
-        for file in filtered_files:
-            file_name_lower = file["file_name"].lower()
-            episode_num = "??"
-            ep_patterns = [r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)']
-            for pattern in ep_patterns:
-                ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
-                if ep_match:
-                    episode_num = ep_match.group(1)
-                    break
-            
-            clean_name = file["file_name"]
-            for prefix in ['[', '@', 'www.', 'http', 'https']:
-                if prefix in clean_name:
-                    clean_name = clean_name.split(prefix, 1)[-1].strip()
-            if len(clean_name) > 30:
-                clean_name = clean_name[:27] + "..."
-            
-            button_text = f"E{episode_num.zfill(2)} | {quality} | {get_size(file['file_size'])} | {clean_name}"
-            
-            if file.get('is_similar', False):
-                button_text += " (Similar)"
-            
-            btn.append([
-                InlineKeyboardButton(
-                    text=button_text,
-                    callback_data=f"{pre}#{file['file_id']}"
-                )
-            ])
-        
-        btn.insert(0, [
-            InlineKeyboardButton(f"Files in {quality} - {seas.title()}", callback_data="ident")
-        ])
-        
-        btn.append([InlineKeyboardButton(text="↩️ Back to Qualities", callback_data=f"qualities#{seas}#{key}")])
-        
-        await asyncio.wait_for(
-            query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
-            timeout=8.0
-        )
-        
-    except Exception as e:
-        logging.error(f"Error in quality_cb_handler: {e}")
         import traceback
         logging.error(traceback.format_exc())
         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
@@ -3743,6 +3548,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
