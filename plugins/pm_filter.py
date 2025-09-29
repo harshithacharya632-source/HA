@@ -765,12 +765,13 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
 import re
 import logging
 import asyncio
+from difflib import SequenceMatcher
 from pyrogram import Client
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram.errors import MessageNotModified, FloodWait
 
 # Assuming these are defined elsewhere in your codebase
-# from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, logger, SEASONS
+# from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, logger, SEASONS, LOG_CHANNEL
 
 # Configure logging for debugging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -781,15 +782,15 @@ SEARCH_CACHE = {}
 async def get_cached_search_results(chat_id, query, max_results):
     cache_key = (chat_id, query, max_results)
     if cache_key in SEARCH_CACHE:
-        logger.info(f"Cache hit for query: {query}")
+        logging.info(f"Cache hit for query: {query}")
         return SEARCH_CACHE[cache_key]
-    logger.info(f"Cache miss, executing search for: {query}")
+    logging.info(f"Cache miss, executing search for: {query}")
     try:
         result = await get_search_results(chat_id, query, max_results)
         SEARCH_CACHE[cache_key] = result
         return result
     except Exception as e:
-        logger.error(f"Search error for query {query}: {e}")
+        logging.error(f"Search error for query {query}: {e}")
         return [], 0, 0
 
 @Client.on_callback_query(filters.regex(r"^fs#"))
@@ -800,28 +801,28 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         key = data_parts[2]
         page = int(data_parts[3]) if len(data_parts) > 3 else 0
         
-        logger.info(f"Callback data: {query.data}, seas: {seas}, key: {key}, page: {page}, user: {query.from_user.id}")
+        logging.info(f"Callback data: {query.data}, seas: {seas}, key: {key}, page: {page}, user: {query.from_user.id}")
         
         # Check user permission
         if query.message.reply_to_message:
             try:
                 if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                    logger.info(f"Permission denied for user {query.from_user.id}")
+                    logging.info(f"Permission denied for user {query.from_user.id}")
                     return await query.answer(
                         f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
                         show_alert=True,
                     )
             except Exception as e:
-                logger.warning(f"Permission check error: {e}")
+                logging.warning(f"Permission check error: {e}")
         else:
-            logger.warning("No reply_to_message found for permission check.")
+            logging.warning("No reply_to_message found for permission check.")
 
         search = FRESH.get(key)
         
-        logger.info(f"FRESH key: {key}, value: {search}")
+        logging.info(f"FRESH key: {key}, value: {search}")
         
         if not search:
-            logger.error(f"Invalid key: {key}")
+            logging.error(f"Invalid key: {key}")
             await query.answer("❌ Invalid request! Key not found.", show_alert=True)
             return
             
@@ -898,69 +899,48 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             season_num = seas.split()[-1]
             season_regex = re.compile("|".join(patterns), re.IGNORECASE)
             
-            # Try direct searches with season-specific queries to mimic "Wednesday S03"
-            files = []
-            search_queries = [
-                f"{original_search} S{season_num.zfill(2)}",
-                f"{original_search} Season {season_num}",
-                f"{original_search} S {season_num}",
-                f"{original_search} {season_num}x",
-                f"{original_search} Season-{season_num}",
-                f"{original_search} S{season_num}e"
-            ]
+            # Perform a single broad search for efficiency
+            logging.info("Performing broad search")
+            try:
+                broad_files, _, _ = await asyncio.wait_for(
+                    get_cached_search_results(chat_id, original_search, max_results=2000),
+                    timeout=10.0
+                )
+                logging.info(f"Broad search found {len(broad_files)} files")
+            except asyncio.TimeoutError:
+                logging.error("Timeout on broad search")
+                broad_files = []
+            except Exception as e:
+                logging.error(f"Broad search failed: {e}")
+                broad_files = []
             
-            # Run searches concurrently to reduce latency
-            async def search_single(query):
-                try:
-                    search_files, _, _ = await asyncio.wait_for(
-                        get_cached_search_results(chat_id, query, max_results=500),
-                        timeout=5.0
-                    )
-                    logger.info(f"Found {len(search_files)} files for query: {query}")
-                    return search_files
-                except asyncio.TimeoutError:
-                    logger.error(f"Timeout on search: {query}")
-                    return []
-                except Exception as e:
-                    logger.error(f"Search failed for {query}: {e}")
-                    return []
+            # Filter exact matches
+            exact_files = []
+            for file in broad_files:
+                file_name_lower = file["file_name"].lower()
+                if season_regex.search(file_name_lower):
+                    exact_files.append(file)
+                    logging.debug(f"Exact matched file: {file['file_name']}")
+                else:
+                    logging.debug(f"Unmatched file: {file['file_name']}")
             
-            # Execute all searches concurrently
-            search_tasks = [search_single(query) for query in search_queries]
-            results = await asyncio.gather(*search_tasks, return_exceptions=True)
+            files = exact_files
             
-            for search_files in results:
-                if isinstance(search_files, list) and search_files:
-                    for file in search_files:
-                        file_name_lower = file["file_name"].lower()
-                        if season_regex.search(file_name_lower):
-                            files.append(file)
-                            logger.debug(f"Matched file: {file['file_name']}")
-                        else:
-                            logger.debug(f"Unmatched file: {file['file_name']}")
+            # If few exact matches, add similar files using fuzzy matching
+            similar_files = []
+            if len(files) < 5 and broad_files:
+                target_str = original_search.lower() + " " + seas.lower()
+                for file in broad_files:
+                    file_name_lower = file["file_name"].lower()
+                    if not season_regex.search(file_name_lower):
+                        similarity = SequenceMatcher(None, target_str, file_name_lower).ratio()
+                        if similarity > 0.6:  # Adjustable threshold
+                            file_copy = file.copy()
+                            file_copy['is_similar'] = True
+                            similar_files.append(file_copy)
+                            logging.debug(f"Similar file added: {file['file_name']} (similarity: {similarity:.2f})")
             
-            # Fallback to broad search if no files found
-            if not files:
-                logger.info("No files from direct searches, trying broad search")
-                try:
-                    broad_files, _, _ = await asyncio.wait_for(
-                        get_cached_search_results(chat_id, original_search, max_results=2000),
-                        timeout=10.0
-                    )
-                    logger.info(f"Broad search found {len(broad_files)} files")
-                    for file in broad_files:
-                        file_name_lower = file["file_name"].lower()
-                        if season_regex.search(file_name_lower):
-                            files.append(file)
-                            logger.debug(f"Matched file: {file['file_name']}")
-                        else:
-                            logger.debug(f"Unmatched file: {file['file_name']}")
-                except asyncio.TimeoutError:
-                    logger.error("Timeout on broad search")
-                    broad_files = []
-                except Exception as e:
-                    logger.error(f"Broad search failed: {e}")
-                    broad_files = []
+            files += similar_files
         
         # Remove duplicates
         unique_files = []
@@ -984,12 +964,29 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         
         files = sorted(files, key=get_episode_num)
         
-        logger.info(f"After filtering, dedup, and sort: {len(files)} files")
+        logging.info(f"After filtering, dedup, and sort: {len(files)} files (including {len(similar_files)} similar)")
         
         if not files:
-            logger.info("No files found for season after filtering")
+            logging.info("No files found for season after filtering")
             await query.answer("🚫 No Files Found for this Season 🚫", show_alert=True)
             return
+        
+        # Log the series search to LOG_CHANNEL
+        if LOG_CHANNEL:
+            try:
+                await client.send_message(
+                    chat_id=LOG_CHANNEL,
+                    text=(
+                        f"📩 **Series Search Log**\n"
+                        f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
+                        f"🔎 Series: `{original_search}`\n"
+                        f"📅 Season: `{seas}`\n"
+                        f"📂 Files Found: {len(files)} (including {len(similar_files)} similar)"
+                    )
+                )
+                logging.info(f"Logged series search for {original_search} {seas} by {query.from_user.id}")
+            except Exception as e:
+                logging.error(f"Failed to log series search: {e}")
         
         # Store files for this season
         BUTTONS0[key] = f"{original_search} {seas}"
@@ -1031,6 +1028,9 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                     clean_name = clean_name[:27] + "..."
                 
                 button_text = f"S{season_num.zfill(2)}E{episode_num.zfill(2)} | {get_size(file['file_size'])} | {clean_name}"
+                
+                if file.get('is_similar', False):
+                    button_text += " (Similar)"
                 
                 btn.append([
                     InlineKeyboardButton(
@@ -1078,20 +1078,20 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 timeout=8.0
             )
         except FloodWait as e:
-            logger.warning(f"FloodWait: Waiting for {e.value} seconds")
+            logging.warning(f"FloodWait: Waiting for {e.value} seconds")
             await asyncio.sleep(e.value)
             await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
         except MessageNotModified:
-            logger.info("Message not modified")
+            logging.info("Message not modified")
             pass
         except asyncio.TimeoutError:
-            logger.error("Timeout on edit_message_reply_markup")
+            logging.error("Timeout on edit_message_reply_markup")
             await query.answer("⚠️ Took too long to update. Try again.", show_alert=True)
                 
     except Exception as e:
-        logger.error(f"Error in filter_seasons_cb_handler: {e}")
+        logging.error(f"Error in filter_seasons_cb_handler: {e}")
         import traceback
-        logger.error(traceback.format_exc())
+        logging.error(traceback.format_exc())
         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
 
 @Client.on_callback_query(filters.regex(r"^seasons#"))
@@ -1100,7 +1100,7 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
         # Check if user is allowed to access this request
         if query.message.reply_to_message:
             if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                logger.info(f"Permission denied for user {query.from_user.id}")
+                logging.info(f"Permission denied for user {query.from_user.id}")
                 return await query.answer(
                     f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\n"
                     "ᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\n"
@@ -1156,16 +1156,16 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
                 timeout=8.0
             )
         except MessageNotModified:
-            logger.info("Message not modified in seasons_cb_handler")
+            logging.info("Message not modified in seasons_cb_handler")
             pass
         except Exception as e:
-            logger.error(f"Error in seasons_cb_handler: {e}")
+            logging.error(f"Error in seasons_cb_handler: {e}")
             await query.answer("❌ Failed to update seasons menu.", show_alert=True)
                 
     except Exception as e:
-        logger.error(f"Error in seasons_cb_handler: {e}")
+        logging.error(f"Error in seasons_cb_handler: {e}")
         import traceback
-        logger.error(traceback.format_exc())
+        logging.error(traceback.format_exc())
         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
 
 @Client.on_callback_query(filters.regex(r"^qualities#"))
@@ -1177,7 +1177,7 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
         # Check user permission
         if query.message.reply_to_message:
             if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                logger.info(f"Permission denied for user {query.from_user.id}")
+                logging.info(f"Permission denied for user {query.from_user.id}")
                 return await query.answer(
                     f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
                     show_alert=True,
@@ -1186,7 +1186,7 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
         files = temp.GETALL.get(key)
         
         if not files:
-            logger.error(f"No files found in temp.GETALL for key: {key}")
+            logging.error(f"No files found in temp.GETALL for key: {key}")
             await query.answer("No files found.", show_alert=True)
             return
         
@@ -1209,7 +1209,7 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
             quality_map[quality].append(file)
         
         if not quality_map:
-            logger.error(f"No qualities found for files with key: {key}")
+            logging.error(f"No qualities found for files with key: {key}")
             await query.answer("No qualities found.", show_alert=True)
             return
         
@@ -1234,9 +1234,9 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
         )
         
     except Exception as e:
-        logger.error(f"Error in qualities_cb_handler: {e}")
+        logging.error(f"Error in qualities_cb_handler: {e}")
         import traceback
-        logger.error(traceback.format_exc())
+        logging.error(traceback.format_exc())
         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
 
 @Client.on_callback_query(filters.regex(r"^quality#"))
@@ -1248,7 +1248,7 @@ async def quality_cb_handler(client: Client, query: CallbackQuery):
         # Check user permission
         if query.message.reply_to_message:
             if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                logger.info(f"Permission denied for user {query.from_user.id}")
+                logging.info(f"Permission denied for user {query.from_user.id}")
                 return await query.answer(
                     f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
                     show_alert=True,
@@ -1257,7 +1257,7 @@ async def quality_cb_handler(client: Client, query: CallbackQuery):
         files = temp.GETALL.get(key)
         
         if not files:
-            logger.error(f"No files found in temp.GETALL for key: {key}")
+            logging.error(f"No files found in temp.GETALL for key: {key}")
             await query.answer("No files found.", show_alert=True)
             return
         
@@ -1269,7 +1269,7 @@ async def quality_cb_handler(client: Client, query: CallbackQuery):
         ]
         
         if not filtered_files:
-            logger.error(f"No files found for quality: {quality}, season: {seas}")
+            logging.error(f"No files found for quality: {quality}, season: {seas}")
             await query.answer("No files found for this quality.", show_alert=True)
             return
         
@@ -1295,6 +1295,10 @@ async def quality_cb_handler(client: Client, query: CallbackQuery):
                 clean_name = clean_name[:27] + "..."
             
             button_text = f"E{episode_num.zfill(2)} | {quality} | {get_size(file['file_size'])} | {clean_name}"
+            
+            if file.get('is_similar', False):
+                button_text += " (Similar)"
+            
             btn.append([
                 InlineKeyboardButton(
                     text=button_text,
@@ -1314,10 +1318,14 @@ async def quality_cb_handler(client: Client, query: CallbackQuery):
         )
         
     except Exception as e:
-        logger.error(f"Error in quality_cb_handler: {e}")
+        logging.error(f"Error in quality_cb_handler: {e}")
         import traceback
-        logger.error(traceback.format_exc())
+        logging.error(traceback.format_exc())
         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
+
+
+# END SEASON EDIT HERE
+
 
 @Client.on_callback_query(filters.regex(r"^episodes#"))
 async def episodes_cb_handler(client: Client, query: CallbackQuery):
@@ -3735,6 +3743,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
