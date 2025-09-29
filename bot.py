@@ -6,7 +6,7 @@
 
 import sys, glob, importlib, logging, logging.config, pytz, asyncio
 from pathlib import Path
-from pyrogram import Client, idle
+from pyrogram import Client, idle, enums
 from database.users_chats_db import db
 from info import *
 from utils import temp
@@ -79,35 +79,44 @@ async def start():
         today = date.today()
         now = datetime.now(tz)
         time = now.strftime("%H:%M:%S %p")
-        try:
-            await TechVJBot.send_message(
-                chat_id=LOG_CHANNEL,
-                text=script.RESTART_TXT.format(today, time),
-                parse_mode="Markdown"
-            )
-            logging.info(f"Sent restart message to LOG_CHANNEL ({LOG_CHANNEL})")
-        except Exception as e:
-            logging.error(f"Failed to send restart message to LOG_CHANNEL: {e}")
-            print("Make Your Bot Admin In Log Channel With Full Rights")
+        if LOG_CHANNEL:
+            try:
+                await TechVJBot.send_message(
+                    chat_id=LOG_CHANNEL,
+                    text=script.RESTART_TXT.format(today, time),
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+                logging.info(f"Sent restart message to LOG_CHANNEL ({LOG_CHANNEL})")
+            except Exception as e:
+                logging.error(f"Failed to send restart message to LOG_CHANNEL ({LOG_CHANNEL}): {e}")
+                print(f"Error: Ensure bot is admin in LOG_CHANNEL ({LOG_CHANNEL}) with 'Post Messages' permission")
+        else:
+            logging.warning("LOG_CHANNEL not set in info.py")
         
         # Test file channels
-        for ch in CHANNELS:
-            try:
-                k = await TechVJBot.send_message(chat_id=ch, text="**Bot Restarted**")
-                await k.delete()
-                logging.info(f"Verified access to channel {ch}")
-            except Exception as e:
-                logging.error(f"Failed to access channel {ch}: {e}")
-                print("Make Your Bot Admin In File Channels With Full Rights")
+        if CHANNELS:
+            for ch in CHANNELS:
+                try:
+                    k = await TechVJBot.send_message(chat_id=ch, text="**Bot Restarted**")
+                    await k.delete()
+                    logging.info(f"Verified access to channel {ch}")
+                except Exception as e:
+                    logging.error(f"Failed to access channel {ch}: {e}")
+                    print(f"Error: Ensure bot is admin in channel {ch} with 'Post Messages' permission")
+        else:
+            logging.warning("CHANNELS not set in info.py")
         
         # Test force-sub channel
-        try:
-            k = await TechVJBot.send_message(chat_id=AUTH_CHANNEL, text="**Bot Restarted**")
-            await k.delete()
-            logging.info(f"Verified access to AUTH_CHANNEL {AUTH_CHANNEL}")
-        except Exception as e:
-            logging.error(f"Failed to access AUTH_CHANNEL: {e}")
-            print("Make Your Bot Admin In Force Subscribe Channel With Full Rights")
+        if AUTH_CHANNEL:
+            try:
+                k = await TechVJBot.send_message(chat_id=AUTH_CHANNEL, text="**Bot Restarted**")
+                await k.delete()
+                logging.info(f"Verified access to AUTH_CHANNEL {AUTH_CHANNEL}")
+            except Exception as e:
+                logging.error(f"Failed to access AUTH_CHANNEL {AUTH_CHANNEL}: {e}")
+                print(f"Error: Ensure bot is admin in AUTH_CHANNEL {AUTH_CHANNEL} with 'Post Messages' permission")
+        else:
+            logging.warning("AUTH_CHANNEL not set in info.py")
         
         # Restart clone bots if enabled
         if CLONE_MODE:
