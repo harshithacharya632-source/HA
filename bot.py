@@ -1,65 +1,99 @@
-import re
-import math
-import logging
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
-from pyrogram.errors import FloodWait, RPCError
-from info import LOG_CHANNEL
+# Don't Remove Credit @VJ_Botz
+# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
+# Ask Doubt on telegram @KingVJ01
+
+# Clone Code Credit : YT - @Tech_VJ / TG - @VJ_Bots / GitHub - @VJBots
+
+import sys, glob, importlib, logging, logging.config, pytz, asyncio
+from pathlib import Path
+
+# Get logging configurations
+logging.config.fileConfig('logging.conf')
+logging.getLogger().setLevel(logging.INFO)
+logging.getLogger("pyrogram").setLevel(logging.ERROR)
+logging.getLogger("cinemagoer").setLevel(logging.ERROR)
+
+from pyrogram import Client, idle
+from database.users_chats_db import db
+from info import *
+from utils import temp
+from typing import Union, Optional, AsyncGenerator
+from Script import script 
+from datetime import date, datetime 
+from aiohttp import web
+from plugins import web_server
+from plugins.clone import restart_bots
+
 from TechVJ.bot import TechVJBot
-import time
+from TechVJ.util.keepalive import ping_server
+from TechVJ.bot.clients import initialize_clients
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+ppath = "plugins/*.py"
+files = glob.glob(ppath)
+TechVJBot.start()
+loop = asyncio.get_event_loop()
 
-@Client.on_message(filters.text & filters.private)
-async def search_handler(bot: Client, message: Message):
-    query = message.text.strip()
-    user = message.from_user
 
-    # Validate query
-    if not query:
-        await message.reply_text("⚠️ Please provide a valid search query.")
-        return
-
-    # Sanitize query to prevent Markdown issues
-    sanitized_query = re.sub(r'[_*[\]()~`>#+-=|{}.!]', r'\\\g<0>', query)
-
-    # --- Perform your file search logic here ---
-    # Example: files = await db.search_files(query)
-    files = ["Movie1.mkv", "Movie2.mp4"]  # Mock results for testing
-
-    # Send results back to user
-    if files:
-        btn = [[InlineKeyboardButton("✅ Download", url="https://example.com")]]  # Replace with dynamic URL in production
-        await message.reply_text(
-            f"🔎 Results for: **{sanitized_query}**\n\n" + "\n".join(files),
-            reply_markup=InlineKeyboardMarkup(btn),
-            disable_web_page_preview=True
-        )
-    else:
-        await message.reply_text(f"❌ No results found for: **{sanitized_query}**")
-        # Log failed searches
-        logging.info(f"No results found for query '{query}' by user {user.id}")
-
-    # --- LOG USER SEARCH ---
-    if LOG_CHANNEL:
+async def start():
+    print('\n')
+    print('Initalizing Your Bot')
+    bot_info = await TechVJBot.get_me()
+    await initialize_clients()
+    for name in files:
+        with open(name) as a:
+            patt = Path(a.name)
+            plugin_name = patt.stem.replace(".py", "")
+            plugins_dir = Path(f"plugins/{plugin_name}.py")
+            import_path = "plugins.{}".format(plugin_name)
+            spec = importlib.util.spec_from_file_location(import_path, plugins_dir)
+            load = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(load)
+            sys.modules["plugins." + plugin_name] = load
+            print("Tech VJ Imported => " + plugin_name)
+    #if ON_HEROKU:
+        #asyncio.create_task(ping_server())
+    b_users, b_chats = await db.get_banned()
+    temp.BANNED_USERS = b_users
+    temp.BANNED_CHATS = b_chats
+    me = await TechVJBot.get_me()
+    temp.BOT = TechVJBot
+    temp.ME = me.id
+    temp.U_NAME = me.username
+    temp.B_NAME = me.first_name
+    logging.info(script.LOGO)
+    tz = pytz.timezone('Asia/Kolkata')
+    today = date.today()
+    now = datetime.now(tz)
+    time = now.strftime("%H:%M:%S %p")
+    try:
+        await TechVJBot.send_message(chat_id=LOG_CHANNEL, text=script.RESTART_TXT.format(today, time))
+    except:
+        print("Make Your Bot Admin In Log Channel With Full Rights")
+    for ch in CHANNELS:
         try:
-            await bot.send_message(
-                chat_id=LOG_CHANNEL,
-                text=(
-                    f"📩 **User Search Log**\n"
-                    f"🕒 Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"👤 User: {user.mention} (`{user.id}`)\n"
-                    f"🔎 Query: `{sanitized_query}`\n"
-                    f"📈 Results: {len(files)} file(s) found"
-                ),
-                disable_notification=True
-            )
-            logging.info(f"Logged search for '{query}' by user {user.id}")
-        except FloodWait as fw:
-            logging.warning(f"FloodWait error: Waiting for {fw.value} seconds")
-            time.sleep(fw.value)
-        except RPCError as e:
-            logging.error(f"Failed to log search to channel: {e}")
-        except Exception as e:
-            logging.error(f"Unexpected error while logging search: {e}")
+            k = await TechVJBot.send_message(chat_id=ch, text="**Bot Restarted**")
+            await k.delete()
+        except:
+            print("Make Your Bot Admin In File Channels With Full Rights")
+    try:
+        k = await TechVJBot.send_message(chat_id=AUTH_CHANNEL, text="**Bot Restarted**")
+        await k.delete()
+    except:
+        print("Make Your Bot Admin In Force Subscribe Channel With Full Rights")
+    if CLONE_MODE == True:
+        print("Restarting All Clone Bots.......")
+        await restart_bots()
+        print("Restarted All Clone Bots.")
+    app = web.AppRunner(await web_server())
+    await app.setup()
+    bind_address = "0.0.0.0"
+    await web.TCPSite(app, bind_address, PORT).start()
+    await idle()
+
+
+if __name__ == '__main__':
+    try:
+        loop.run_until_complete(start())
+    except KeyboardInterrupt:
+        logging.info('Service Stopped Bye 👋')
+
