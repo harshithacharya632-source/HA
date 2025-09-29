@@ -773,6 +773,12 @@ from pyrogram.errors import MessageNotModified, FloodWait
 # Assuming these are defined elsewhere in your codebase
 # from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, logger, SEASONS, LOG_CHANNEL
 
+# Define SEASONS to match season_patterns_map for consistency
+SEASONS = [
+    "season 1", "season 2", "season 3", "season 4", "season 5",
+    "season 6", "season 7", "season 8", "season 9", "season 10"
+]
+
 # Configure logging for debugging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -913,8 +919,8 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             logging.info(f"Performing broad search for: {original_search}")
             try:
                 broad_files, _, _ = await asyncio.wait_for(
-                    get_cached_search_results(chat_id, original_search, max_results=5000),  # Increased limit
-                    timeout=12.0  # Increased timeout
+                    get_cached_search_results(chat_id, original_search, max_results=5000),
+                    timeout=12.0
                 )
                 logging.info(f"Broad search found {len(broad_files)} files")
             except asyncio.TimeoutError:
@@ -926,7 +932,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             
             # Filter exact matches
             exact_files = []
-            unmatched_files = []  # For debugging
+            unmatched_files = []
             for file in broad_files:
                 file_name_lower = file["file_name"].lower()
                 if season_regex.search(file_name_lower):
@@ -941,12 +947,12 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             # If fewer than 10 exact matches, add similar files using fuzzy matching
             similar_files = []
             if len(files) < 10 and broad_files:
-                target_str = original_search.lower()  # Simplified target for better matching
+                target_str = original_search.lower()
                 for file in broad_files:
                     file_name_lower = file["file_name"].lower()
                     if not season_regex.search(file_name_lower):
                         similarity = SequenceMatcher(None, target_str, file_name_lower).ratio()
-                        if similarity > 0.5:  # Lowered threshold
+                        if similarity > 0.5:
                             file_copy = file.copy()
                             file_copy['is_similar'] = True
                             similar_files.append(file_copy)
@@ -991,7 +997,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
                 if ep_match:
                     return int(ep_match.group(1))
-            return 999  # Default to high number if no episode found
+            return 999
         
         files = sorted(files, key=get_episode_num)
         
@@ -1124,6 +1130,287 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 
     except Exception as e:
         logging.error(f"Error in filter_seasons_cb_handler: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
+
+@Client.on_callback_query(filters.regex(r"^seasons#"))
+async def seasons_cb_handler(client: Client, query: CallbackQuery):
+    try:
+        # Check user permission
+        if query.message.reply_to_message:
+            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+                logging.info(f"Permission denied for user {query.from_user.id}")
+                return await query.answer(
+                    f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
+                    show_alert=True,
+                )
+        
+        # Parse callback data
+        _, key = query.data.split("#")
+        logging.info(f"Seasons callback: key={key}, user={query.from_user.id}")
+        
+        # Validate key and search
+        search = FRESH.get(key)
+        if not search:
+            logging.error(f"Invalid key in seasons_cb_handler: {key}")
+            await query.answer("❌ Invalid request! Search key not found.", show_alert=True)
+            return
+
+        # Validate SEASONS list
+        if not SEASONS:
+            logging.error("SEASONS list is empty")
+            await query.answer("❌ No seasons available. Contact admin.", show_alert=True)
+            return
+
+        BUTTONS0[key] = None
+        sanitized_search = search.replace(' ', '_') if isinstance(search, str) else search
+
+        # Build season buttons
+        btn = []
+        for i in range(0, len(SEASONS), 2):
+            row = [
+                InlineKeyboardButton(
+                    text=SEASONS[i].title(),
+                    callback_data=f"fs#{SEASONS[i].lower()}#{key}"
+                )
+            ]
+            if i + 1 < len(SEASONS):
+                row.append(
+                    InlineKeyboardButton(
+                        text=SEASONS[i+1].title(),
+                        callback_data=f"fs#{SEASONS[i+1].lower()}#{key}"
+                    )
+                )
+            btn.append(row)
+
+        # Add header
+        btn.insert(0, [
+            InlineKeyboardButton(
+                text=f"👇 Select Season for {sanitized_search.title()} 👇",
+                callback_data="ident"
+            )
+        ])
+
+        # Add back button
+        req = query.from_user.id
+        offset = 0
+        btn.append([
+            InlineKeyboardButton(
+                text="↭ Back to Home ↭",
+                callback_data=f"next_{req}_{key}_{offset}"
+            )
+        ])
+
+        # Update message with retry logic
+        max_retries = 3
+        retry_delay = 1
+        for attempt in range(max_retries):
+            try:
+                await asyncio.wait_for(
+                    query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
+                    timeout=10.0  # Increased timeout
+                )
+                logging.info("Seasons menu updated successfully")
+                return
+            except FloodWait as e:
+                logging.warning(f"FloodWait in seasons_cb_handler: Waiting for {e.value} seconds")
+                await asyncio.sleep(e.value)
+                continue
+            except MessageNotModified:
+                logging.info("Message not modified in seasons_cb_handler")
+                return
+            except asyncio.TimeoutError:
+                logging.error("Timeout on edit_message_reply_markup in seasons_cb_handler")
+                if attempt == max_retries - 1:
+                    await query.answer("⚠️ Took too long to update seasons menu. Try again.", show_alert=True)
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            except Exception as e:
+                logging.error(f"Unexpected error in seasons_cb_handler: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+                if attempt == max_retries - 1:
+                    await query.answer("❌ Failed to update seasons menu. Check logs.", show_alert=True)
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+
+        # Log failure to LOG_CHANNEL if max retries exceeded
+        if LOG_CHANNEL:
+            try:
+                await client.send_message(
+                    chat_id=LOG_CHANNEL,
+                    text=(
+                        f"🛠 **Debug: Seasons Menu Failure**\n"
+                        f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
+                        f"🔎 Series: `{sanitized_search}`\n"
+                        f"📅 Action: Failed to open seasons menu\n"
+                        f"📝 Key: `{key}`"
+                    )
+                )
+                logging.info(f"Logged seasons menu failure for {sanitized_search} by {query.from_user.id}")
+            except Exception as e:
+                logging.error(f"Failed to log seasons menu failure: {e}")
+
+    except Exception as e:
+        logging.error(f"Error in seasons_cb_handler: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
+
+@Client.on_callback_query(filters.regex(r"^qualities#"))
+async def qualities_cb_handler(client: Client, query: CallbackQuery):
+    try:
+        # Parse callback data
+        _, seas, key = query.data.split("#")
+        
+        # Check user permission
+        if query.message.reply_to_message:
+            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+                logging.info(f"Permission denied for user {query.from_user.id}")
+                return await query.answer(
+                    f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
+                    show_alert=True,
+                )
+        
+        files = temp.GETALL.get(key)
+        
+        if not files:
+            logging.error(f"No files found in temp.GETALL for key: {key}")
+            await query.answer("No files found.", show_alert=True)
+            return
+        
+        # Group files by quality
+        quality_map = {}
+        for file in files:
+            file_name_lower = file["file_name"].lower()
+            quality = "Unknown"
+            if "480p" in file_name_lower:
+                quality = "480p"
+            elif "720p" in file_name_lower:
+                quality = "720p"
+            elif "1080p" in file_name_lower:
+                quality = "1080p"
+            elif "2160p" in file_name_lower:
+                quality = "4K"
+            if quality not in quality_map:
+                quality_map[quality] = []
+            quality_map[quality].append(file)
+        
+        if not quality_map:
+            logging.error(f"No qualities found for files with key: {key}")
+            await query.answer("No qualities found.", show_alert=True)
+            return
+        
+        btn = []
+        for quality, q_files in sorted(quality_map.items()):
+            btn.append([
+                InlineKeyboardButton(
+                    text=f"{quality} ({len(q_files)} files)",
+                    callback_data=f"quality#{quality}#{seas}#{key}"
+                )
+            ])
+        
+        btn.insert(0, [
+            InlineKeyboardButton(f"🎬 {FRESH.get(key)} - {seas.title()} Qualities", callback_data="ident")
+        ])
+        
+        btn.append([InlineKeyboardButton(text="↩️ Back to Episodes", callback_data=f"episodes#{seas}#{key}")])
+        
+        await asyncio.wait_for(
+            query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
+            timeout=8.0
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in qualities_cb_handler: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
+
+@Client.on_callback_query(filters.regex(r"^quality#"))
+async def quality_cb_handler(client: Client, query: CallbackQuery):
+    try:
+        # Parse callback data
+        _, quality, seas, key = query.data.split("#")
+        
+        # Check user permission
+        if query.message.reply_to_message:
+            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+                logging.info(f"Permission denied for user {query.from_user.id}")
+                return await query.answer(
+                    f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
+                    show_alert=True,
+                )
+        
+        files = temp.GETALL.get(key)
+        
+        if not files:
+            logging.error(f"No files found in temp.GETALL for key: {key}")
+            await query.answer("No files found.", show_alert=True)
+            return
+        
+        # Filter files by quality
+        filtered_files = [
+            f for f in files 
+            if quality.lower() in f["file_name"].lower() or 
+            (quality == "Unknown" and all(q not in f["file_name"].lower() for q in ["480p", "720p", "1080p", "2160p"]))
+        ]
+        
+        if not filtered_files:
+            logging.error(f"No files found for quality: {quality}, season: {seas}")
+            await query.answer("No files found for this quality.", show_alert=True)
+            return
+        
+        settings = await get_settings(query.message.chat.id)
+        pre = 'filep' if settings['file_secure'] else 'file'
+        
+        btn = []
+        for file in filtered_files:
+            file_name_lower = file["file_name"].lower()
+            episode_num = "??"
+            ep_patterns = [
+                r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', 
+                r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)', r'\.(\d+)\.'
+            ]
+            for pattern in ep_patterns:
+                ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
+                if ep_match:
+                    episode_num = ep_match.group(1)
+                    break
+            
+            clean_name = file["file_name"]
+            for prefix in ['[', '@', 'www.', 'http', 'https']:
+                if prefix in clean_name:
+                    clean_name = clean_name.split(prefix, 1)[-1].strip()
+            if len(clean_name) > 30:
+                clean_name = clean_name[:27] + "..."
+            
+            button_text = f"E{episode_num.zfill(2)} | {quality} | {get_size(file['file_size'])} | {clean_name}"
+            
+            if file.get('is_similar', False):
+                button_text += " (Similar)"
+            
+            btn.append([
+                InlineKeyboardButton(
+                    text=button_text,
+                    callback_data=f"{pre}#{file['file_id']}"
+                )
+            ])
+        
+        btn.insert(0, [
+            InlineKeyboardButton(f"Files in {quality} - {seas.title()}", callback_data="ident")
+        ])
+        
+        btn.append([InlineKeyboardButton(text="↩️ Back to Qualities", callback_data=f"qualities#{seas}#{key}")])
+        
+        await asyncio.wait_for(
+            query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
+            timeout=8.0
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in quality_cb_handler: {e}")
         import traceback
         logging.error(traceback.format_exc())
         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
@@ -3548,6 +3835,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
