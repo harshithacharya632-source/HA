@@ -768,7 +768,7 @@ import asyncio
 from difflib import SequenceMatcher
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from pyrogram.errors import MessageNotModified, FloodWait
+from pyrogram.errors import MessageNotModified, FloodWait, MessageIdInvalid
 import uuid
 
 # Assuming these are defined elsewhere in your codebase
@@ -837,7 +837,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         chat_id = query.message.chat.id
         files = []
         
-        # Expanded season patterns to match "Game of Thrones S04" style
+        # Expanded season patterns to match saved file names
         season_patterns_map = {
             "season 1": [
                 r"s\s*0?1\b", r"season\s*0?1\b", r"season-?1\b", r"s-?1\b", r"s01\b", r"s1e", r"season1e", 
@@ -845,7 +845,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"first\s*season", r"season\s*one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1",
                 r"\b1x", r"1\s*x", r"s01e", r"season\s*1\s*e", r"s\s*1\s*e", r"season\.1\b", r"s\.1\b",
                 r"part\s*1\b", r"part-?1\b", r"chapter\s*1\b", r"ch\s*1\b", r"\b01\b", r"\b1\b",
-                r"s01\.e", r"s1\.e", r"season\.01\b", r"season_1\b", r"s_1\b"
+                r"s01\.e", r"s1\.e", r"season\.01\b", r"season_1\b", r"s_1\b", r"s01\s*e", r"s1\s*e"
             ],
             "season 2": [
                 r"s\s*0?2\b", r"season\s*0?2\b", r"season-?2\b", r"s-?2\b", r"s02\b", r"s2e", r"season2e", 
@@ -853,7 +853,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"second\s*season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2",
                 r"\b2x", r"2\s*x", r"s02e", r"season\s*2\s*e", r"s\s*2\s*e", r"season\.2\b", r"s\.2\b",
                 r"part\s*2\b", r"part-?2\b", r"chapter\s*2\b", r"ch\s*2\b", r"\b02\b", r"\b2\b",
-                r"s02\.e", r"s2\.e", r"season\.02\b", r"season_2\b", r"s_2\b", r"s02-e", r"s2-e"
+                r"s02\.e", r"s2\.e", r"season\.02\b", r"season_2\b", r"s_2\b", r"s02\s*e", r"s2\s*e", r"s02-e", r"s2-e"
             ],
             "season 3": [
                 r"s\s*0?3\b", r"season\s*0?3\b", r"season-?3\b", r"s-?3\b", r"s03\b", r"s3e", r"season3e", 
@@ -861,7 +861,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"third\s*season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3",
                 r"\b3x", r"3\s*x", r"s03e", r"season\s*3\s*e", r"s\s*3\s*e", r"season\.3\b", r"s\.3\b",
                 r"part\s*3\b", r"part-?3\b", r"chapter\s*3\b", r"ch\s*3\b", r"\b03\b", r"\b3\b",
-                r"s03\.e", r"s3\.e", r"season\.03\b", r"season_3\b", r"s_3\b", r"s03-e", r"s3-e"
+                r"s03\.e", r"s3\.e", r"season\.03\b", r"season_3\b", r"s_3\b", r"s03\s*e", r"s3\s*e", r"s03-e", r"s3-e"
             ],
             "season 4": [
                 r"s\s*0?4\b", r"season\s*0?4\b", r"season-?4\b", r"s-?4\b", r"s04\b", r"s4e", r"season4e", 
@@ -869,7 +869,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"fourth\s*season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4",
                 r"\b4x", r"4\s*x", r"s04e", r"season\s*4\s*e", r"s\s*4\s*e", r"season\.4\b", r"s\.4\b",
                 r"part\s*4\b", r"part-?4\b", r"chapter\s*4\b", r"ch\s*4\b", r"\b04\b", r"\b4\b",
-                r"s04\.e", r"s4\.e", r"season\.04\b", r"season_4\b", r"s_4\b", r"s04-e", r"s4-e"
+                r"s04\.e", r"s4\.e", r"season\.04\b", r"season_4\b", r"s_4\b", r"s04\s*e", r"s4\s*e", r"s04-e", r"s4-e"
             ],
             "season 5": [
                 r"s\s*0?5\b", r"season\s*0?5\b", r"season-?5\b", r"s-?5\b", r"s05\b", r"s5e", r"season5e", 
@@ -877,7 +877,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"fifth\s*season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5",
                 r"\b5x", r"5\s*x", r"s05e", r"season\s*5\s*e", r"s\s*5\s*e", r"season\.5\b", r"s\.5\b",
                 r"part\s*5\b", r"part-?5\b", r"chapter\s*5\b", r"ch\s*5\b", r"\b05\b", r"\b5\b",
-                r"s05\.e", r"s5\.e", r"season\.05\b", r"season_5\b", r"s_5\b", r"s05-e", r"s5-e"
+                r"s05\.e", r"s5\.e", r"season\.05\b", r"season_5\b", r"s_5\b", r"s05\s*e", r"s5\s*e", r"s05-e", r"s5-e"
             ],
             "season 6": [
                 r"s\s*0?6\b", r"season\s*0?6\b", r"season-?6\b", r"s-?6\b", r"s06\b", r"s6e", r"season6e", 
@@ -885,7 +885,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"sixth\s*season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6",
                 r"\b6x", r"6\s*x", r"s06e", r"season\s*6\s*e", r"s\s*6\s*e", r"season\.6\b", r"s\.6\b",
                 r"part\s*6\b", r"part-?6\b", r"chapter\s*6\b", r"ch\s*6\b", r"\b06\b", r"\b6\b",
-                r"s06\.e", r"s6\.e", r"season\.06\b", r"season_6\b", r"s_6\b", r"s06-e", r"s6-e"
+                r"s06\.e", r"s6\.e", r"season\.06\b", r"season_6\b", r"s_6\b", r"s06\s*e", r"s6\s*e", r"s06-e", r"s6-e"
             ],
             "season 7": [
                 r"s\s*0?7\b", r"season\s*0?7\b", r"season-?7\b", r"s-?7\b", r"s07\b", r"s7e", r"season7e", 
@@ -893,7 +893,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"seventh\s*season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7",
                 r"\b7x", r"7\s*x", r"s07e", r"season\s*7\s*e", r"s\s*7\s*e", r"season\.7\b", r"s\.7\b",
                 r"part\s*7\b", r"part-?7\b", r"chapter\s*7\b", r"ch\s*7\b", r"\b07\b", r"\b7\b",
-                r"s07\.e", r"s7\.e", r"season\.07\b", r"season_7\b", r"s_7\b", r"s07-e", r"s7-e"
+                r"s07\.e", r"s7\.e", r"season\.07\b", r"season_7\b", r"s_7\b", r"s07\s*e", r"s7\s*e", r"s07-e", r"s7-e"
             ],
             "season 8": [
                 r"s\s*0?8\b", r"season\s*0?8\b", r"season-?8\b", r"s-?8\b", r"s08\b", r"s8e", r"season8e", 
@@ -901,7 +901,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"eighth\s*season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8",
                 r"\b8x", r"8\s*x", r"s08e", r"season\s*8\s*e", r"s\s*8\s*e", r"season\.8\b", r"s\.8\b",
                 r"part\s*8\b", r"part-?8\b", r"chapter\s*8\b", r"ch\s*8\b", r"\b08\b", r"\b8\b",
-                r"s08\.e", r"s8\.e", r"season\.08\b", r"season_8\b", r"s_8\b", r"s08-e", r"s8-e"
+                r"s08\.e", r"s8\.e", r"season\.08\b", r"season_8\b", r"s_8\b", r"s08\s*e", r"s8\s*e", r"s08-e", r"s8-e"
             ],
             "season 9": [
                 r"s\s*0?9\b", r"season\s*0?9\b", r"season-?9\b", r"s-?9\b", r"s09\b", r"s9e", r"season9e", 
@@ -909,14 +909,14 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 r"ninth\s*season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9",
                 r"\b9x", r"9\s*x", r"s09e", r"season\s*9\s*e", r"s\s*9\s*e", r"season\.9\b", r"s\.9\b",
                 r"part\s*9\b", r"part-?9\b", r"chapter\s*9\b", r"ch\s*9\b", r"\b09\b", r"\b9\b",
-                r"s09\.e", r"s9\.e", r"season\.09\b", r"season_9\b", r"s_9\b", r"s09-e", r"s9-e"
+                r"s09\.e", r"s9\.e", r"season\.09\b", r"season_9\b", r"s_9\b", r"s09\s*e", r"s9\s*e", r"s09-e", r"s9-e"
             ],
             "season 10": [
                 r"s\s*10\b", r"season\s*10\b", r"season-?10\b", r"s-?10\b", r"s10\b", r"s10e", r"season10e", 
                 r"season\s*10\b", r"season10\b", r"s\s*10\b", r"10th\s*season", r"tenth\s*season", 
                 r"s10\b", r"season\s*-?\s*10", r"\b10x", r"10\s*x", r"s10e", r"season\s*10\s*e",
                 r"season\.10\b", r"s\.10\b", r"part\s*10\b", r"part-?10\b", r"chapter\s*10\b", r"ch\s*10\b", 
-                r"\b10\b", r"s10\.e", r"season\.10\b", r"season_10\b", r"s_10\b", r"s10-e"
+                r"\b10\b", r"s10\.e", r"season\.10\b", r"season_10\b", r"s_10\b", r"s10\s*e", r"s10-e"
             ]
         }
         
@@ -930,10 +930,13 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             logging.info(f"Performing broad search for: {original_search}")
             try:
                 broad_files, _, _ = await asyncio.wait_for(
-                    get_cached_search_results(chat_id, original_search, max_results=30000),
-                    timeout=25.0
+                    get_cached_search_results(chat_id, original_search, max_results=50000),
+                    timeout=30.0
                 )
                 logging.info(f"Broad search found {len(broad_files)} files")
+                # Log file names for debugging
+                if broad_files:
+                    logging.debug(f"Broad search files: {[f['file_name'] for f in broad_files[:50]]}")
             except asyncio.TimeoutError:
                 logging.error("Timeout on broad search")
                 broad_files = []
@@ -955,16 +958,19 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             
             files = exact_files
             
-            # Fallback search mimicking direct search (e.g., "Game of Thrones S04")
+            # Fallback search mimicking direct search
             if not files and season_num:
                 fallback_query = f"{original_search} s{season_num.zfill(2)}"
                 logging.info(f"No exact matches, trying fallback search: {fallback_query}")
                 try:
                     fallback_files, _, _ = await asyncio.wait_for(
-                        get_cached_search_results(chat_id, fallback_query, max_results=30000),
-                        timeout=25.0
+                        get_cached_search_results(chat_id, fallback_query, max_results=50000),
+                        timeout=30.0
                     )
                     logging.info(f"Fallback search found {len(fallback_files)} files")
+                    # Log file names for debugging
+                    if fallback_files:
+                        logging.debug(f"Fallback search files: {[f['file_name'] for f in fallback_files[:50]]}")
                     for file in fallback_files:
                         file_name_lower = file["file_name"].lower()
                         if season_regex.search(file_name_lower):
@@ -977,7 +983,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
                 except Exception as e:
                     logging.error(f"Fallback search failed: {e}")
             
-            # If fewer than 10 exact matches, add similar files using fuzzy matching
+            # If fewer than 10 exact matches, add similar files
             similar_files = []
             if len(files) < 10 and broad_files:
                 target_str = f"{original_search.lower()} s{season_num.zfill(2)}"
@@ -993,7 +999,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             
             files += similar_files
             
-            # Log unmatched files for debugging (paginated)
+            # Log unmatched files to LOG_CHANNEL (paginated)
             if unmatched_files and LOG_CHANNEL:
                 try:
                     batch_size = 50
@@ -1176,6 +1182,9 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         except MessageNotModified:
             logging.info("Message not modified")
             pass
+        except MessageIdInvalid:
+            logging.error("Message ID invalid during edit_message_reply_markup")
+            await query.answer("⚠️ Message no longer exists. Please start a new search.", show_alert=True)
         except asyncio.TimeoutError:
             logging.error("Timeout on edit_message_reply_markup")
             await query.answer("⚠️ Took too long to update. Try again.", show_alert=True)
@@ -1271,6 +1280,10 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
                 continue
             except MessageNotModified:
                 logging.info("Message not modified in seasons_cb_handler")
+                return
+            except MessageIdInvalid:
+                logging.error("Message ID invalid in seasons_cb_handler")
+                await query.answer("⚠️ Message no longer exists. Please start a new search.", show_alert=True)
                 return
             except asyncio.TimeoutError:
                 logging.error("Timeout on edit_message_reply_markup in seasons_cb_handler")
@@ -1369,10 +1382,14 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
         
         btn.append([InlineKeyboardButton(text="↩️ Back to Episodes", callback_data=f"episodes#{seas}#{key}")])
         
-        await asyncio.wait_for(
-            query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
-            timeout=8.0
-        )
+        try:
+            await asyncio.wait_for(
+                query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
+                timeout=8.0
+            )
+        except MessageIdInvalid:
+            logging.error("Message ID invalid in qualities_cb_handler")
+            await query.answer("⚠️ Message no longer exists. Please start a new search.", show_alert=True)
         
     except Exception as e:
         logging.error(f"Error in qualities_cb_handler: {e}")
@@ -1456,10 +1473,14 @@ async def quality_cb_handler(client: Client, query: CallbackQuery):
         
         btn.append([InlineKeyboardButton(text="↩️ Back to Qualities", callback_data=f"qualities#{seas}#{key}")])
         
-        await asyncio.wait_for(
-            query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
-            timeout=8.0
-        )
+        try:
+            await asyncio.wait_for(
+                query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
+                timeout=8.0
+            )
+        except MessageIdInvalid:
+            logging.error("Message ID invalid in quality_cb_handler")
+            await query.answer("⚠️ Message no longer exists. Please start a new search.", show_alert=True)
         
     except Exception as e:
         logging.error(f"Error in quality_cb_handler: {e}")
@@ -1479,12 +1500,12 @@ async def search_handler(client: Client, message):
         
         logging.info(f"Search initiated: query={query}, user={message.from_user.id}")
         
-        # Generate a unique key (replace with your actual key logic)
-        key = str(uuid.uuid4())
+        # Generate a unique key (replace with your actual key logic, e.g., message.id)
+        key = f"{message.from_user.id}-{message.id}"
         
         # Perform search
         chat_id = message.chat.id
-        files, _, _ = await get_cached_search_results(chat_id, query, max_results=30000)
+        files, _, _ = await get_cached_search_results(chat_id, query, max_results=50000)
         
         # Log search to LOG_CHANNEL
         if LOG_CHANNEL:
@@ -1519,6 +1540,33 @@ async def search_handler(client: Client, message):
         import traceback
         logging.error(traceback.format_exc())
         await message.reply("❌ An error occurred during search. Check logs.")
+
+# Fix for advantage_spell_chok in pm_filter.py
+async def advantage_spell_chok(client, name, msg, reply_msg, ai_search):
+    try:
+        # Your existing code up to the edit_text call
+        # ...
+        # Before editing, check if message exists
+        try:
+            await reply_msg.edit_text(
+                text=script.I_CUDNT.format(name),
+                reply_markup=InlineKeyboardMarkup(button)
+            )
+        except MessageIdInvalid:
+            logging.error(f"Message ID invalid for reply_msg: {reply_msg.id}")
+            await msg.reply("⚠️ The original message was deleted. Please start a new search.")
+            return
+        except Exception as e:
+            logging.error(f"Error editing message in advantage_spell_chok: {e}")
+            await msg.reply("❌ An error occurred while updating the message.")
+            return
+        # Rest of your code
+        # ...
+    except Exception as e:
+        logging.error(f"Error in advantage_spell_chok: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        await msg.reply("❌ An error occurred. Check logs.")
 
 
 # END SEASON EDIT HERE
@@ -3940,6 +3988,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
