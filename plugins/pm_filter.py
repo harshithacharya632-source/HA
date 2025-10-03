@@ -247,9 +247,9 @@ async def advantage_spoll_choker(bot, query):
     await query.answer(script.TOP_ALRT_MSG)
 
     gl = await global_filters(bot, query.message, text=movie)
-    if gl is False:
+    if not gl:
         k = await manual_filters(bot, query.message, text=movie)
-        if k is False:
+        if not k:
             files, offset, total_results = await get_search_results(
                 query.message.chat.id, movie, offset=0, filter=True
             )
@@ -262,25 +262,25 @@ async def advantage_spoll_choker(bot, query):
                 )
                 await auto_filter(bot, movie, query, reply_msg, ai_search, k)
 
-                # ✅ Log every file result to LOG_CHANNEL
-                for file in files:
-                    try:
-                        await bot.send_cached_media(
-                            chat_id=LOG_CHANNEL,
-                            file_id=file.file_id,
-                            caption=(
-                                f"🔎 <b>User:</b> {query.from_user.mention} (`{query.from_user.id}`)\n"
-                                f"🎬 <b>Searched:</b> <code>{movie}</code>\n"
-                                f"📂 <b>File:</b> {file.file_name}"
-                            ),
-                        )
-                    except Exception as e:
-                        print(f"Log error: {e}")
+                # ✅ Proper logging to log channel
+                try:
+                    await bot.send_message(
+                        LOG_CHANNEL,
+                        f"🔎 <b>User:</b> {query.from_user.mention} (`{query.from_user.id}`)\n"
+                        f"🎬 <b>Searched:</b> <code>{movie}</code>\n"
+                        f"📂 <b>Total Results:</b> {total_results}"
+                    )
+                    # Send first file as sample
+                    await bot.send_cached_media(
+                        chat_id=LOG_CHANNEL,
+                        file_id=files[0].file_id,
+                        caption=f"📂 Sample file from search: <b>{files[0].file_name}</b>"
+                    )
+                except Exception as e:
+                    print(f"❌ Logging failed: {e}")
 
             else:
-                reqstr1 = query.from_user.id if query.from_user else 0
-                reqstr = await bot.get_users(reqstr1)
-
+                reqstr = await bot.get_users(query.from_user.id)
                 if NO_RESULTS_MSG:
                     await bot.send_message(
                         chat_id=LOG_CHANNEL,
@@ -4017,6 +4017,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
