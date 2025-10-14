@@ -3504,13 +3504,12 @@ if AI_SPELL_CHECK is True and vj_search is True:
     vj_search_new = False
     vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
 
-    movienamelist = []
-    movienamelist += [movie.get('title') for movie in movies]
+    movienamelist = [movie.get('title') for movie in movies]
 
     for techvj in movienamelist:
         try:
             mv_rqst = mv_rqst.capitalize()
-        except:
+        except Exception:
             pass
 
         if mv_rqst.startswith(techvj[0]):
@@ -3518,14 +3517,14 @@ if AI_SPELL_CHECK is True and vj_search is True:
             break
 
     reqst_gle = mv_rqst.replace(" ", "+")
-    button = [[
-        InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
-    ]]
+    button = [
+        [InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")]
+    ]
 
     if NO_RESULTS_MSG:
         await client.send_message(
             chat_id=LOG_CHANNEL,
-            text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst))
+            text=script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)
         )
         k = await reply_msg.edit_text(
             text=script.I_CUDNT.format(mv_rqst),
@@ -3545,19 +3544,24 @@ else:
         ]
         for k, movie_name in enumerate(movielist)
     ]
-   # End Here
-        btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
-        spell_check_del = await reply_msg.edit_text(
-            text=script.CUDNT_FND.format(mv_rqst),
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
-        try:
-            if settings['auto_delete']:
-                await asyncio.sleep(60)
-                await spell_check_del.delete()
-        except KeyError:
-            grpid = await active_conneSPELL_CHECK[mv_id] = movielist
 
+    # Add close button
+    btn.append([
+        InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')
+    ])
+
+    spell_check_del = await reply_msg.edit_text(
+        text=script.CUDNT_FND.format(mv_rqst),
+        reply_markup=InlineKeyboardMarkup(btn)
+    )
+
+    try:
+        if settings.get('auto_delete'):
+            await asyncio.sleep(60)
+            await spell_check_del.delete()
+    except Exception as e:
+        print(f"Auto-delete failed: {e}")
+#End here
 if AI_SPELL_CHECK is True and vj_search is True:
     vj_search_new = False
     vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
@@ -4050,6 +4054,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
