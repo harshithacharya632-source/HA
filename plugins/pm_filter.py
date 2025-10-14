@@ -3497,63 +3497,45 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         return
     movielist += [movie.get('title') for movie in movies]
     movielist += [f"{movie.get('title')} {movie.get('year')}" for movie in movies]
- # START HERE
-SPELL_CHECK[mv_id] = movielist
-
-if AI_SPELL_CHECK is True and vj_search is True:
-    vj_search_new = False
-    vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
-
-    movienamelist = [movie.get('title') for movie in movies]
-
-    for techvj in movienamelist:
-        try:
-            mv_rqst = mv_rqst.capitalize()
-        except Exception:
-            pass
-
-        if mv_rqst.startswith(techvj[0]):
-            await auto_filter(client, techvj, msg, reply_msg, vj_search_new)
-            break
-
-    reqst_gle = mv_rqst.replace(" ", "+")
-    button = [
-        [InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")]
-    ]
-
-    if NO_RESULTS_MSG:
-        await client.send_message(
-            chat_id=LOG_CHANNEL,
-            text=script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)
-        )
-        k = await reply_msg.edit_text(
-            text=script.I_CUDNT.format(mv_rqst),
-            reply_markup=InlineKeyboardMarkup(button)
-        )
+    SPELL_CHECK[mv_id] = movielist
+    if AI_SPELL_CHECK == True and vj_search == True:
+        vj_search_new = False
+        vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
+        movienamelist = []
+        movienamelist += [movie.get('title') for movie in movies]
+        for techvj in movienamelist:
+            try:
+                mv_rqst = mv_rqst.capitalize()
+            except:
+                pass
+            if mv_rqst.startswith(techvj[0]):
+                await auto_filter(client, techvj, msg, reply_msg, vj_search_new)
+                break
+        reqst_gle = mv_rqst.replace(" ", "+")
+        button = [[
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+        ]]
+        if NO_RESULTS_MSG:
+            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
+        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
         await asyncio.sleep(30)
         await k.delete()
         return
-
-else:
-    btn = [
-        [
-            InlineKeyboardButton(
-                text=movie_name.strip(),
-                callback_data=f"spol#{reqstr1}#{k}",
-            )
+    else:
+        btn = [
+            [
+                InlineKeyboardButton(
+                    text=movie_name.strip(),
+                    callback_data=f"spol#{reqstr1}#{k}",
+                )
+            ]
+            for k, movie_name in enumerate(movielist)
         ]
-        for k, movie_name in enumerate(movielist)
-    ]
-
-    # Add close button
-    btn.append([
-        InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')
-    ])
-
-    spell_check_del = await reply_msg.edit_text(
-        text=script.CUDNT_FND.format(mv_rqst),
-        reply_markup=InlineKeyboardMarkup(btn)
-    )
+        btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
+        spell_check_del = await reply_msg.edit_text(
+            text=script.CUDNT_FND.format(mv_rqst),
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
 
     try:
         if settings.get('auto_delete'):
@@ -3607,7 +3589,7 @@ else:
         ]
         for k, movie_name in enumerate(movielist)
         ]
-#    ]ction(str(msg.from_user.id))
+    ]ction(str(msg.from_user.id))
             await save_group_settings(grpid, 'auto_delete', True)
             settings = await get_settings(msg.chat.id)
             if settings['auto_delete']:
@@ -4055,6 +4037,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
