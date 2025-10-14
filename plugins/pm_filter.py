@@ -3606,6 +3606,7 @@ else:
             )
         ]
         for k, movie_name in enumerate(movielist)
+        ]
 #    ]ction(str(msg.from_user.id))
             await save_group_settings(grpid, 'auto_delete', True)
             settings = await get_settings(msg.chat.id)
@@ -4054,6 +4055,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
