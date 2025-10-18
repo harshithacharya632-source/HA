@@ -1198,57 +1198,6 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client: Client, query: CallbackQuery):
-    try:
-        # Check user permission
-        if query.message.reply_to_message:
-            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                logging.info(f"Permission denied for user {query.from_user.id}")
-                return await query.answer(
-                    f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
-                    show_alert=True,
-                )
-        
-        # Parse callback data
-        _, key = query.data.split("#")
-        logging.info(f"Seasons callback: key={key}, user={query.from_user.id}")
-        
-        # Validate key and search
-        search = FRESH.get(key)
-        if not search:
-            logging.error(f"Invalid key in seasons_cb_handler: {key}")
-            await query.answer("❌ Invalid request! Search key not found.", show_alert=True)
-            return
-
-        # Validate SEASONS list
-        if not SEASONS:
-            logging.error("SEASONS list is empty")
-            await query.answer("❌ No seasons available. Contact admin.", show_alert=True)
-            return
-
-        BUTTONS0[key] = None
-        sanitized_search = search.replace(' ', '_') if isinstance(search, str) else search
-
-        # Build season buttons
-        btn = []
-        for i in range(0, len(SEASONS), 2):
-            row = [
-                InlineKeyboardButton(
-                    text=SEASONS[i].title(),
-                    callback_data=f"fs#{SEASONS[i].lower()}#{key}"
-                )
-            ]
-            if i + 1 < len(SEASONS):
-                row.append(
-                    InlineKeyboardButton(
-                        text=SEASONS[i+1].title(),
-                        callback_data=f"fs#{SEASONS[i+1].lower()}#{key}"
-                    )
-                )
-            btn.append(row)
-
-#Start season 
-@Client.on_callback_query(filters.regex(r"^seasons#"))
-async def seasons_cb_handler(client: Client, query: CallbackQuery):
 
     try:
         if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
@@ -4037,6 +3986,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
