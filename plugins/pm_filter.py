@@ -1246,84 +1246,39 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
                 )
             btn.append(row)
 
-        # Add header
-        btn.insert(0, [
-            InlineKeyboardButton(
-                text=f"👇 Select Season for {sanitized_search.title()} 👇",
-                callback_data="ident"
+#Start season 
+@Client.on_callback_query(filters.regex(r"^seasons#"))
+async def seasons_cb_handler(client: Client, query: CallbackQuery):
+    try:
+        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+            return await query.answer(
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ,\nʀᴇǫᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ…",
+                show_alert=True,
             )
-        ])
-
-        # Add back button
-        req = query.from_user.id
-        offset = 0
+    except Exception:
+        pass
+    _, key = query.data.split("#")
+    search = FRESH.get(key).replace(" ", "_")
+    req = query.from_user.id
+    offset = 0
+    btn: list[list[InlineKeyboardButton]] = []
+    for i in range(0, len(SEASONS) - 1, 2):
         btn.append([
             InlineKeyboardButton(
-                text="↭ Back to Home ↭",
-                callback_data=f"next_{req}_{key}_{offset}"
-            )
+                f"Sᴇᴀꜱᴏɴ {SEASONS[i][1:]}", callback_data=f"fs#{SEASONS[i].lower()}#{key}"),
+            InlineKeyboardButton(
+                f"Sᴇᴀꜱᴏɴ {SEASONS[i+1][1:]}", callback_data=f"fs#{SEASONS[i+1].lower()}#{key}")
         ])
 
-        # Update message with retry logic
-        max_retries = 3
-        retry_delay = 1
-        for attempt in range(max_retries):
-            try:
-                await asyncio.wait_for(
-                    query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
-                    timeout=10.0
-                )
-                logging.info("Seasons menu updated successfully")
-                return
-            except FloodWait as e:
-                logging.warning(f"FloodWait in seasons_cb_handler: Waiting for {e.value} seconds")
-                await asyncio.sleep(e.value)
-                continue
-            except MessageNotModified:
-                logging.info("Message not modified in seasons_cb_handler")
-                return
-            except MessageIdInvalid:
-                logging.error("Message ID invalid in seasons_cb_handler")
-                await query.answer("⚠️ Message no longer exists. Please start a new search.", show_alert=True)
-                return
-            except asyncio.TimeoutError:
-                logging.error("Timeout on edit_message_reply_markup in seasons_cb_handler")
-                if attempt == max_retries - 1:
-                    await query.answer("⚠️ Took too long to update seasons menu. Try again.", show_alert=True)
-                await asyncio.sleep(retry_delay)
-                retry_delay *= 2
-            except Exception as e:
-                logging.error(f"Unexpected error in seasons_cb_handler: {e}")
-                import traceback
-                logging.error(traceback.format_exc())
-                if attempt == max_retries - 1:
-                    await query.answer("❌ Failed to update seasons menu. Check logs.", show_alert=True)
-                await asyncio.sleep(retry_delay)
-                retry_delay *= 2
-
-        # Log failure to LOG_CHANNEL
-        if LOG_CHANNEL:
-            try:
-                await client.send_message(
-                    chat_id=LOG_CHANNEL,
-                    text=(
-                        f"🛠 **Debug: Seasons Menu Failure**\n"
-                        f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
-                        f"🔎 Series: `{sanitized_search}`\n"
-                        f"📅 Action: Failed to open seasons menu\n"
-                        f"📝 Key: `{key}`"
-                    )
-                )
-                logging.info(f"Logged seasons menu failure for {sanitized_search} by {query.from_user.id}")
-            except Exception as e:
-                logging.error(f"Failed to log seasons menu failure: {e}")
-
-    except Exception as e:
-        logging.error(f"Error in seasons_cb_handler: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
-        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
-
+    btn.insert(
+        0,
+        [InlineKeyboardButton("⇊ ꜱᴇʟᴇᴄᴛ ꜱᴇᴀꜱᴏɴ ⇊", callback_data="ident")],
+    )
+    btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ꜰɪʟᴇs ​↭",
+               callback_data=f"next_{req}_{key}_{offset}")])
+    await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+    await query.answer()
+#End Here
 @Client.on_callback_query(filters.regex(r"^qualities#"))
 async def qualities_cb_handler(client: Client, query: CallbackQuery):
     try:
@@ -4062,6 +4017,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
