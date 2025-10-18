@@ -1250,34 +1250,49 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client: Client, query: CallbackQuery):
     try:
-        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+        # Ensure only the user who requested the movie can interact
+        if query.message.reply_to_message and int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ,\nʀᴇǫᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ…",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\n"
+                "ᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ,\n"
+                "ʀᴇǫᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ…",
                 show_alert=True,
             )
-    except Exception:
-        pass
-    _, key = query.data.split("#")
-    search = FRESH.get(key).replace(" ", "_")
-    req = query.from_user.id
-    offset = 0
-    btn: list[list[InlineKeyboardButton]] = []
-    for i in range(0, len(SEASONS) - 1, 2):
+    except Exception as e:
+        print(f"Error in seasons_cb_handler user check: {e}")
+
+    try:
+        _, key = query.data.split("#")
+        search = FRESH.get(key).replace(" ", "_") if FRESH.get(key) else None
+        req = query.from_user.id
+        offset = 0
+
+        btn = []
+        for i in range(0, len(SEASONS) - 1, 2):
+            btn.append([
+                InlineKeyboardButton(
+                    f"Sᴇᴀꜱᴏɴ {SEASONS[i][1:]}",
+                    callback_data=f"fs#{SEASONS[i].lower()}#{key}"
+                ),
+                InlineKeyboardButton(
+                    f"Sᴇᴀꜱᴏɴ {SEASONS[i + 1][1:]}",
+                    callback_data=f"fs#{SEASONS[i + 1].lower()}#{key}"
+                )
+            ])
+
+        btn.insert(0, [InlineKeyboardButton("⇊ ꜱᴇʟᴇᴄᴛ ꜱᴇᴀꜱᴏɴ ⇊", callback_data="ident")])
         btn.append([
             InlineKeyboardButton(
-                f"Sᴇᴀꜱᴏɴ {SEASONS[i][1:]}", callback_data=f"fs#{SEASONS[i].lower()}#{key}"),
-            InlineKeyboardButton(
-                f"Sᴇᴀꜱᴏɴ {SEASONS[i+1][1:]}", callback_data=f"fs#{SEASONS[i+1].lower()}#{key}")
+                text="↭ ʙᴀᴄᴋ ᴛᴏ ꜰɪʟᴇs ↭",
+                callback_data=f"next_{req}_{key}_{offset}"
+            )
         ])
 
-    btn.insert(
-        0,
-        [InlineKeyboardButton("⇊ ꜱᴇʟᴇᴄᴛ ꜱᴇᴀꜱᴏɴ ⇊", callback_data="ident")],
-    )
-    btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ꜰɪʟᴇs ​↭",
-               callback_data=f"next_{req}_{key}_{offset}")])
-    await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
-    await query.answer()
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+        await query.answer()
+
+    except Exception as e:
+        print(f"Error in seasons_cb_handler: {e}")
 #End Here
 @Client.on_callback_query(filters.regex(r"^qualities#"))
 async def qualities_cb_handler(client: Client, query: CallbackQuery):
@@ -4017,6 +4032,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
