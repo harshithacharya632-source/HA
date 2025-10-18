@@ -1247,65 +1247,57 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
             btn.append(row)
 
 #Start season 
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
-from info import SEASONS, FRESH
-
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client: Client, query: CallbackQuery):
+
     try:
-        # Prevent users from pressing buttons on others’ requests
-        if (
-            query.message.reply_to_message
-            and int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]
-        ):
+        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\n"
-                "ᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ.\n"
-                "ᴘʟᴇᴀꜱᴇ ʀᴇǫᴜᴇꜱᴛ ʏᴏᴜʀ ᴏᴡɴ 🙂",
+                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
-    except Exception:
+    except:
         pass
+    
+    _, key = query.data.split("#")
+    search = FRESH.get(key)
+    BUTTONS[key] = None
+    try:
+        search = search.replace(' ', '_')
+    except:
+        pass
+    btn = []
+    for i in range(0, len(SEASONS)-1, 2):
+        btn.append([
+            InlineKeyboardButton(
+                text=SEASONS[i].title(),
+                callback_data=f"fs#{SEASONS[i].lower()}#{key}"
+            ),
+            InlineKeyboardButton(
+                text=SEASONS[i+1].title(),
+                callback_data=f"fs#{SEASONS[i+1].lower()}#{key}"
+            ),
+        ])
 
-    # Extract key from callback data
-    _, key = query.data.split("#", 1)
-
-    # Get the show name from FRESH dict
-    search = FRESH.get(key, "").replace(" ", "_")
+    btn.insert(
+        0,
+        [
+            InlineKeyboardButton(
+                text="👇 𝖲𝖾𝗅𝖾𝖼𝗍 Season 👇", callback_data="ident"
+            )
+        ],
+    )
     req = query.from_user.id
     offset = 0
-    btn = []
+    btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ​↭", callback_data=f"next_{req}_{key}_{offset}")])
 
-    # Generate season buttons (2 per row)
-    for i in range(0, len(SEASONS), 2):
-        row = [
-            InlineKeyboardButton(
-                f"Sᴇᴀꜱᴏɴ {SEASONS[i][1:]}",
-                callback_data=f"fs#{SEASONS[i].lower()}#{key}",
-            )
-        ]
-        if i + 1 < len(SEASONS):
-            row.append(
-                InlineKeyboardButton(
-                    f"Sᴇᴀꜱᴏɴ {SEASONS[i+1][1:]}",
-                    callback_data=f"fs#{SEASONS[i+1].lower()}#{key}",
-                )
-            )
-        btn.append(row)
-
-    # Add header and back buttons
-    btn.insert(0, [InlineKeyboardButton("⇊ ꜱᴇʟᴇᴄᴛ ꜱᴇᴀꜱᴏɴ ⇊", callback_data="ident")])
-    btn.append([
-        InlineKeyboardButton(
-            "↭ ʙᴀᴄᴋ ᴛᴏ ꜰɪʟᴇꜱ ↭",
-            callback_data=f"next_{req}_{key}_{offset}",
+    try:
+        await query.edit_message_reply_markup(
+            reply_markup=InlineKeyboardMarkup(btn)
         )
-    ])
+    except MessageNotModified:
+        pass
 
-    # Edit the inline keyboard
-    await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
-    await query.answer()
 #End Here
 @Client.on_callback_query(filters.regex(r"^qualities#"))
 async def qualities_cb_handler(client: Client, query: CallbackQuery):
@@ -4045,6 +4037,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
