@@ -2407,47 +2407,75 @@ async def cb_handler(client: Client, query: CallbackQuery):
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
 #START HERE
-    @Client.on_message(filters.private & (filters.document | filters.video))
-async def stream_start(client, message):
-    file = getattr(message, message.media.value)
-    filename = file.file_name
-    filesize = humanize.naturalsize(file.file_size)
-    fileid = file.file_id
-    user_id = message.from_user.id
-    username = message.from_user.mention
+    from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from urllib.parse import quote_plus
+import asyncio, humanize
+from info import URL, LOG_CHANNEL, SHORTLINK, get_shortlink, get_hash, get_name
 
-    # Forward file to LOG_CHANNEL
-    log_msg = await client.send_cached_media(
-        chat_id=LOG_CHANNEL,
-        file_id=fileid,
-    )
+@Client.on_message(filters.private & filters.text)
+async def movie_request(client, message):
+    query = message.text.strip()
+    user = message.from_user
+    await message.reply_text("🔍 Searching your movie, please wait...")
 
-    fileName = get_name(log_msg)
+    try:
+        # Search file in log channel or DB
+        async for msg in client.search_messages(LOG_CHANNEL, query, limit=1):
+            if msg.document or msg.video:
+                file = msg.document or msg.video
+                file_name = file.file_name
+                file_size = humanize.naturalsize(file.file_size)
+                file_id = file.file_id
 
-    # Generate stream & download links
-    if SHORTLINK is False:
-        stream = f"{URL}/watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-        download = f"{URL}/download/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-    else:
-        stream = await get_shortlink(
-            f"{URL}/watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-        )
-        download = await get_shortlink(
-            f"{URL}/download/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-        )
+                log_msg = await client.send_cached_media(
+                    chat_id=LOG_CHANNEL,
+                    file_id=file_id
+                )
 
-    # Log message
-    await log_msg.reply_text(
-        text=f"•• ʟɪɴᴋ ɢᴇɴᴇʀᴀᴛᴇᴅ ꜰᴏʀ ɪᴅ #{user_id} \n•• ᴜꜱᴇʀɴᴀᴍᴇ : {username} \n\n•• ᖴᎥᒪᗴ Nᗩᗰᴇ : {fileName}",
-        quote=True,
-        disable_web_page_preview=True,
-        reply_markup=InlineKeyboardMarkup(
-            [[
-                InlineKeyboardButton("🚀 Fast Download 🚀", url=download),
-                InlineKeyboardButton("🖥 Watch online 🖥", url=stream)
-            ]]
-        )
-    )
+                stream_link = f"{URL}/watch/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(file_name)}?hash={get_hash(log_msg)}"
+                download_link = f"{URL}/download/{str(log_msg.id)}/{quote_plus(file_name)}?hash={get_hash(log_msg)}"
+
+                if SHORTLINK:
+                    stream_link = await get_shortlink(stream_link)
+                    download_link = await get_shortlink(download_link)
+
+                caption = f"""
+📁 **FILENAME:** {file_name}
+📦 **SIZE:** {file_size}
+🔥 **Powered by Goflix**
+"""
+
+                # Send movie info
+                reply_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⚡ Fast Download ⚡", url=download_link)],
+                    [InlineKeyboardButton("🎬 Watch Online 🎬", url=stream_link)]
+                ])
+
+                sent = await message.reply_text(
+                    caption,
+                    reply_markup=reply_markup,
+                    disable_web_page_preview=True
+                )
+
+                # Auto-delete notice
+                warn = await message.reply_text(
+                    "❗❗❗ **IMPORTANT** ❗❗❗\n\n"
+                    "This message will be deleted in **1 minute** (Due to copyright issues).\n\n"
+                    "Please forward this message to your saved messages or any private chat.",
+                    quote=True
+                )
+
+                await asyncio.sleep(60)
+                await sent.delete()
+                await warn.delete()
+                await message.delete()
+                return
+
+        await message.reply_text("❌ Movie not found! Try a different name.")
+
+    except Exception as e:
+        await message.reply_text(f"⚠️ Error: {e}")
 
     # Buttons for user
     rm = InlineKeyboardMarkup(
@@ -4010,6 +4038,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
