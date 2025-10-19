@@ -2408,35 +2408,48 @@ async def cb_handler(client: Client, query: CallbackQuery):
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
 #START HERE
     from pyrogram import Client, types
-from urllib.parse import quote_plus
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from urllib.parse import quote_plus
 import logging
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Ensure URL has a trailing slash
-BASE_URL = "https://goflix-link-generater.onrender.com"  # Replace with your actual base URL
+# Ensure base URL has a trailing slash
+BASE_URL = "https://goflix-link-generater.onrender.com/"  # Replace with your actual base URL
+LOG_CHANNEL = "-1003059886878"  # Replace with your Telegram log channel ID
 
-async def handle_generate_stream_link(client: Client, query: types.CallbackQuery, file_id: str):
+# Placeholder functions (replace with your actual implementations)
+def get_name(log_msg):
+    """Extract file name from log_msg (implement based on your setup)."""
+    return getattr(log_msg, 'file_name', 'unknown_file') or 'unknown_file'
+
+def get_hash(log_msg):
+    """Generate hash for the file (implement based on your setup)."""
+    return getattr(log_msg, 'hash', 'default_hash') or 'default_hash'
+
+async def handle_generate_stream_link(client: Client, query: types.CallbackQuery):
     try:
+        # Extract file_id from callback data
+        _, file_id = query.data.split(":")
+        
         # Send cached media to log channel and get message details
         log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
         file_name = quote_plus(get_name(log_msg))  # Properly encode file name
 
-        # Construct stream and download URLs with proper formatting
+        # Construct stream and download URLs
         stream_url = f"{BASE_URL}watch/{log_msg.id}/{file_name}?hash={get_hash(log_msg)}"
         download_url = f"{BASE_URL}download/{log_msg.id}/{file_name}?hash={get_hash(log_msg)}"
 
-        # Verify URLs (basic check)
+        # Validate URLs
         if not file_name or not get_hash(log_msg):
-            logger.error("Invalid file name or hash for file_id: %s", file_id)
+            logger.error(f"Invalid file name or hash for file_id: {file_id}")
             await query.answer("Failed to generate links. Please try again later.", show_alert=True)
             return
 
         # Create inline buttons for download, stream, and web app
-        buttons = InlineKeyboardMarkup([
+        buttons = [
             [
                 InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download_url),
                 InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream_url)
@@ -2444,17 +2457,18 @@ async def handle_generate_stream_link(client: Client, query: types.CallbackQuery
             [
                 InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream_url))
             ]
-        ])
+        ]
 
-        # Respond to the callback query with the buttons
-        await query.message.edit_reply_markup(reply_markup=buttons)
+        # Update the message with the buttons
+        await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
         await query.answer("Links generated successfully!")
 
     except Exception as e:
-        logger.error("Error generating stream link for file_id %s: %s", file_id, str(e))
+        logger.error(f"Error generating stream link for file_id {file_id}: {str(e)}")
         await query.answer("Error generating links. Please contact support.", show_alert=True)
 
-# Example callback handler registration (adjust based on your bot setup)
+# Register the callback handler (example, adjust based on your bot setup)
+# from pyrogram import filters
 # client.on_callback_query(filters.regex(r"^generate_stream_link:.*"))(handle_generate_stream_link)
            
 #END HERE 
@@ -4008,6 +4022,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
