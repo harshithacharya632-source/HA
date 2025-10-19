@@ -2407,19 +2407,55 @@ async def cb_handler(client: Client, query: CallbackQuery):
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
 #START HERE
-    elif query.data.startswith("generate_stream_link"):
-        _, file_id = query.data.split(":")
-        try:
-            log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
-            fileName = {quote_plus(get_name(log_msg))}
-            stream = f"{URL}watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-            download = f"{URL}{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-            button = [[
-                InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
-                InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
-            ],[
-                InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
-            ]]
+    from pyrogram import Client, types
+from urllib.parse import quote_plus
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+import logging
+
+# Set up logging for debugging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Ensure URL has a trailing slash
+BASE_URL = "https://goflix-link-generater.onrender.com"  # Replace with your actual base URL
+
+async def handle_generate_stream_link(client: Client, query: types.CallbackQuery, file_id: str):
+    try:
+        # Send cached media to log channel and get message details
+        log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
+        file_name = quote_plus(get_name(log_msg))  # Properly encode file name
+
+        # Construct stream and download URLs with proper formatting
+        stream_url = f"{BASE_URL}watch/{log_msg.id}/{file_name}?hash={get_hash(log_msg)}"
+        download_url = f"{BASE_URL}download/{log_msg.id}/{file_name}?hash={get_hash(log_msg)}"
+
+        # Verify URLs (basic check)
+        if not file_name or not get_hash(log_msg):
+            logger.error("Invalid file name or hash for file_id: %s", file_id)
+            await query.answer("Failed to generate links. Please try again later.", show_alert=True)
+            return
+
+        # Create inline buttons for download, stream, and web app
+        buttons = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download_url),
+                InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream_url)
+            ],
+            [
+                InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream_url))
+            ]
+        ])
+
+        # Respond to the callback query with the buttons
+        await query.message.edit_reply_markup(reply_markup=buttons)
+        await query.answer("Links generated successfully!")
+
+    except Exception as e:
+        logger.error("Error generating stream link for file_id %s: %s", file_id, str(e))
+        await query.answer("Error generating links. Please contact support.", show_alert=True)
+
+# Example callback handler registration (adjust based on your bot setup)
+# client.on_callback_query(filters.regex(r"^generate_stream_link:.*"))(handle_generate_stream_link)
            
 #END HERE 
             await query.message.edit_reply_markup(InlineKeyboardMarkup(button))
@@ -3972,6 +4008,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
