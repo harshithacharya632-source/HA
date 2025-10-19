@@ -2408,7 +2408,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
 #START HERE
     @Client.on_message(filters.private & (filters.document | filters.video))
-async def stream_start(client, message):
+    async def stream_start(client, message):
     file = getattr(message, message.media.value)
     filename = file.file_name
     filesize = humanize.naturalsize(file.file_size)
@@ -4010,6 +4010,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
