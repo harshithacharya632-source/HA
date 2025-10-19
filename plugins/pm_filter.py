@@ -2407,7 +2407,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
 #START HERE
-    from pyrogram import Client, types
+from pyrogram import Client, types
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from urllib.parse import quote_plus
 import logging
@@ -2417,17 +2417,35 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Ensure base URL has a trailing slash
-BASE_URL = "https://goflix-link-generater.onrender.com/"  # Replace with your actual base URL
-LOG_CHANNEL = "-1003059886878"  # Replace with your Telegram log channel ID
+BASE_URL = "https://goflix-link-generater.onrender.com/"  # Your base URL
+LOG_CHANNEL = "-1003059886878"  # Your Telegram log channel ID
 
-# Placeholder functions (replace with your actual implementations)
+# Function to extract file name from log_msg
 def get_name(log_msg):
-    """Extract file name from log_msg (implement based on your setup)."""
-    return getattr(log_msg, 'file_name', 'unknown_file') or 'unknown_file'
+    """Extract file name from log_msg."""
+    try:
+        # Check common attributes for file name in Telegram message
+        if hasattr(log_msg, 'document') and log_msg.document:
+            return log_msg.document.file_name or 'unknown_file'
+        elif hasattr(log_msg, 'video') and log_msg.video:
+            return log_msg.video.file_name or 'unknown_file'
+        elif hasattr(log_msg, 'audio') and log_msg.audio:
+            return log_msg.audio.file_name or 'unknown_file'
+        return 'unknown_file'
+    except Exception as e:
+        logger.error(f"Error getting file name: {str(e)}")
+        return 'unknown_file'
 
+# Function to generate hash for the file
 def get_hash(log_msg):
-    """Generate hash for the file (implement based on your setup)."""
-    return getattr(log_msg, 'hash', 'default_hash') or 'default_hash'
+    """Generate a simple hash for the file based on message ID."""
+    try:
+        import hashlib
+        # Use message ID to create a reproducible hash
+        return hashlib.md5(str(log_msg.id).encode()).hexdigest()[:8]
+    except Exception as e:
+        logger.error(f"Error generating hash: {str(e)}")
+        return 'default_hash'
 
 async def handle_generate_stream_link(client: Client, query: types.CallbackQuery):
     try:
@@ -2443,7 +2461,7 @@ async def handle_generate_stream_link(client: Client, query: types.CallbackQuery
         download_url = f"{BASE_URL}download/{log_msg.id}/{file_name}?hash={get_hash(log_msg)}"
 
         # Validate URLs
-        if not file_name or not get_hash(log_msg):
+        if not file_name or file_name == 'unknown_file' or not get_hash(log_msg):
             logger.error(f"Invalid file name or hash for file_id: {file_id}")
             await query.answer("Failed to generate links. Please try again later.", show_alert=True)
             return
@@ -2467,17 +2485,10 @@ async def handle_generate_stream_link(client: Client, query: types.CallbackQuery
         logger.error(f"Error generating stream link for file_id {file_id}: {str(e)}")
         await query.answer("Error generating links. Please contact support.", show_alert=True)
 
-# Register the callback handler (example, adjust based on your bot setup)
+# Register the callback handler (uncomment and adjust based on your bot setup)
 # from pyrogram import filters
 # client.on_callback_query(filters.regex(r"^generate_stream_link:.*"))(handle_generate_stream_link)
-           
-#END HERE 
-            await query.message.edit_reply_markup(InlineKeyboardMarkup(button))
-        except Exception as e:
-            print(e)
-            await query.answer(f"something went wrong\n\n{e}", show_alert=True)
-            return
-    
+    #END HERE
     elif query.data == "reqinfo":
         await query.answer(text=script.REQINFO, show_alert=True)
 
@@ -4022,6 +4033,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
