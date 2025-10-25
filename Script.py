@@ -246,12 +246,8 @@ Nᴀᴍᴇ - {}"""
 
     CAPTION = """<b>📂 ғɪʟᴇɴᴀᴍᴇ : {file_name}
 
-🎬 {quality} ⏳ {duration}
-🔊 {audio_languages}
-💬 {subtitle}
 <b>⚙️ sɪᴢᴇ : {file_size}</b>
-      ♨️ Goflix file
-      
+      ♨️ Goflix file   
 🔗 <a href='https://t.me/trendi_Backup'>📢 Update Channel</a>
 🎬 <a href='https://t.me/gofixmovie'>🎥 Movie Group</a>
 """
@@ -760,6 +756,7 @@ Example:- /set_caption 📕 File Name: {filename}
 
 
     
+
 
 
 
