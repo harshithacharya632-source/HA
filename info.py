@@ -108,8 +108,8 @@ USE_CAPTION_FILTER = bool(environ.get('USE_CAPTION_FILTER', True))
 
 # Token Verification Info :
 VERIFY = bool(environ.get('VERIFY', True))
-VERIFY_SHORTLINK_URL = environ.get('VERIFY_SHORTLINK_URL', 'https://api-ssl.bitly.com/v4/shorten')
-VERIFY_SHORTLINK_API = environ.get('VERIFY_SHORTLINK_API', 'cbdcab311c074d63fee4e94708fcfdea5e6a8193')
+VERIFY_SHORTLINK_URL = environ.get('VERIFY_SHORTLINK_URL', 'https://shrinkme.io/api')
+VERIFY_SHORTLINK_API = environ.get('VERIFY_SHORTLINK_API', '50f5d48d07eb16d425e2a78e99ce7f59c9965f80')
 VERIFY_TUTORIAL = environ.get('VERIFY_TUTORIAL', 'https://t.me/Goflix_AdminBot')
 
 # If You Fill Second Shortner Then Bot Attach Both First And Second Shortner And Use It For Verify.
@@ -184,6 +184,7 @@ else:
     OTHER_DB_URI = O_DB_URI       # This Db Is For Other Data Store
     FILE_DB_URI = F_DB_URI        # This Db Is For File Data Store
     SEC_FILE_DB_URI = S_DB_URI    # This Db is for File Data Store When First Db Is Going To Be Full.
+
 
 
 
