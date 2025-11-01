@@ -12,7 +12,9 @@ from TechVJ import StartTime, __version__
 from TechVJ.util.custom_dl import ByteStreamer
 from TechVJ.util.time_format import get_readable_time
 from TechVJ.util.render_template import render_page
-from TechVJ.util.utils import create_shrinkme_shortlink  # ✅ Make sure this exists in utils
+# from TechVJ.util.utils import create_shrinkme_shortlink 
+from utils import create_shrinkme_shortlink  # ✅ Make sure this exists in utils
+                             
 
 routes = web.RouteTableDef()
 
@@ -180,3 +182,4 @@ async def verify_callback(request: web.Request):
     except Exception as e:
         logging.error(f"Error in verify_callback: {e}")
         return web.Response(text="Verification failed", status=500)
+
