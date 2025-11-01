@@ -1,7 +1,7 @@
 # Don't Remove Credit @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
-
+import requests
 import logging, asyncio, os, re, random, pytz, aiohttp, requests, string, json, http.client
 from info import *
 from imdb import Cinemagoer 
@@ -476,30 +476,74 @@ def humanbytes(size):
         n += 1
     return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
 
+#START
 
+async def create_bitly_shortlink(long_url: str) -> str:
+    """
+    Shorten a long URL using Bitly API.
+    """
+    headers = {
+        "Authorization": f"Bearer {BITLY_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {"long_url": long_url}
+    try:
+        response = requests.post(BITLY_API_URL, headers=headers, json=payload, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("link", long_url)
+        else:
+            print(f"[Bitly Error] {response.status_code}: {response.text}")
+            return long_url
+    except Exception as e:
+        print(f"[Bitly Exception] {e}")
+        return long_url
 
+#END
 async def get_clone_shortlink(link, url, api):
     shortzy = Shortzy(api_key=api, base_site=url)
     link = await shortzy.convert(link)
     return link
                            
+
+
+BITLY_API_URL = "https://api-ssl.bitly.com/v4/shorten"
+BITLY_TOKEN = environ.get("BITLY_TOKEN", "cbdcab311c074d63fee4e94708fcfdea5e6a8193")  # ← or keep in env var
+
 async def get_shortlink(chat_id, link):
-    settings = await get_settings(chat_id) #fetching settings for group
-    if 'shortlink' in settings.keys():
-        URL = settings['shortlink']
-        API = settings['shortlink_api']
-    else:
-        URL = SHORTLINK_URL
-        API = SHORTLINK_API
-    if URL.startswith("shorturllink") or URL.startswith("terabox.in") or URL.startswith("urlshorten.in"):
-        URL = SHORTLINK_URL
-        API = SHORTLINK_API
-    if URL == "api.shareus.io":
-        url = f'https://{URL}/easy_api'
-        params = {
-            "key": API,
-            "link": link,
+    """
+    Generate a shortlink for the given link.
+    - Uses group settings if defined.
+    - If Bitly is configured, uses Bitly API.
+    - Falls back to Shortzy or Shareus if not Bitly.
+    """
+    settings = await get_settings(chat_id)
+    URL = settings.get("shortlink", SHORTLINK_URL)
+    API = settings.get("shortlink_api", SHORTLINK_API)
+
+    # ✅ BITLY support (if configured)
+    if "bitly" in URL.lower():
+        headers = {
+            "Authorization": f"Bearer {BITLY_TOKEN}",
+            "Content-Type": "application/json"
         }
+        payload = {"long_url": link}
+        try:
+            response = requests.post(BITLY_API_URL, headers=headers, json=payload, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("link", link)
+            else:
+                print(f"[Bitly Error] {response.status_code}: {response.text}")
+                return link
+        except Exception as e:
+            print(f"[Bitly Exception] {e}")
+            return link
+
+    # ✅ Shareus special case
+    elif URL == "api.shareus.io":
+        url = f"https://{URL}/easy_api"
+        params = {"key": API, "link": link}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
@@ -508,11 +552,13 @@ async def get_shortlink(chat_id, link):
         except Exception as e:
             logger.error(e)
             return link
+
+    # ✅ Other shorteners (Shortzy, etc.)
     else:
         shortzy = Shortzy(api_key=API, base_site=URL)
         link = await shortzy.convert(link)
         return link
-    
+
 async def get_tutorial(chat_id):
     settings = await get_settings(chat_id) #fetching settings for group
     return settings['tutorial']
@@ -736,3 +782,4 @@ async def get_seconds(time_string):
         return value * 86400 * 365
     else:
         return 0
+
