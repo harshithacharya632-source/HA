@@ -2,7 +2,7 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
-import re, math, logging, secrets, mimetypes, time
+import re, math, logging, secrets, mimetypes, time, requests
 from info import *
 from aiohttp import web
 from aiohttp.http_exceptions import BadStatusLine
@@ -12,6 +12,7 @@ from TechVJ import StartTime, __version__
 from TechVJ.util.custom_dl import ByteStreamer
 from TechVJ.util.time_format import get_readable_time
 from TechVJ.util.render_template import render_page
+from TechVJ.util.utils import create_shrinkme_shortlink  # ✅ Make sure this exists in utils
 
 routes = web.RouteTableDef()
 
@@ -147,3 +148,35 @@ async def media_streamer(request: web.Request, id: int, secure_hash: str):
             "Accept-Ranges": "bytes",
         },
     )
+
+# =============================
+# ✅ ShrinkMe Verification Flow
+# =============================
+
+@routes.get("/verify")
+async def verify_user(request: web.Request):
+    """Redirect user to ShrinkMe shortlink to trigger ad verification."""
+    try:
+        callback_url = f"{request.url.origin()}/verify_callback"
+        # create_shrinkme_shortlink is defined in utils.py
+        short_url = create_shrinkme_shortlink(callback_url)
+        if not short_url:
+            raise Exception("Failed to create ShrinkMe short link.")
+        raise web.HTTPFound(short_url)  # redirect user to ShrinkMe ad link
+    except Exception as e:
+        logging.error(f"Error in verify_user: {e}")
+        return web.Response(text="Error creating ShrinkMe link", status=500)
+
+
+@routes.get("/verify_callback")
+async def verify_callback(request: web.Request):
+    """This route is visited after user finishes ad verification."""
+    try:
+        # You can use query params to identify user if needed
+        return web.Response(
+            text="<h2>✅ Verification Complete!</h2><p>You can now continue.</p>",
+            content_type="text/html",
+        )
+    except Exception as e:
+        logging.error(f"Error in verify_callback: {e}")
+        return web.Response(text="Verification failed", status=500)
