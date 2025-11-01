@@ -155,30 +155,12 @@ async def media_streamer(request: web.Request, id: int, secure_hash: str):
 
 @routes.get("/verify")
 async def verify_user(request: web.Request):
-    """Redirect user to ShrinkMe shortlink to trigger ad verification."""
-    try:
-        api_key = os.getenv("SHRINKME_API_KEY")
-        if not api_key:
-            raise Exception("Missing ShrinkMe API key (set in environment)")
+    callback_url = f"{request.url.origin()}/verify_callback"
+    short_url = await create_shrinkme_shortlink(callback_url)
+    if not short_url:
+        return web.Response(text="Error creating ShrinkMe link", status=500)
+    raise web.HTTPFound(short_url)  # redirect user to ShrinkMe ad link
 
-        callback_url = f"{request.url.origin()}/verify_callback"
-        api_url = "https://shrinkme.io/api"
-        params = {
-            "api": api_key,
-            "url": callback_url,
-        }
-
-        response = requests.get(api_url, params=params, timeout=10).json()
-        short_url = response.get("shortenedUrl")
-
-        if not short_url:
-            raise Exception(f"ShrinkMe returned invalid response: {response}")
-
-        # Redirect user’s browser to ShrinkMe ad page
-        raise web.HTTPFound(short_url)
-    except Exception as e:
-        logging.error(f"Error in verify_user: {e}")
-        return web.Response(text=f"Error creating ShrinkMe link: {e}", status=500)
 
 
 @routes.get("/verify_callback")
@@ -192,3 +174,4 @@ async def verify_callback(request: web.Request):
     except Exception as e:
         logging.error(f"Error in verify_callback: {e}")
         return web.Response(text="Verification failed", status=500)
+
