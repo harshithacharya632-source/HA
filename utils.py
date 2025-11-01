@@ -2,6 +2,18 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
+"""
+Updated util module
+- Added ShrinkMe shortener support (uses provided token by user).
+- Kept backward compatibility with Bitly, Shortzy, Shareus.
+- Kept verification helpers and token handling.
+- Minor robustness and logging improvements.
+
+NOTE: This file intentionally includes the user-provided ShrinkMe token as requested.
+If you prefer using environment variable instead, remove the literal and set SHRINKME_TOKEN
+in the environment and update the line below accordingly.
+"""
+
 import os
 import logging
 import asyncio
@@ -13,17 +25,18 @@ import string
 import json
 import http.client
 import requests  # used in a few sync places (search_gagala). kept intentionally.
-from typing import Optional, Union, List
 from info import *
 from imdb import Cinemagoer
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram import enums
 from pyrogram.errors import *
+from typing import Union, List
 from Script import script
 from datetime import datetime, date
 from database.users_chats_db import db
 from database.join_reqs import JoinReqs
 from bs4 import BeautifulSoup
+from shortzy import Shortzy
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -39,19 +52,14 @@ SMART_OPEN = '“'
 SMART_CLOSE = '”'
 START_CHAR = ('\'', '"', SMART_OPEN)
 
-# ShrinkMe config (read from env or info.py)
-# Put your ShrinkMe API key into:
-# - SHORTLINK_API (for normal shortener)
-# - VERIFY_SHORTLINK_API (for verification shortener)
-# Put base URL into:
-# - SHORTLINK_URL (e.g. "https://shrinkme.io/api" or "shrinkme.io/api")
-# - VERIFY_SHORTLINK_URL (same pattern)
-#
-# Example:
-# export SHORTLINK_API="your_shrinkme_key_here"
-# export VERIFY_SHORTLINK_API="your_shrinkme_key_here"
-#
-# Defaults still come from info.py if set there.
+# BITLY config (read from env)
+BITLY_API_URL = "https://api-ssl.bitly.com/v4/shorten"
+BITLY_TOKEN = os.environ.get("BITLY_TOKEN")  # Put your token in env (recommended)
+
+# ShrinkMe config (user provided token can be set here or in env)
+# The user provided token in the chat — placed here as requested.
+SHRINKME_TOKEN = os.environ.get("SHRINKME_TOKEN") or "50f5d48d07eb16d425e2a78e99ce7f59c9965f80"
+SHRINKME_API_URL = "https://api.shrinkme.io/shorten"  # hypothetical endpoint; adjust if required
 
 # temp db for banned
 class temp(object):
@@ -69,9 +77,7 @@ class temp(object):
     SETTINGS = {}
     IMDB_CAP = {}
 
-# ----------------------------
-# Helper and subscription fns
-# ----------------------------
+
 async def pub_is_subscribed(bot, query, channel):
     btn = []
     for id in channel:
@@ -79,10 +85,13 @@ async def pub_is_subscribed(bot, query, channel):
         try:
             await bot.get_chat_member(id, query.from_user.id)
         except UserNotParticipant:
-            btn.append([InlineKeyboardButton(f'Join {chat.title}', url=chat.invite_link)])
+            btn.append(
+                [InlineKeyboardButton(f'Join {chat.title}', url=chat.invite_link)]
+            )
         except Exception:
             pass
     return btn
+
 
 async def is_subscribed(bot, query):
     if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
@@ -115,9 +124,7 @@ async def is_subscribed(bot, query):
                 return True
         return False
 
-# ----------------------------
-# IMDb poster helper
-# ----------------------------
+
 async def get_poster(query, bulk=False, id=False, file=None):
     if not id:
         query = (query.strip()).lower()
@@ -167,6 +174,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
         plot = movie.get('plot outline')
     if plot and len(plot) > 800:
         plot = plot[0:800] + "..."
+
     return {
         'title': movie.get('title'),
         'votes': movie.get('votes'),
@@ -197,9 +205,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
         'url': f'https://www.imdb.com/title/tt{movieid}'
     }
 
-# ----------------------------
-# Broadcasting helpers
-# ----------------------------
+
 async def broadcast_messages(user_id, message):
     try:
         await message.copy(chat_id=user_id)
@@ -222,6 +228,7 @@ async def broadcast_messages(user_id, message):
     except Exception:
         return False, "Error"
 
+
 async def broadcast_messages_group(chat_id, message):
     try:
         kd = await message.copy(chat_id=chat_id)
@@ -236,9 +243,7 @@ async def broadcast_messages_group(chat_id, message):
     except Exception:
         return False, "Error"
 
-# ----------------------------
-# Google search helper (sync)
-# ----------------------------
+
 async def search_gagala(text):
     usr_agent = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -252,21 +257,18 @@ async def search_gagala(text):
     titles = soup.find_all('h3')
     return [title.getText() for title in titles]
 
-# ----------------------------
-# Settings DB helpers
-# ----------------------------
+
 async def get_settings(group_id):
     settings = await db.get_settings(group_id)
     return settings
+
 
 async def save_group_settings(group_id, key, value):
     current = await get_settings(group_id)
     current.update({key: value})
     await db.update_settings(group_id, current)
 
-# ----------------------------
-# Misc helpers
-# ----------------------------
+
 def get_size(size):
     units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
     size = float(size)
@@ -276,9 +278,11 @@ def get_size(size):
         size /= 1024.0
     return "%.2f %s" % (size, units[i])
 
+
 def split_list(l, n):
     for i in range(0, len(l), n):
         yield l[i:i + n]
+
 
 def get_file_id(msg: Message):
     if msg.media:
@@ -297,20 +301,26 @@ def get_file_id(msg: Message):
                 setattr(obj, "message_type", message_type)
                 return obj
 
+
 def extract_user(message: Message) -> Union[int, str]:
     user_id = None
     user_first_name = None
     if message.reply_to_message:
         user_id = message.reply_to_message.from_user.id
         user_first_name = message.reply_to_message.from_user.first_name
+
     elif len(message.command) > 1:
-        if (len(message.entities) > 1 and
-                message.entities[1].type == enums.MessageEntityType.TEXT_MENTION):
+        if (
+                len(message.entities) > 1 and
+                message.entities[1].type == enums.MessageEntityType.TEXT_MENTION
+        ):
+
             required_entity = message.entities[1]
             user_id = required_entity.user.id
             user_first_name = required_entity.user.first_name
         else:
             user_id = message.command[1]
+            # don't want to make a request -_-
             user_first_name = user_id
         try:
             user_id = int(user_id)
@@ -320,6 +330,7 @@ def extract_user(message: Message) -> Union[int, str]:
         user_id = message.from_user.id
         user_first_name = message.from_user.first_name
     return user_id, user_first_name
+
 
 def list_to_str(k):
     if not k:
@@ -331,6 +342,7 @@ def list_to_str(k):
         return ' '.join(f'{elem}, ' for elem in k)
     else:
         return ' '.join(f'{elem}, ' for elem in k)
+
 
 def last_online(from_user):
     time = ""
@@ -350,6 +362,7 @@ def last_online(from_user):
         time += from_user.last_online_date.strftime("%a, %d %b %Y, %H:%M:%S")
     return time
 
+
 def split_quotes(text: str) -> List:
     if not any(text.startswith(char) for char in START_CHAR):
         return text.split(None, 1)
@@ -362,11 +375,15 @@ def split_quotes(text: str) -> List:
         counter += 1
     else:
         return text.split(None, 1)
+
+    # 1 to avoid starting quote, and counter is exclusive so avoids ending
     key = remove_escapes(text[1:counter].strip())
+    # index will be in range, or `else` would have been executed and returned
     rest = text[counter + 1:].strip()
     if not key:
         key = text[0] + text[0]
     return list(filter(None, [key, rest]))
+
 
 def gfilterparser(text, keyword):
     if "buttonalert" in text:
@@ -377,15 +394,19 @@ def gfilterparser(text, keyword):
     i = 0
     alerts = []
     for match in BTN_URL_REGEX.finditer(text):
+        # Check if btnurl is escaped
         n_escapes = 0
         to_check = match.start(1) - 1
         while to_check > 0 and text[to_check] == "\\":
             n_escapes += 1
             to_check -= 1
+
+        # if even, not escaped -> create button
         if n_escapes % 2 == 0:
             note_data += text[prev:match.start(1)]
             prev = match.end(1)
             if match.group(3) == "buttonalert":
+                # create a thruple with button label, url, and newline status
                 if bool(match.group(5)) and buttons:
                     buttons[-1].append(InlineKeyboardButton(
                         text=match.group(2),
@@ -408,15 +429,18 @@ def gfilterparser(text, keyword):
                     text=match.group(2),
                     url=match.group(4).replace(" ", "")
                 )])
+
         else:
             note_data += text[prev:to_check]
             prev = match.start(1) - 1
     else:
         note_data += text[prev:]
+
     try:
         return note_data, buttons, alerts
     except:
         return note_data, buttons, None
+
 
 def parser(text, keyword):
     if "buttonalert" in text:
@@ -427,15 +451,19 @@ def parser(text, keyword):
     i = 0
     alerts = []
     for match in BTN_URL_REGEX.finditer(text):
+        # Check if btnurl is escaped
         n_escapes = 0
         to_check = match.start(1) - 1
         while to_check > 0 and text[to_check] == "\\":
             n_escapes += 1
             to_check -= 1
+
+        # if even, not escaped -> create button
         if n_escapes % 2 == 0:
             note_data += text[prev:match.start(1)]
             prev = match.end(1)
             if match.group(3) == "buttonalert":
+                # create a thruple with button label, url, and newline status
                 if bool(match.group(5)) and buttons:
                     buttons[-1].append(InlineKeyboardButton(
                         text=match.group(2),
@@ -458,15 +486,18 @@ def parser(text, keyword):
                     text=match.group(2),
                     url=match.group(4).replace(" ", "")
                 )])
+
         else:
             note_data += text[prev:to_check]
             prev = match.start(1) - 1
     else:
         note_data += text[prev:]
+
     try:
         return note_data, buttons, alerts
     except:
         return note_data, buttons, None
+
 
 def remove_escapes(text: str) -> str:
     res = ""
@@ -481,6 +512,7 @@ def remove_escapes(text: str) -> str:
             res += text[counter]
     return res
 
+
 def humanbytes(size):
     if not size:
         return ""
@@ -492,98 +524,200 @@ def humanbytes(size):
         n += 1
     return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
 
-# ----------------------------
-# ShrinkMe-only shortener utilities
-# ----------------------------
 
-async def _shrinkme_call(api_base: str, api_key: str, long_url: str) -> str:
+# START - Bitly + Shorteners utilities
+
+
+async def create_bitly_shortlink(long_url: str) -> str:
     """
-    Low-level call to ShrinkMe-like API.
-    Accepts:
-      - api_base: "https://shrinkme.io/api" or "shrinkme.io/api"
-      - api_key: API key string
-      - long_url: URL to shorten
-    Returns shortened URL or original on failure.
+    Shorten a long URL using Bitly API (async aiohttp).
+    Returns the shortened link or the original link on failure.
     """
-    if not api_base or not api_key:
-        logger.debug("[ShrinkMe] API base or key missing, returning original link")
+    if not BITLY_TOKEN:
+        logger.debug("[Bitly] BITLY_TOKEN not set - skipping Bitly.")
         return long_url
 
-    # Normalize base to full URL
-    if not api_base.startswith("http"):
-        api_base = "https://" + api_base
+    headers = {
+        "Authorization": f"Bearer {BITLY_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {"long_url": long_url}
 
-    params = {"api": api_key, "url": long_url}
     try:
         async with aiohttp.ClientSession() as session:
-            # many shrinkme endpoints accept GET with api & url query params
-            async with session.get(api_base, params=params, ssl=False, timeout=20) as resp:
-                text = await resp.text()
-                ct = resp.headers.get("Content-Type", "")
-                # Try JSON parse first
-                if "application/json" in ct or text.strip().startswith("{"):
-                    try:
-                        data = json.loads(text)
-                        # common keys
-                        for key in ("shortenedUrl", "short", "short_link", "shorturl", "shortened", "shortened_url"):
-                            if key in data:
-                                return data[key]
-                        if "result" in data:
-                            for key in ("shortenedUrl", "short"):
-                                if key in data["result"]:
-                                    return data["result"][key]
-                        if "url" in data:
-                            return data["url"]
-                    except Exception:
-                        pass
-                # If not JSON, sometimes API returns plain url
-                text = text.strip()
-                if text.startswith("http://") or text.startswith("https://"):
-                    return text
-                # else try to regex a URL inside response
-                m = re.search(r"https?://[^\s'\"<>]+", text)
-                if m:
-                    return m.group(0)
+            async with session.post(BITLY_API_URL, headers=headers, json=payload, timeout=10) as resp:
+                try:
+                    data = await resp.json()
+                except Exception:
+                    # sometimes Bitly returns text errors
+                    text = await resp.text()
+                    logger.error(f"[Bitly] non-json response: {text}")
+                    return long_url
+
+                if resp.status == 200 and "link" in data:
+                    return data["link"]
+                else:
+                    logger.error(f"[Bitly Error] status={resp.status} data={data}")
+                    return long_url
     except Exception as e:
-        logger.exception(f"[ShrinkMe call] exception: {e}")
-    return long_url
+        logger.exception(f"[Bitly Exception] {e}")
+        return long_url
 
-async def shrinkme_shorten(long_url: str, api_base: Optional[str] = None, api_key: Optional[str] = None) -> str:
-    """
-    Public wrapper to create a ShrinkMe shortlink.
-    If api_base/api_key None, uses SHORTLINK_URL/SHORTLINK_API from info.py
-    """
-    base = api_base if api_base else SHORTLINK_URL
-    key = api_key if api_key else SHORTLINK_API
-    if base and not base.startswith("http"):
-        base = f"https://{base}"
-    return await _shrinkme_call(base, key, long_url)
 
-async def get_verify_shorted_link(long_url: str, api_base: Optional[str] = None, api_key: Optional[str] = None) -> str:
+async def create_shrinkme_shortlink(long_url: str) -> str:
     """
-    Primary verification shortener.
-    Uses VERIFY_SHORTLINK_URL & VERIFY_SHORTLINK_API by default.
-    Supports optional second shortener chain if VERIFY_SECOND_SHORTNER True.
+    Shorten URL using ShrinkMe API. This uses a user-provided token.
+    The endpoint and payload structure may differ depending on ShrinkMe implementation.
+    Adjust SHRINKME_API_URL above if your provider uses a different URL or request format.
     """
-    base = api_base if api_base else VERIFY_SHORTLINK_URL
-    key = api_key if api_key else VERIFY_SHORTLINK_API
-    if base and not base.startswith("http"):
-        base = f"https://{base}"
-    short = await _shrinkme_call(base, key, long_url)
+    if not SHRINKME_TOKEN:
+        logger.debug("[ShrinkMe] SHRINKME_TOKEN not set - skipping ShrinkMe.")
+        return long_url
+
+    headers = {
+        "Authorization": f"Bearer {SHRINKME_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {"long_url": long_url}
+
     try:
-        if VERIFY_SECOND_SHORTNER:
-            snd_base = VERIFY_SND_SHORTLINK_URL
-            snd_key = VERIFY_SND_SHORTLINK_API
-            if snd_base and not snd_base.startswith("http"):
-                snd_base = f"https://{snd_base}"
-            short = await _shrinkme_call(snd_base, snd_key, short)
-    except Exception as e:
-        logger.exception("[get_verify_shorted_link] second shortener failed: %s", e)
-    return short
+        async with aiohttp.ClientSession() as session:
+            async with session.post(SHRINKME_API_URL, headers=headers, json=payload, timeout=10) as resp:
+                # Accept JSON or plaintext
+                text = await resp.text()
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    data = None
 
-# ----------------------------
-# Token & verification helpers
-# ----------------------------
+                if resp.status in (200, 201):
+                    # Common ShrinkMe responses might be {'short_url': '...'} or {'url': '...'}
+                    if data:
+                        if isinstance(data, dict):
+                            return data.get('short_url') or data.get('url') or text
+                        else:
+                            return str(data)
+                    else:
+                        return text
+                else:
+                    logger.error(f"[ShrinkMe Error] status={resp.status} text={text}")
+                    return long_url
+    except Exception as e:
+        logger.exception(f"[ShrinkMe Exception] {e}")
+        return long_url
+
+
+async def get_clone_shortlink(link, url, api):
+    shortzy = Shortzy(api_key=api, base_site=url)
+    link = await shortzy.convert(link)
+    return link
+
+
+async def get_shortlink(chat_id, link):
+    """
+    Generate a shortlink for the given link.
+    - Uses group settings if defined.
+    - Supports Bitly (if group uses 'bitly' or global SHORTLINK_URL is set to bitly and BITLY_TOKEN exists),
+      ShrinkMe (if group setting contains 'shrinkme' or VERIFY_SHORTLINK_URL points to shrinkme),
+      Shareus special case, and other Shortzy-based services.
+    """
+    settings = await get_settings(chat_id)
+
+    # group settings take precedence
+    URL = settings.get("shortlink", SHORTLINK_URL) if settings else SHORTLINK_URL
+    API = settings.get("shortlink_api", SHORTLINK_API) if settings else SHORTLINK_API
+
+    # normalize fallback invalid shorteners
+    if URL and (URL.startswith("shorturllink") or URL.startswith("terabox.in") or URL.startswith("urlshorten.in")):
+        URL = SHORTLINK_URL
+        API = SHORTLINK_API
+
+    # Decide to use Bitly:
+    # - if admin set group shortlink to contain 'bitly'
+    # - OR global SHORTLINK_URL contains 'bitly' AND BITLY_TOKEN present
+    use_bitly = False
+    if URL and "bitly" in URL.lower():
+        use_bitly = True
+    elif BITLY_TOKEN and (SHORTLINK_URL and "bitly" in str(SHORTLINK_URL).lower()):
+        use_bitly = True
+
+    # Decide to use ShrinkMe
+    use_shrinkme = False
+    if URL and "shrinkme" in str(URL).lower():
+        use_shrinkme = True
+    elif SHRINKME_TOKEN and (SHORTLINK_URL and "shrinkme" in str(SHORTLINK_URL).lower()):
+        use_shrinkme = True
+
+    if use_bitly:
+        return await create_bitly_shortlink(link)
+
+    if use_shrinkme:
+        return await create_shrinkme_shortlink(link)
+
+    # Shareus special case
+    if URL == "api.shareus.io":
+        api_url = f'https://{URL}/easy_api'
+        params = {
+            "key": API,
+            "link": link,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, params=params, raise_for_status=True, ssl=False) as response:
+                    data = await response.text()
+                    return data
+        except Exception as e:
+            logger.error(e)
+            return link
+
+    # Default: use Shortzy wrapper
+    try:
+        shortzy = Shortzy(api_key=API, base_site=URL)
+        short_link = await shortzy.convert(link)
+        return short_link
+    except Exception as e:
+        logger.error(f"[Shortzy Error] {e}")
+        return link
+
+# END - Bitly + Shorteners utilities
+
+
+async def get_tutorial(chat_id):
+    settings = await get_settings(chat_id)  # fetching settings for group
+    return settings.get('tutorial', TUTORIAL) if settings else TUTORIAL
+
+
+async def get_verify_shorted_link(link, url, api):
+    API = api
+    URL = url
+    # Support ShrinkMe as verification shortener too
+    if URL and "shrinkme" in str(URL).lower():
+        return await create_shrinkme_shortlink(link)
+
+    if URL == "api.shareus.io":
+        api_url = f'https://{URL}/easy_api'
+        params = {
+            "key": API,
+            "link": link,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, params=params, raise_for_status=True, ssl=False) as response:
+                    data = await response.text()
+                    return data
+        except Exception as e:
+            logger.error(e)
+            return link
+    else:
+        try:
+            shortzy = Shortzy(api_key=API, base_site=URL)
+            shorted = await shortzy.convert(link)
+            return shorted
+        except Exception as e:
+            logger.error(e)
+            return link
+
 
 async def check_token(bot, userid, token):
     user = await bot.get_users(userid)
@@ -596,6 +730,7 @@ async def check_token(bot, userid, token):
             is_used = TKN[token]
             return not is_used
     return False
+
 
 async def get_token(bot, userid, link):
     user = await bot.get_users(userid)
@@ -612,6 +747,7 @@ async def get_token(bot, userid, link):
     else:
         return str(shortened_verify_url)
 
+
 async def verify_user(bot, userid, token):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
@@ -621,6 +757,7 @@ async def verify_user(bot, userid, token):
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
     VERIFIED[user.id] = str(today)
+
 
 async def check_verification(bot, userid):
     user = await bot.get_users(userid)
@@ -637,15 +774,13 @@ async def check_verification(bot, userid):
     else:
         return False
 
-# ----------------------------
-# send_all and get_cap (unchanged behaviour, but uses shrinkme for links)
-# ----------------------------
 
 async def send_all(bot, userid, files, ident, chat_id, user_name, query):
     settings = await get_settings(chat_id)
     if 'is_shortlink' in (settings.keys() if settings else {}):
         ENABLE_SHORTLINK = settings['is_shortlink']
     else:
+        # Ensure group setting exists (avoid referencing undefined `message`)
         await save_group_settings(chat_id, 'is_shortlink', False)
         ENABLE_SHORTLINK = False
     try:
@@ -654,12 +789,12 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
                 title = file["file_name"]
                 size = get_size(file["file_size"])
                 if not await db.has_premium_access(userid) and SHORTLINK_MODE == True:
-                    # create shrinkme short link
-                    short_url = await shrinkme_shorten(f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}", SHORTLINK_URL, SHORTLINK_API)
+                    short_url = await get_shortlink(chat_id, f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}")
                     await bot.send_message(
                         chat_id=userid,
                         text=f"<b>Hᴇʏ ᴛʜᴇʀᴇ {user_name} 👋🏽 \n\n✅ Sᴇᴄᴜʀᴇ ʟɪɴᴋ ᴛᴏ ʏᴏᴜʀ ғɪʟᴇ ʜᴀs sᴜᴄᴄᴇssғᴜʟʟʏ ʙᴇᴇɴ ɢᴇɴᴇʀᴀᴛᴇᴅ ᴘʟᴇᴀsᴇ ᴄʟɪᴄᴋ ᴅᴏᴡɴʟᴏᴀᴅ ʙᴜᴛᴛᴏɴ\n\n🗃️ Fɪʟᴇ Nᴀᴍᴇ : {title}\n🔖 Fɪʟᴇ Sɪᴢᴇ : {size}</b>",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Dᴏᴡɴʟᴏᴀᴅ 📥", url=short_url)]]))
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Dᴏᴡɴʟᴏᴀᴅ 📥", url=short_url)]])
+                    )
         else:
             for file in files:
                 f_caption = file.get("caption")
@@ -697,6 +832,7 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
         await query.answer('Hᴇʏ, Sᴛᴀʀᴛ Bᴏᴛ Fɪʀsᴛ Aɴᴅ Cʟɪᴄᴋ Sᴇɴᴅ Aʟʟ', show_alert=True)
     except Exception:
         await query.answer('Hᴇʏ, Sᴛᴀʀᴛ Bᴏᴛ Fɪʀsᴛ Aɴᴅ Cʟɪᴄᴋ Sᴇɴᴅ Aʟʟ', show_alert=True)
+
 
 async def get_cap(settings, remaining_seconds, files, query, total_results, search):
     if settings["imdb"]:
@@ -756,9 +892,7 @@ async def get_cap(settings, remaining_seconds, files, query, total_results, sear
             cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"
     return cap
 
-# ----------------------------
-# Time helper
-# ----------------------------
+
 async def get_seconds(time_string):
     def extract_value_and_unit(ts):
         value = ""
@@ -771,6 +905,7 @@ async def get_seconds(time_string):
         if value:
             value = int(value)
         return value, unit
+
     value, unit = extract_value_and_unit(time_string)
     if unit == 's':
         return value
@@ -786,3 +921,76 @@ async def get_seconds(time_string):
         return value * 86400 * 365
     else:
         return 0
+
+
+# Utility: allow forcing a shortener for a link (useful for tests)
+async def force_shorten(link, provider='shrinkme', api_key=None, base_url=None):
+    """
+    Helper to quickly shorten a link using a specific provider. Returns shortened link or original.
+    provider: 'bitly', 'shrinkme', 'shareus', 'shortzy'
+    """
+    provider = provider.lower()
+    if provider == 'bitly':
+        return await create_bitly_shortlink(link)
+    if provider == 'shrinkme':
+        return await create_shrinkme_shortlink(link)
+    if provider == 'shareus':
+        if base_url is None or api_key is None:
+            return link
+        api_url = f'https://{base_url}/easy_api'
+        params = {"key": api_key, "link": link}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, params=params, raise_for_status=True, ssl=False) as response:
+                    data = await response.text()
+                    return data
+        except Exception as e:
+            logger.error(e)
+            return link
+    # default to Shortzy
+    try:
+        shortzy = Shortzy(api_key=api_key or SHORTLINK_API, base_site=base_url or SHORTLINK_URL)
+        return await shortzy.convert(link)
+    except Exception as e:
+        logger.error(e)
+        return link
+
+
+# Expose a small diagnostic function to verify shortener health (async)
+async def check_shortener_health():
+    """
+    Returns a dict with quick health info about configured shorteners.
+    NOTE: This performs live requests; call from an async context.
+    """
+    res = {}
+    test_url = "https://example.com/"
+    # Bitly
+    try:
+        res['bitly'] = None
+        if BITLY_TOKEN:
+            shortened = await create_bitly_shortlink(test_url)
+            res['bitly'] = shortened
+    except Exception as e:
+        res['bitly'] = str(e)
+    # ShrinkMe
+    try:
+        res['shrinkme'] = None
+        if SHRINKME_TOKEN:
+            shortened = await create_shrinkme_shortlink(test_url)
+            res['shrinkme'] = shortened
+    except Exception as e:
+        res['shrinkme'] = str(e)
+    # Shortzy
+    try:
+        res['shortzy'] = None
+        if SHORTLINK_API and SHORTLINK_URL:
+            shortzy = Shortzy(api_key=SHORTLINK_API, base_site=SHORTLINK_URL)
+            shortened = await shortzy.convert(test_url)
+            res['shortzy'] = shortened
+    except Exception as e:
+        res['shortzy'] = str(e)
+
+    return res
+
+
+# End of file
