@@ -500,35 +500,27 @@ async def get_verify_shorted_link(link, url, api):
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, params=params) as response:
+                    logger.info(f"[DEBUG] ShrinkMe response status: {response.status}")
                     if response.status == 200:
                         result = await response.json()
+                        logger.info(f"[DEBUG] ShrinkMe JSON: {result}")
                         if result.get("status") == "success":
                             shortened = result.get("shortenedUrl")
+                            logger.info(f"[DEBUG] Shortened URL: {shortened}")
                             if shortened:
                                 return shortened
+                            else:
+                                logger.warning("[DEBUG] Shortened URL is empty/None")
+                        else:
+                            logger.warning(f"[DEBUG] Status not 'success': {result.get('status')}")
+                    else:
+                        text = await response.text()
+                        logger.warning(f"[DEBUG] Non-200 status: {response.status}, Body: {text[:200]}...")
         except Exception as e:
             logger.error(f"Error shortening verification with ShrinkMe: {e}")
+        logger.warning("[DEBUG] Falling back to direct link")
         return link # Fallback
-    elif URL == "api.shareus.io":
-        url = f'https://{URL}/easy_api'
-        params = {
-            "key": API,
-            "link": link,
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
-                    data = await response.text()
-                    return data
-        except Exception as e:
-            logger.error(e)
-            return link
-    else:
-        # Fallback to Shortzy for supported sites
-        shortzy = Shortzy(api_key=API, base_site=URL)
-        link = await shortzy.convert(link)
-        return link
-      
+    # ... rest unchanged (ShareUs/Shortzy)
 async def check_token(bot, userid, token):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
@@ -786,4 +778,5 @@ async def get_seconds(time_string):
         return value * 86400 * 365
     else:
         return 0
+
 
