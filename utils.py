@@ -489,6 +489,7 @@ async def get_verify_shorted_link(link, url, api):
     """Shorten verification link – now with custom ShrinkMe support (GET method)."""
     API = api
     URL = url.lower().strip() # Normalize URL
+    logger.info(f"[DEBUG] Shortening verify: URL='{URL}', contains shrinkme? {'shrinkme.io' in URL}, Link='{link[:50]}...', API len={len(API)}")
     if "shrinkme.io" in URL:
         # Custom GET for ShrinkMe (query params, no POST/form-data)
         api_url = "https://shrinkme.io/api"
@@ -785,3 +786,4 @@ async def get_seconds(time_string):
         return value * 86400 * 365
     else:
         return 0
+
