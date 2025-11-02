@@ -20,7 +20,10 @@ from urllib.parse import quote  # For URL encoding
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 join_db = JoinReqs
+
+# Fixed regex (removed $$$$ junk)
 BTN_URL_REGEX = re.compile(r"(\[([^\[]+?)\]\((buttonurl|buttonalert):(?:/{0,2})(.+?)(:same)?\))")
+
 imdb = Cinemagoer()
 TOKENS = {}
 VERIFIED = {}
@@ -30,6 +33,7 @@ SMART_OPEN = '“'
 SMART_CLOSE = '”'
 START_CHAR = ('\'', '"', SMART_OPEN)
 
+# temp db for banned
 class temp(object):
     BANNED_USERS = []
     BANNED_CHATS = []
@@ -45,8 +49,6 @@ class temp(object):
     SETTINGS = {}
     IMDB_CAP = {}
 
-
-# ================== [UTILITY FUNCTIONS] ==================
 
 async def pub_is_subscribed(bot, query, channel):
     btn = []
@@ -328,7 +330,7 @@ def split_quotes(text: str) -> List:
             break
         counter += 1
     else:
-        return text.split(None, 1)
+        return text.split(None,f 1)
     key = remove_escapes(text[1:counter].strip())
     rest = text[counter + 1:].strip()
     if not key:
@@ -506,68 +508,67 @@ async def get_tutorial(chat_id):
 # ================== [INDIAEARNX VERIFICATION SHORTENER] ==================
 
 async def get_verify_shorted_link(link, url, api):
-    """Shorten verification link using IndiaEarnX API (GET method)."""
+    """Shorten verification link – supports IndiaEarnX & ShrinkMe (GET method)."""
     API = api
     URL = url.lower().strip()
     logger.info(f"[VERIFY] Using API: {API[-6:]}... URL: {URL}")
 
+    # === INDIAEARNX ===
     if "indiaearnx.com" in URL:
         api_url = "https://indiaearnx.com/api"
-        params = {
-            "api": API,
-            "url": quote(link)
-        }
+        params = {"api": API, "url": quote(link)}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, params=params) as response:
-                    logger.info(f"[DEBUG] IndiaEarnX response status: {response.status}")
+                    logger.info(f"[DEBUG] IndiaEarnX status: {response.status}")
                     if response.status == 200:
                         result = await response.json()
                         logger.info(f"[DEBUG] IndiaEarnX JSON: {result}")
-                        if result.get("status") == "success":
-                            shortened = result.get("shortenedUrl")
-                            if shortened:
-                                logger.info(f"[DEBUG] Shortened URL: {shortened}")
-                                return shortened
-                        else:
-                            logger.warning(f"[DEBUG] Status not 'success': {result.get('status')}")
-                    else:
-                        text = await response.text()
-                        logger.warning(f"[DEBUG] Non-200: {response.status}, Body: {text[:200]}...")
+                        if result.get("status") == "success" and result.get("shortenedUrl"):
+                            return result["shortenedUrl"]
         except Exception as e:
-            logger.error(f"Error with IndiaEarnX: {e}")
-        logger.warning("[DEBUG] Falling back to direct link")
+            logger.error(f"IndiaEarnX error: {e}")
         return link
 
-    # Fallback: ShareUs or Shortzy
+    # === SHRINKME (Legacy) ===
+    if "shrinkme.io" in URL:
+        api_url = "https://shrinkme.io/api"
+        params = {"api": API, "url": quote(link)}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, params=params) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if result.get("status") == "success" and result.get("shortenedUrl"):
+                            return result["shortenedUrl"]
+        except Exception as e:
+            logger.error(f"ShrinkMe error: {e}")
+        return link
+
+    logger.warning(f"[VERIFY] No shortener matched: {URL}")
     return link
 
 
 # ================== [INDIAEARNX FILE SHORTENER] ==================
 
 async def shorten_with_indiaearnx(link):
-    """Shorten file link using IndiaEarnX API (GET method)."""
+    """Shorten file link using IndiaEarnX API."""
     api_key = VERIFY_SHORTLINK_API
     if not api_key:
-        logger.warning("VERIFY_SHORTLINK_API not set, returning original link.")
+        logger.warning("VERIFY_SHORTLINK_API not set.")
         return link
     api_url = "https://indiaearnx.com/api"
-    params = {
-        "api": api_key,
-        "url": quote(link)
-    }
+    params = {"api": api_key, "url": quote(link)}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(api_url, params=params) as response:
                 if response.status == 200:
                     result = await response.json()
-                    if result.get("status") == "success":
-                        shortened = result.get("shortenedUrl")
-                        if shortened:
-                            return shortened
+                    if result.get("status") == "success" and result.get("shortenedUrl"):
+                        return result["shortenedUrl"]
     except Exception as e:
-        logger.error(f"Error shortening file with IndiaEarnX: {e}")
-    return link  # Fallback
+        logger.error(f"IndiaEarnX file shorten error: {e}")
+    return link
 
 
 # ================== [VERIFICATION & TOKEN SYSTEM] ==================
@@ -639,11 +640,10 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
                     shortened_link = await shorten_with_indiaearnx(file_link)
                     await bot.send_message(
                         chat_id=userid,
-                        text=f"<b>Hᴇʏ ᴛʜᴇʀᴇ {user_name}\n\nSecure Link Generated!\n\nFile: {title}\nSize: {size}</b>",
+                        text=f"<b>Hey {user_name}\n\nFile: {title}\nSize: {size}</b>",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Download", url=shortened_link)]])
                     )
                 else:
-                    # Premium or no shortlink
                     f_caption = file.get("caption", title)
                     await bot.send_cached_media(
                         chat_id=userid,
@@ -656,7 +656,6 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
                         ])
                     )
         else:
-            # No shortlink enabled
             for file in files:
                 f_caption = file.get("caption", file["file_name"])
                 await bot.send_cached_media(
