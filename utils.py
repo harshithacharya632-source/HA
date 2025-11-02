@@ -30,7 +30,7 @@ BANNED = {}
 SECOND_SHORTENER = {}
 SMART_OPEN = '“'
 SMART_CLOSE = '”'
-START_CHAR = (''', '"', SMART_OPEN)
+START_CHAR = ("'", '"', SMART_OPEN)  # FIXED: Single quotes
 
 class temp(object):
     BANNED_USERS = []
@@ -332,7 +332,7 @@ def split_quotes(text: str) -> List:
         return text.split(None, 1)
     counter = 1
     while counter < len(text):
-        if text[counter] == "\":
+        if text[counter] == "\\":
             counter += 1
         elif text[counter] == text[0] or (text[0] == SMART_OPEN and text[counter] == SMART_CLOSE):
             break
@@ -357,7 +357,7 @@ def gfilterparser(text, keyword):
     for match in BTN_URL_REGEX.finditer(text):
         n_escapes = 0
         to_check = match.start(1) - 1
-        while to_check > 0 and text[to_check] == "\":
+        while to_check > 0 and text[to_check] == "\\":
             n_escapes += 1
             to_check -= 1
         if n_escapes % 2 == 0:
@@ -384,7 +384,7 @@ def gfilterparser(text, keyword):
             else:
                 buttons.append([InlineKeyboardButton(
                     text=match.group(2),
-                    url=match.group( 4).replace(" ", "")
+                    url=match.group(4).replace(" ", "")
                 )])
         else:
             note_data += text[prev:to_check]
@@ -408,7 +408,7 @@ def parser(text, keyword):
     for match in BTN_URL_REGEX.finditer(text):
         n_escapes = 0
         to_check = match.start(1) - 1
-        while to_check > 0 and text[to_check] == "\":
+        while to_check > 0 and text[to_check] == "\\":
             n_escapes += 1
             to_check -= 1
         if n_escapes % 2 == 0:
@@ -455,7 +455,7 @@ def remove_escapes(text: str) -> str:
         if is_escaped:
             res += text[counter]
             is_escaped = False
-        elif text[counter] == "\":
+        elif text[counter] == "\\":
             is_escaped = True
         else:
             res += text[counter]
@@ -519,41 +519,26 @@ async def get_tutorial(chat_id):
 # ================== [INDIAEARNX VERIFICATION SHORTENER] ==================
 
 async def get_verify_shorted_link(link, url, api):
-    """Shorten verification link – supports IndiaEarnX (GET method)."""
     API = api.strip()
     URL = url.lower().strip()
     logger.info(f"[VERIFY] Using API: {API[-6:]}... URL: {URL}")
-    logger.info(f"[DEBUG] Shortening verify: URL='{URL}', contains indiaearnx? {'indiaearnx.com' in URL}, Link='{link[:50]}...', API len={len(API)}")
 
     if "indiaearnx.com" in URL:
         api_url = "https://indiaearnx.com/api"
-        params = {
-            "api": API,
-            "url": quote(link)
-        }
+        params = {"api": API, "url": quote(link)}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, params=params) as response:
-                    logger.info(f"[INDIAEARNX] Status: {response.status}")
                     if response.status == 200:
                         result = await response.json()
-                        logger.info(f"[INDIAEARNX] JSON: {result}")
                         if result.get("status") == "success":
                             shortened = result.get("shortenedUrl")
                             if shortened:
-                                shortened = shortened.replace("\\/", "/")  # Fix escaped slashes
+                                shortened = shortened.replace("\\/", "/")
                                 logger.info(f"[INDIAEARNX] Shortened: {shortened}")
                                 return shortened
-                            else:
-                                logger.warning("[INDIAEARNX] Shortened URL is empty/None")
-                        else:
-                            logger.warning(f"[INDIAEARNX] Status not 'success': {result.get('status')}")
-                    else:
-                        text = await response.text()
-                        logger.warning(f"[INDIAEARNX] Non-200 status: {response.status}, Body: {text[:200]}...")
         except Exception as e:
-            logger.error(f"Error shortening verification with IndiaEarnX: {e}")
-        logger.warning("[INDIAEARNX] Falling back to direct link")
+            logger.error(f"IndiaEarnX error: {e}")
         return link
     else:
         return link
@@ -627,16 +612,11 @@ async def check_verification(bot, userid):
 # ================== [FILE SHORTENER — INDIAEARNX] ==================
 
 async def shorten_with_shrinkme(link):
-    """Shorten URL using IndiaEarnX API (GET method) for file access."""
     api_key = VERIFY_SHORTLINK_API
     if not api_key:
-        logger.warning("VERIFY_SHORTLINK_API not set, returning original link.")
         return link
     api_url = "https://indiaearnx.com/api"
-    params = {
-        "api": api_key,
-        "url": quote(link)
-    }
+    params = {"api": api_key, "url": quote(link)}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(api_url, params=params) as response:
@@ -647,7 +627,7 @@ async def shorten_with_shrinkme(link):
                         if shortened:
                             return shortened.replace("\\/", "/")
     except Exception as e:
-        logger.error(f"Error shortening with IndiaEarnX: {e}")
+        logger.error(f"IndiaEarnX file error: {e}")
     return link
 
 
