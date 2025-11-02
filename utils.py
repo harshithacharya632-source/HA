@@ -15,6 +15,7 @@ from database.users_chats_db import db
 from database.join_reqs import JoinReqs
 from bs4 import BeautifulSoup
 from shortzy import Shortzy
+from urllib.parse import quote  # NEW: For URL encoding
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 join_db = JoinReqs
@@ -197,7 +198,7 @@ async def broadcast_messages_group(chat_id, message):
         return await broadcast_messages_group(chat_id, message)
     except Exception as e:
         return False, "Error"
-   
+  
 async def search_gagala(text):
     usr_agent = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -213,12 +214,12 @@ async def search_gagala(text):
 async def get_settings(group_id):
     settings = await db.get_settings(group_id)
     return settings
-   
+  
 async def save_group_settings(group_id, key, value):
     current = await get_settings(group_id)
     current.update({key: value})
     await db.update_settings(group_id, current)
-   
+  
 def get_size(size):
     units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
     size = float(size)
@@ -449,7 +450,7 @@ async def get_clone_shortlink(link, url, api):
     shortzy = Shortzy(api_key=api, base_site=url)
     link = await shortzy.convert(link)
     return link
-                          
+                         
 async def get_shortlink(chat_id, link):
     settings = await get_settings(chat_id) #fetching settings for group
     if 'shortlink' in settings.keys():
@@ -479,33 +480,34 @@ async def get_shortlink(chat_id, link):
         shortzy = Shortzy(api_key=API, base_site=URL)
         link = await shortzy.convert(link)
         return link
-   
+  
 async def get_tutorial(chat_id):
     settings = await get_settings(chat_id) #fetching settings for group
     return settings['tutorial']
-       
+      
 async def get_verify_shorted_link(link, url, api):
-    """Shorten verification link – now with custom ShrinkMe support."""
+    """Shorten verification link – now with custom ShrinkMe support (GET method)."""
     API = api
-    URL = url.lower().strip()  # Normalize URL
+    URL = url.lower().strip() # Normalize URL
     if "shrinkme.io" in URL:
-        # Custom direct POST for ShrinkMe (bypasses Shortzy, uses your token)
+        # Custom GET for ShrinkMe (query params, no POST/form-data)
         api_url = "https://shrinkme.io/api"
-        form_data = aiohttp.FormData()
-        form_data.add_field("api", API)
-        form_data.add_field("url", link)
+        params = {
+            "api": API,
+            "url": quote(link)  # URL-encode the link
+        }
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(api_url, data=form_data) as response:
+                async with session.get(api_url, params=params) as response:
                     if response.status == 200:
-                        result = await response.json(content_type=None)
+                        result = await response.json()
                         if result.get("status") == "success":
                             shortened = result.get("shortenedUrl")
                             if shortened:
                                 return shortened
         except Exception as e:
             logger.error(f"Error shortening verification with ShrinkMe: {e}")
-        return link  # Fallback
+        return link # Fallback
     elif URL == "api.shareus.io":
         url = f'https://{URL}/easy_api'
         params = {
@@ -525,7 +527,7 @@ async def get_verify_shorted_link(link, url, api):
         shortzy = Shortzy(api_key=API, base_site=URL)
         link = await shortzy.convert(link)
         return link
-       
+      
 async def check_token(bot, userid, token):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
@@ -582,22 +584,23 @@ async def check_verification(bot, userid):
     else:
         return False
 
-# NEW FUNCTION FOR SHRINKME INTEGRATION (reuses existing VERIFY_SHORTLINK_API for file links)
+# FIXED: ShrinkMe for file links (now GET method)
 async def shorten_with_shrinkme(link):
-    """Shorten URL using ShrinkMe API (your token: 175a9da92b79af75bf3120f9feee208af8905620) for ad verification before file access."""
+    """Shorten URL using ShrinkMe API (GET method) for ad verification before file access."""
     api_key = VERIFY_SHORTLINK_API
     if not api_key:
         logger.warning("VERIFY_SHORTLINK_API not set, returning original link.")
         return link
     api_url = "https://shrinkme.io/api"
-    form_data = aiohttp.FormData()
-    form_data.add_field("api", api_key)
-    form_data.add_field("url", link)
+    params = {
+        "api": api_key,
+        "url": quote(link)  # URL-encode the link
+    }
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(api_url, data=form_data) as response:
+            async with session.get(api_url, params=params) as response:
                 if response.status == 200:
-                    result = await response.json(content_type=None)
+                    result = await response.json()
                     if result.get("status") == "success":
                         shortened = result.get("shortenedUrl")
                         if shortened:
@@ -605,7 +608,7 @@ async def shorten_with_shrinkme(link):
     except Exception as e:
         logger.error(f"Error shortening with ShrinkMe: {e}")
     return link  # Fallback to original link on failure
-   
+  
 async def send_all(bot, userid, files, ident, chat_id, user_name, query):
     settings = await get_settings(chat_id)
     if 'is_shortlink' in settings.keys():
@@ -620,7 +623,7 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
                 size = get_size(file["file_size"])
                 if not await db.has_premium_access(userid) and SHORTLINK_MODE == True:
                     file_link = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
-                    shortened_link = await shorten_with_shrinkme(file_link)  # CHANGED: Use ShrinkMe for file verification
+                    shortened_link = await shorten_with_shrinkme(file_link) # FIXED: Now uses correct GET
                     await bot.send_message(chat_id=userid, text=f"<b>Hᴇʏ ᴛʜᴇʀᴇ {user_name} 👋🏽 \n\n✅ Sᴇᴄᴜʀᴇ ʟɪɴᴋ ᴛᴏ ʏᴏᴜʀ ғɪʟᴇ ʜᴀs sᴜᴄᴄᴇssғᴜʟʟʏ ʙᴇᴇɴ ɢᴇɴᴇʀᴀᴛᴇᴅ ᴘʟᴇᴀsᴇ ᴄʟɪᴄᴋ ᴅᴏᴡɴʟᴏᴀᴅ ʙᴜᴛᴛᴏɴ\n\n🗃️ Fɪʟᴇ Nᴀᴍᴇ : {title}\n🔖 Fɪʟᴇ Sɪᴢᴇ : {size}</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Dᴏᴡɴʟᴏᴀᴅ 📥", url=shortened_link)]]))
                 else:
                     f_caption = file["caption"]
@@ -689,23 +692,23 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
         await query.answer('Hᴇʏ, Sᴛᴀʀᴛ Bᴏᴛ Fɪʀsᴛ Aɴᴅ Cʟɪᴄᴋ Sᴇɴᴅ Aʟʟ', show_alert=True)
     except Exception as e:
         await query.answer('Hᴇʏ, Sᴛᴀʀᴛ Bᴏᴛ Fɪʀsᴛ Aɴᴅ Cʟɪᴄᴋ Sᴇɴᴅ Aʟʟ', show_alert=True)
-       
+      
 async def get_cap(settings, remaining_seconds, files, query, total_results, search):
     # NEW: Generate shortened links for all files using ShrinkMe
     short_links = {}
-    chat_id = query.message.chat.id  # Get chat_id from query
+    chat_id = query.message.chat.id # Get chat_id from query
     for file in files:
         orig_link = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
         shortened = await shorten_with_shrinkme(orig_link)
         short_links[file['file_id']] = shortened
-    
+   
     if settings["imdb"]:
         IMDB_CAP = temp.IMDB_CAP.get(query.from_user.id)
         if IMDB_CAP:
             cap = IMDB_CAP
             cap+="<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n\n"
             for file in files:
-                cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"  # CHANGED: Use ShrinkMe short_links
+                cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>" # CHANGED: Use ShrinkMe short_links
         else:
             imdb = await get_poster(search, file=(files[0])["file_name"]) if settings["imdb"] else None
             if imdb:
@@ -743,17 +746,17 @@ async def get_cap(settings, remaining_seconds, files, query, total_results, sear
                 )
                 cap+="<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n\n"
                 for file in files:
-                    cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"  # CHANGED: Use ShrinkMe short_links
+                    cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>" # CHANGED: Use ShrinkMe short_links
             else:
                 cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {query.from_user.mention}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {query.message.chat.title}\n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
                 cap+="<b><u>🍿 Your Movie Files 👇</u></b>\n\n"
                 for file in files:
-                    cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"  # CHANGED: Use ShrinkMe short_links
+                    cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>" # CHANGED: Use ShrinkMe short_links
     else:
         cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {query.from_user.mention}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {query.message.chat.title} \n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
         cap+="<b><u>🍿 Your Movie Files 👇</u></b>\n\n"
         for file in files:
-            cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"  # CHANGED: Use ShrinkMe short_links
+            cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>" # CHANGED: Use ShrinkMe short_links
     return cap
 async def get_seconds(time_string):
     def extract_value_and_unit(ts):
