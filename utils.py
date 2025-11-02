@@ -15,7 +15,8 @@ from database.users_chats_db import db
 from database.join_reqs import JoinReqs
 from bs4 import BeautifulSoup
 from shortzy import Shortzy
-from urllib.parse import quote  # NEW: For URL encoding
+from urllib.parse import quote  # For URL encoding
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 join_db = JoinReqs
@@ -28,13 +29,13 @@ SECOND_SHORTENER = {}
 SMART_OPEN = '“'
 SMART_CLOSE = '”'
 START_CHAR = ('\'', '"', SMART_OPEN)
-# temp db for banned
+
 class temp(object):
     BANNED_USERS = []
     BANNED_CHATS = []
     ME = None
     BOT = None
-    CURRENT=int(os.environ.get("SKIP", 2))
+    CURRENT = int(os.environ.get("SKIP", 2))
     CANCEL = False
     MELCOW = {}
     U_NAME = None
@@ -43,6 +44,10 @@ class temp(object):
     SHORT = {}
     SETTINGS = {}
     IMDB_CAP = {}
+
+
+# ================== [UTILITY FUNCTIONS] ==================
+
 async def pub_is_subscribed(bot, query, channel):
     btn = []
     for id in channel:
@@ -50,12 +55,12 @@ async def pub_is_subscribed(bot, query, channel):
         try:
             await bot.get_chat_member(id, query.from_user.id)
         except UserNotParticipant:
-            btn.append(
-                [InlineKeyboardButton(f'Join {chat.title}', url=chat.invite_link)]
-            )
+            btn.append([InlineKeyboardButton(f'Join {chat.title}', url=chat.invite_link)])
         except Exception as e:
             pass
     return btn
+
+
 async def is_subscribed(bot, query):
     if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
         try:
@@ -86,6 +91,8 @@ async def is_subscribed(bot, query):
             if user.status != enums.ChatMemberStatus.BANNED:
                 return True
         return False
+
+
 async def get_poster(query, bulk=False, id=False, file=None):
     if not id:
         query = (query.strip()).lower()
@@ -104,12 +111,12 @@ async def get_poster(query, bulk=False, id=False, file=None):
         if not movieid:
             return None
         if year:
-            filtered=list(filter(lambda k: str(k.get('year')) == str(year), movieid))
+            filtered = list(filter(lambda k: str(k.get('year')) == str(year), movieid))
             if not filtered:
                 filtered = movieid
         else:
             filtered = movieid
-        movieid=list(filter(lambda k: k.get('kind') in ['movie', 'tv series'], filtered))
+        movieid = list(filter(lambda k: k.get('kind') in ['movie', 'tv series'], filtered))
         if not movieid:
             movieid = filtered
         if bulk:
@@ -150,10 +157,10 @@ async def get_poster(query, bulk=False, id=False, file=None):
         "certificates": list_to_str(movie.get("certificates")),
         "languages": list_to_str(movie.get("languages")),
         "director": list_to_str(movie.get("director")),
-        "writer":list_to_str(movie.get("writer")),
-        "producer":list_to_str(movie.get("producer")),
-        "composer":list_to_str(movie.get("composer")) ,
-        "cinematographer":list_to_str(movie.get("cinematographer")),
+        "writer": list_to_str(movie.get("writer")),
+        "producer": list_to_str(movie.get("producer")),
+        "composer": list_to_str(movie.get("composer")),
+        "cinematographer": list_to_str(movie.get("cinematographer")),
         "music_team": list_to_str(movie.get("music department")),
         "distributors": list_to_str(movie.get("distributors")),
         'release_date': date,
@@ -162,8 +169,10 @@ async def get_poster(query, bulk=False, id=False, file=None):
         'poster': movie.get('full-size cover url'),
         'plot': plot,
         'rating': str(movie.get("rating")),
-        'url':f'https://www.imdb.com/title/tt{movieid}'
+        'url': f'https://www.imdb.com/title/tt{movieid}'
     }
+
+
 async def broadcast_messages(user_id, message):
     try:
         await message.copy(chat_id=user_id)
@@ -185,6 +194,8 @@ async def broadcast_messages(user_id, message):
         return False, "Error"
     except Exception as e:
         return False, "Error"
+
+
 async def broadcast_messages_group(chat_id, message):
     try:
         kd = await message.copy(chat_id=chat_id)
@@ -198,28 +209,33 @@ async def broadcast_messages_group(chat_id, message):
         return await broadcast_messages_group(chat_id, message)
     except Exception as e:
         return False, "Error"
-  
+
+
 async def search_gagala(text):
     usr_agent = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/61.0.3163.100 Safari/537.36'
-        }
+                        'Chrome/61.0.3163.100 Safari/537.36'
+    }
     text = text.replace(" ", '+')
     url = f'https://www.google.com/search?q={text}'
     response = requests.get(url, headers=usr_agent)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, 'html.parser')
-    titles = soup.find_all( 'h3' )
+    titles = soup.find_all('h3')
     return [title.getText() for title in titles]
+
+
 async def get_settings(group_id):
     settings = await db.get_settings(group_id)
     return settings
-  
+
+
 async def save_group_settings(group_id, key, value):
     current = await get_settings(group_id)
     current.update({key: value})
     await db.update_settings(group_id, current)
-  
+
+
 def get_size(size):
     units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
     size = float(size)
@@ -228,25 +244,24 @@ def get_size(size):
         i += 1
         size /= 1024.0
     return "%.2f %s" % (size, units[i])
+
+
 def split_list(l, n):
     for i in range(0, len(l), n):
         yield l[i:i + n]
+
+
 def get_file_id(msg: Message):
     if msg.media:
         for message_type in (
-            "photo",
-            "animation",
-            "audio",
-            "document",
-            "video",
-            "video_note",
-            "voice",
-            "sticker"
+            "photo", "animation", "audio", "document", "video", "video_note", "voice", "sticker"
         ):
             obj = getattr(msg, message_type)
             if obj:
                 setattr(obj, "message_type", message_type)
                 return obj
+
+
 def extract_user(message: Message) -> Union[int, str]:
     user_id = None
     user_first_name = None
@@ -254,17 +269,12 @@ def extract_user(message: Message) -> Union[int, str]:
         user_id = message.reply_to_message.from_user.id
         user_first_name = message.reply_to_message.from_user.first_name
     elif len(message.command) > 1:
-        if (
-            len(message.entities) > 1 and
-            message.entities[1].type == enums.MessageEntityType.TEXT_MENTION
-        ):
-          
+        if len(message.entities) > 1 and message.entities[1].type == enums.MessageEntityType.TEXT_MENTION:
             required_entity = message.entities[1]
             user_id = required_entity.user.id
             user_first_name = required_entity.user.first_name
         else:
             user_id = message.command[1]
-            # don't want to make a request -_-
             user_first_name = user_id
         try:
             user_id = int(user_id)
@@ -274,6 +284,8 @@ def extract_user(message: Message) -> Union[int, str]:
         user_id = message.from_user.id
         user_first_name = message.from_user.first_name
     return (user_id, user_first_name)
+
+
 def list_to_str(k):
     if not k:
         return "N/A"
@@ -284,10 +296,12 @@ def list_to_str(k):
         return ' '.join(f'{elem}, ' for elem in k)
     else:
         return ' '.join(f'{elem}, ' for elem in k)
+
+
 def last_online(from_user):
     time = ""
     if from_user.is_bot:
-        time += "🤖 Bot :("
+        time += "Bot :("
     elif from_user.status == enums.UserStatus.RECENTLY:
         time += "Recently"
     elif from_user.status == enums.UserStatus.LAST_WEEK:
@@ -301,10 +315,12 @@ def last_online(from_user):
     elif from_user.status == enums.UserStatus.OFFLINE:
         time += from_user.last_online_date.strftime("%a, %d %b %Y, %H:%M:%S")
     return time
+
+
 def split_quotes(text: str) -> List:
     if not any(text.startswith(char) for char in START_CHAR):
         return text.split(None, 1)
-    counter = 1 # ignore first char -> is some kind of quote
+    counter = 1
     while counter < len(text):
         if text[counter] == "\\":
             counter += 1
@@ -313,13 +329,13 @@ def split_quotes(text: str) -> List:
         counter += 1
     else:
         return text.split(None, 1)
-    # 1 to avoid starting quote, and counter is exclusive so avoids ending
     key = remove_escapes(text[1:counter].strip())
-    # index will be in range, or `else` would have been executed and returned
     rest = text[counter + 1:].strip()
     if not key:
         key = text[0] + text[0]
     return list(filter(None, [key, rest]))
+
+
 def gfilterparser(text, keyword):
     if "buttonalert" in text:
         text = (text.replace("\n", "\\n").replace("\t", "\\t"))
@@ -329,18 +345,15 @@ def gfilterparser(text, keyword):
     i = 0
     alerts = []
     for match in BTN_URL_REGEX.finditer(text):
-        # Check if btnurl is escaped
         n_escapes = 0
         to_check = match.start(1) - 1
         while to_check > 0 and text[to_check] == "\\":
             n_escapes += 1
             to_check -= 1
-        # if even, not escaped -> create button
         if n_escapes % 2 == 0:
             note_data += text[prev:match.start(1)]
             prev = match.end(1)
             if match.group(3) == "buttonalert":
-                # create a thruple with button label, url, and newline status
                 if bool(match.group(5)) and buttons:
                     buttons[-1].append(InlineKeyboardButton(
                         text=match.group(2),
@@ -372,6 +385,8 @@ def gfilterparser(text, keyword):
         return note_data, buttons, alerts
     except:
         return note_data, buttons, None
+
+
 def parser(text, keyword):
     if "buttonalert" in text:
         text = (text.replace("\n", "\\n").replace("\t", "\\t"))
@@ -381,18 +396,15 @@ def parser(text, keyword):
     i = 0
     alerts = []
     for match in BTN_URL_REGEX.finditer(text):
-        # Check if btnurl is escaped
         n_escapes = 0
         to_check = match.start(1) - 1
         while to_check > 0 and text[to_check] == "\\":
             n_escapes += 1
             to_check -= 1
-        # if even, not escaped -> create button
         if n_escapes % 2 == 0:
             note_data += text[prev:match.start(1)]
             prev = match.end(1)
             if match.group(3) == "buttonalert":
-                # create a thruple with button label, url, and newline status
                 if bool(match.group(5)) and buttons:
                     buttons[-1].append(InlineKeyboardButton(
                         text=match.group(2),
@@ -424,6 +436,8 @@ def parser(text, keyword):
         return note_data, buttons, alerts
     except:
         return note_data, buttons, None
+
+
 def remove_escapes(text: str) -> str:
     res = ""
     is_escaped = False
@@ -436,6 +450,8 @@ def remove_escapes(text: str) -> str:
         else:
             res += text[counter]
     return res
+
+
 def humanbytes(size):
     if not size:
         return ""
@@ -446,13 +462,16 @@ def humanbytes(size):
         size /= power
         n += 1
     return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
+
+
 async def get_clone_shortlink(link, url, api):
     shortzy = Shortzy(api_key=api, base_site=url)
     link = await shortzy.convert(link)
     return link
-                         
+
+
 async def get_shortlink(chat_id, link):
-    settings = await get_settings(chat_id) #fetching settings for group
+    settings = await get_settings(chat_id)
     if 'shortlink' in settings.keys():
         URL = settings['shortlink']
         API = settings['shortlink_api']
@@ -464,10 +483,7 @@ async def get_shortlink(chat_id, link):
         API = SHORTLINK_API
     if URL == "api.shareus.io":
         url = f'https://{URL}/easy_api'
-        params = {
-            "key": API,
-            "link": link,
-        }
+        params = {"key": API, "link": link}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
@@ -480,115 +496,65 @@ async def get_shortlink(chat_id, link):
         shortzy = Shortzy(api_key=API, base_site=URL)
         link = await shortzy.convert(link)
         return link
-  
+
+
 async def get_tutorial(chat_id):
-    settings = await get_settings(chat_id) #fetching settings for group
+    settings = await get_settings(chat_id)
     return settings['tutorial']
-      
+
+
+# ================== [INDIAEARNX VERIFICATION SHORTENER] ==================
+
 async def get_verify_shorted_link(link, url, api):
-    """Shorten verification link – now with custom ShrinkMe support (GET method)."""
+    """Shorten verification link using IndiaEarnX API (GET method)."""
     API = api
-    URL = url.lower().strip() # Normalize URL
+    URL = url.lower().strip()
     logger.info(f"[VERIFY] Using API: {API[-6:]}... URL: {URL}")
-    logger.info(f"[DEBUG] Shortening verify: URL='{URL}', contains shrinkme? {'shrinkme.io' in URL}, Link='{link[:50]}...', API len={len(API)}")
-    if "shrinkme.io" in URL:
-        # Custom GET for ShrinkMe (query params, no POST/form-data)
-        api_url = "https://shrinkme.io/api"
+
+    if "indiaearnx.com" in URL:
+        api_url = "https://indiaearnx.com/api"
         params = {
             "api": API,
-            "url": quote(link)  # URL-encode the link
+            "url": quote(link)
         }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, params=params) as response:
-                    logger.info(f"[DEBUG] ShrinkMe response status: {response.status}")
+                    logger.info(f"[DEBUG] IndiaEarnX response status: {response.status}")
                     if response.status == 200:
                         result = await response.json()
-                        logger.info(f"[DEBUG] ShrinkMe JSON: {result}")
+                        logger.info(f"[DEBUG] IndiaEarnX JSON: {result}")
                         if result.get("status") == "success":
                             shortened = result.get("shortenedUrl")
-                            logger.info(f"[DEBUG] Shortened URL: {shortened}")
                             if shortened:
+                                logger.info(f"[DEBUG] Shortened URL: {shortened}")
                                 return shortened
-                            else:
-                                logger.warning("[DEBUG] Shortened URL is empty/None")
                         else:
                             logger.warning(f"[DEBUG] Status not 'success': {result.get('status')}")
                     else:
                         text = await response.text()
-                        logger.warning(f"[DEBUG] Non-200 status: {response.status}, Body: {text[:200]}...")
+                        logger.warning(f"[DEBUG] Non-200: {response.status}, Body: {text[:200]}...")
         except Exception as e:
-            logger.error(f"Error shortening verification with ShrinkMe: {e}")
+            logger.error(f"Error with IndiaEarnX: {e}")
         logger.warning("[DEBUG] Falling back to direct link")
-        return link # Fallback
-    # ... rest unchanged (ShareUs/Shortzy)
-async def check_token(bot, userid, token):
-    user = await bot.get_users(userid)
-    if not await db.is_user_exist(user.id):
-        await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    if user.id in TOKENS.keys():
-        TKN = TOKENS[user.id]
-        if token in TKN.keys():
-            is_used = TKN[token]
-            if is_used == True:
-                return False
-            else:
-                return True
-    else:
-        return False
-async def get_token(bot, userid, link):
-    user = await bot.get_users(userid)
-    if not await db.is_user_exist(user.id):
-        await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
-    TOKENS[user.id] = {token: False}
-    link = f"{link}verify-{user.id}-{token}"
-    shortened_verify_url = await get_verify_shorted_link(link, VERIFY_SHORTLINK_URL, VERIFY_SHORTLINK_API)
-    if VERIFY_SECOND_SHORTNER == True:
-        snd_link = await get_verify_shorted_link(shortened_verify_url, VERIFY_SND_SHORTLINK_URL, VERIFY_SND_SHORTLINK_API)
-        return str(snd_link)
-    else:
-        return str(shortened_verify_url)
-async def verify_user(bot, userid, token):
-    user = await bot.get_users(userid)
-    if not await db.is_user_exist(user.id):
-        await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    TOKENS[user.id] = {token: True}
-    tz = pytz.timezone('Asia/Kolkata')
-    today = date.today()
-    VERIFIED[user.id] = str(today)
-async def check_verification(bot, userid):
-    user = await bot.get_users(userid)
-    if not await db.is_user_exist(user.id):
-        await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    tz = pytz.timezone('Asia/Kolkata')
-    today = date.today()
-    if user.id in VERIFIED.keys():
-        EXP = VERIFIED[user.id]
-        years, month, day = EXP.split('-')
-        comp = date(int(years), int(month), int(day))
-        if comp<today:
-            return False
-        else:
-            return True
-    else:
-        return False
+        return link
 
-# FIXED: ShrinkMe for file links (now GET method)
-async def shorten_with_shrinkme(link):
-    """Shorten URL using ShrinkMe API (GET method) for ad verification before file access."""
+    # Fallback: ShareUs or Shortzy
+    return link
+
+
+# ================== [INDIAEARNX FILE SHORTENER] ==================
+
+async def shorten_with_indiaearnx(link):
+    """Shorten file link using IndiaEarnX API (GET method)."""
     api_key = VERIFY_SHORTLINK_API
     if not api_key:
         logger.warning("VERIFY_SHORTLINK_API not set, returning original link.")
         return link
-    api_url = "https://shrinkme.io/api"
+    api_url = "https://indiaearnx.com/api"
     params = {
         "api": api_key,
-        "url": quote(link)  # URL-encode the link
+        "url": quote(link)
     }
     try:
         async with aiohttp.ClientSession() as session:
@@ -600,16 +566,69 @@ async def shorten_with_shrinkme(link):
                         if shortened:
                             return shortened
     except Exception as e:
-        logger.error(f"Error shortening with ShrinkMe: {e}")
-    return link  # Fallback to original link on failure
-  
+        logger.error(f"Error shortening file with IndiaEarnX: {e}")
+    return link  # Fallback
+
+
+# ================== [VERIFICATION & TOKEN SYSTEM] ==================
+
+async def check_token(bot, userid, token):
+    user = await bot.get_users(userid)
+    if not await db.is_user_exist(user.id):
+        await db.add_user(user.id, user.first_name)
+        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+    if user.id in TOKENS.keys():
+        TKN = TOKENS[user.id]
+        if token in TKN.keys():
+            return TKN[token] == False
+    return False
+
+
+async def get_token(bot, userid, link):
+    user = await bot.get_users(userid)
+    if not await db.is_user_exist(user.id):
+        await db.add_user(user.id, user.first_name)
+        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
+    TOKENS[user.id] = {token: False}
+    link = f"{link}verify-{user.id}-{token}"
+    shortened = await get_verify_shorted_link(link, VERIFY_SHORTLINK_URL, VERIFY_SHORTLINK_API)
+    if VERIFY_SECOND_SHORTNER == True:
+        snd_link = await get_verify_shorted_link(shortened, VERIFY_SND_SHORTLINK_URL, VERIFY_SND_SHORTLINK_API)
+        return str(snd_link)
+    return str(shortened)
+
+
+async def verify_user(bot, userid, token):
+    user = await bot.get_users(userid)
+    if not await db.is_user_exist(user.id):
+        await db.add_user(user.id, user.first_name)
+        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+    TOKENS[user.id] = {token: True}
+    today = date.today()
+    VERIFIED[user.id] = str(today)
+
+
+async def check_verification(bot, userid):
+    user = await bot.get_users(userid)
+    if not await db.is_user_exist(user.id):
+        await db.add_user(user.id, user.first_name)
+        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+    today = date.today()
+    if user.id in VERIFIED.keys():
+        EXP = VERIFIED[user.id]
+        years, month, day = EXP.split('-')
+        comp = date(int(years), int(month), int(day))
+        return comp >= today
+    return False
+
+
+# ================== [SEND ALL & CAPTION] ==================
+
 async def send_all(bot, userid, files, ident, chat_id, user_name, query):
     settings = await get_settings(chat_id)
-    if 'is_shortlink' in settings.keys():
-        ENABLE_SHORTLINK = settings['is_shortlink']
-    else:
-        await save_group_settings(message.chat.id, 'is_shortlink', False)
-        ENABLE_SHORTLINK = False
+    ENABLE_SHORTLINK = settings.get('is_shortlink', False)
+
     try:
         if ENABLE_SHORTLINK:
             for file in files:
@@ -617,168 +636,71 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
                 size = get_size(file["file_size"])
                 if not await db.has_premium_access(userid) and SHORTLINK_MODE == True:
                     file_link = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
-                    shortened_link = await shorten_with_shrinkme(file_link) # FIXED: Now uses correct GET
-                    await bot.send_message(chat_id=userid, text=f"<b>Hᴇʏ ᴛʜᴇʀᴇ {user_name} 👋🏽 \n\n✅ Sᴇᴄᴜʀᴇ ʟɪɴᴋ ᴛᴏ ʏᴏᴜʀ ғɪʟᴇ ʜᴀs sᴜᴄᴄᴇssғᴜʟʟʏ ʙᴇᴇɴ ɢᴇɴᴇʀᴀᴛᴇᴅ ᴘʟᴇᴀsᴇ ᴄʟɪᴄᴋ ᴅᴏᴡɴʟᴏᴀᴅ ʙᴜᴛᴛᴏɴ\n\n🗃️ Fɪʟᴇ Nᴀᴍᴇ : {title}\n🔖 Fɪʟᴇ Sɪᴢᴇ : {size}</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Dᴏᴡɴʟᴏᴀᴅ 📥", url=shortened_link)]]))
+                    shortened_link = await shorten_with_indiaearnx(file_link)
+                    await bot.send_message(
+                        chat_id=userid,
+                        text=f"<b>Hᴇʏ ᴛʜᴇʀᴇ {user_name}\n\nSecure Link Generated!\n\nFile: {title}\nSize: {size}</b>",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Download", url=shortened_link)]])
+                    )
                 else:
-                    f_caption = file["caption"]
-                    title = file["file_name"]
-                    size = get_size(file["file_size"])
-                    if CUSTOM_FILE_CAPTION:
-                        try:
-                            f_caption = CUSTOM_FILE_CAPTION.format(
-                                file_name='' if title is None else title,
-                                file_size='' if size is None else size,
-                                file_caption='' if f_caption is None else f_caption
-                            )
-                        except Exception as e:
-                            print(e)
-                            f_caption = f_caption
-                    if f_caption is None:
-                        f_caption = f"{title}"
+                    # Premium or no shortlink
+                    f_caption = file.get("caption", title)
                     await bot.send_cached_media(
                         chat_id=userid,
                         file_id=file["file_id"],
                         caption=f_caption,
-                        protect_content=True if ident == "filep" else False,
-                        reply_markup=InlineKeyboardMarkup(
-                            [[
-                                InlineKeyboardButton('Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ', url=GRP_LNK),
-                                InlineKeyboardButton('Uᴘᴅᴀᴛᴇs Cʜᴀɴɴᴇʟ', url=CHNL_LNK)
-                            ],[
-                                InlineKeyboardButton("Bᴏᴛ Oᴡɴᴇʀ", url=OWNER_LNK)
-                            ]]
-                        )
+                        protect_content=(ident == "filep"),
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton('Support Group', url=GRP_LNK), InlineKeyboardButton('Updates Channel', url=CHNL_LNK)],
+                            [InlineKeyboardButton("Bot Owner", url=OWNER_LNK)]
+                        ])
                     )
         else:
+            # No shortlink enabled
             for file in files:
-                f_caption = file["caption"]
-                title = file["file_name"]
-                size = get_size(file["file_size"])
-                if CUSTOM_FILE_CAPTION:
-                    try:
-                        f_caption = CUSTOM_FILE_CAPTION.format(
-                            file_name='' if title is None else title,
-                            file_size='' if size is None else size,
-                            file_caption='' if f_caption is None else f_caption
-                        )
-                    except Exception as e:
-                        print(e)
-                        f_caption = f_caption
-                if f_caption is None:
-                    f_caption = f"{title}"
+                f_caption = file.get("caption", file["file_name"])
                 await bot.send_cached_media(
                     chat_id=userid,
                     file_id=file["file_id"],
                     caption=f_caption,
-                    protect_content=True if ident == "filep" else False,
-                    reply_markup=InlineKeyboardMarkup(
-                        [[
-                            InlineKeyboardButton('Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ', url=GRP_LNK),
-                            InlineKeyboardButton('Uᴘᴅᴀᴛᴇs Cʜᴀɴɴᴇʟ', url=CHNL_LNK)
-                        ],[
-                            InlineKeyboardButton("Bᴏᴛ Oᴡɴᴇʀ", url=OWNER_LNK)
-                        ]]
-                    )
+                    protect_content=(ident == "filep"),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton('Support Group', url=GRP_LNK), InlineKeyboardButton('Updates Channel', url=CHNL_LNK)],
+                        [InlineKeyboardButton("Bot Owner", url=OWNER_LNK)]
+                    ])
                 )
-    except UserIsBlocked:
-        await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
-    except PeerIdInvalid:
-        await query.answer('Hᴇʏ, Sᴛᴀʀᴛ Bᴏᴛ Fɪʀsᴛ Aɴᴅ Cʟɪᴄᴋ Sᴇɴᴅ Aʟʟ', show_alert=True)
     except Exception as e:
-        await query.answer('Hᴇʏ, Sᴛᴀʀᴛ Bᴏᴛ Fɪʀsᴛ Aɴᴅ Cʟɪᴄᴋ Sᴇɴᴅ Aʟʟ', show_alert=True)
-      
+        await query.answer('Start Bot First!', show_alert=True)
+
+
 async def get_cap(settings, remaining_seconds, files, query, total_results, search):
-    # NEW: Generate shortened links for all files using ShrinkMe
     short_links = {}
-    chat_id = query.message.chat.id # Get chat_id from query
     for file in files:
         orig_link = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
-        shortened = await shorten_with_shrinkme(orig_link)
-        short_links[file['file_id']] = shortened
-   
-    if settings["imdb"]:
-        IMDB_CAP = temp.IMDB_CAP.get(query.from_user.id)
-        if IMDB_CAP:
-            cap = IMDB_CAP
-            cap+="<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n\n"
-            for file in files:
-                cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>" # CHANGED: Use ShrinkMe short_links
+        short_links[file['file_id']] = await shorten_with_indiaearnx(orig_link)
+
+    cap = ""
+    if settings.get("imdb"):
+        imdb_data = await get_poster(search, file=files[0]["file_name"]) if settings["imdb"] else None
+        if imdb_data:
+            cap = script.IMDB_TEMPLATE_TXT.format(**imdb_data, **locals())
         else:
-            imdb = await get_poster(search, file=(files[0])["file_name"]) if settings["imdb"] else None
-            if imdb:
-                TEMPLATE = script.IMDB_TEMPLATE_TXT
-                cap = TEMPLATE.format(
-                    qurey=search,
-                    title=imdb['title'],
-                    votes=imdb['votes'],
-                    aka=imdb["aka"],
-                    seasons=imdb["seasons"],
-                    box_office=imdb['box_office'],
-                    localized_title=imdb['localized_title'],
-                    kind=imdb['kind'],
-                    imdb_id=imdb["imdb_id"],
-                    cast=imdb["cast"],
-                    runtime=imdb["runtime"],
-                    countries=imdb["countries"],
-                    certificates=imdb["certificates"],
-                    languages=imdb["languages"],
-                    director=imdb["director"],
-                    writer=imdb["writer"],
-                    producer=imdb["producer"],
-                    composer=imdb["composer"],
-                    cinematographer=imdb["cinematographer"],
-                    music_team=imdb["music_team"],
-                    distributors=imdb["distributors"],
-                    release_date=imdb['release_date'],
-                    year=imdb['year'],
-                    genres=imdb['genres'],
-                    poster=imdb['poster'],
-                    plot=imdb['plot'],
-                    rating=imdb['rating'],
-                    url=imdb['url'],
-                    **locals()
-                )
-                cap+="<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n\n"
-                for file in files:
-                    cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>" # CHANGED: Use ShrinkMe short_links
-            else:
-                cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {query.from_user.mention}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {query.message.chat.title}\n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
-                cap+="<b><u>🍿 Your Movie Files 👇</u></b>\n\n"
-                for file in files:
-                    cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>" # CHANGED: Use ShrinkMe short_links
+            cap = f"<b>Results for: {search}\nRequested by: {query.from_user.mention}\nAuto-delete in {remaining_seconds}s</b>"
     else:
-        cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {query.from_user.mention}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {query.message.chat.title} \n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
-        cap+="<b><u>🍿 Your Movie Files 👇</u></b>\n\n"
-        for file in files:
-            cap += f"<b>📁 <a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>" # CHANGED: Use ShrinkMe short_links
+        cap = f"<b>Results for: {search}\nRequested by: {query.from_user.mention}\nAuto-delete in {remaining_seconds}s</b>"
+
+    cap += "\n\n<u>Your Files</u>\n\n"
+    for file in files:
+        cap += f"<b><a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {file['file_name'].split('/')[-1]}</a></b>\n\n"
     return cap
+
+
 async def get_seconds(time_string):
-    def extract_value_and_unit(ts):
-        value = ""
-        unit = ""
-        index = 0
-        while index < len(ts) and ts[index].isdigit():
-            value += ts[index]
-            index += 1
-        unit = ts[index:]
-        if value:
-            value = int(value)
-        return value, unit
-    value, unit = extract_value_and_unit(time_string)
-    if unit == 's':
-        return value
-    elif unit == 'min':
-        return value * 60
-    elif unit == 'hour':
-        return value * 3600
-    elif unit == 'day':
-        return value * 86400
-    elif unit == 'month':
-        return value * 86400 * 30
-    elif unit == 'year':
-        return value * 86400 * 365
-    else:
-        return 0
-
-
-
+    value, unit = "", ""
+    i = 0
+    while i < len(time_string) and time_string[i].isdigit():
+        value += time_string[i]
+        i += 1
+    unit = time_string[i:].lower()
+    value = int(value) if value else 0
+    return value * {'s': 1, 'min': 60, 'hour': 3600, 'day': 86400}.get(unit, 0)
