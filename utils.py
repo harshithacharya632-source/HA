@@ -1,7 +1,7 @@
 # Don't Remove Credit @VJ_Bots
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
-import logging, asyncio, os, re, random, pytz, aiohttp, requests, string, json, http.client
+import logging, asyncio, os, re, random, pytz, aiohttp, requests, string, json
 from info import *
 from imdb import Cinemagoer
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
@@ -15,25 +15,23 @@ from database.users_chats_db import db
 from database.join_reqs import JoinReqs
 from bs4 import BeautifulSoup
 from shortzy import Shortzy
-from urllib.parse import quote  # For URL encoding
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 join_db = JoinReqs
 
-# Fixed regex (removed $$$$ junk)
+# Fixed regex (your original had $$$$ — removed)
 BTN_URL_REGEX = re.compile(r"(\[([^\[]+?)\]\((buttonurl|buttonalert):(?:/{0,2})(.+?)(:same)?\))")
 
 imdb = Cinemagoer()
 TOKENS = {}
 VERIFIED = {}
 BANNED = {}
-SECOND_SHORTENER = {}
 SMART_OPEN = '“'
 SMART_CLOSE = '”'
 START_CHAR = ('\'', '"', SMART_OPEN)
 
-# temp db for banned
 class temp(object):
     BANNED_USERS = []
     BANNED_CHATS = []
@@ -58,27 +56,26 @@ async def pub_is_subscribed(bot, query, channel):
             await bot.get_chat_member(id, query.from_user.id)
         except UserNotParticipant:
             btn.append([InlineKeyboardButton(f'Join {chat.title}', url=chat.invite_link)])
-        except Exception as e:
+        except Exception:
             pass
     return btn
 
 
 async def is_subscribed(bot, query):
-    if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
+    if REQUEST_TO_JOIN_MODE and join_db().isActive():
         try:
             user = await join_db().get_user(query.from_user.id)
             if user and user["user_id"] == query.from_user.id:
                 return True
+            try:
+                user_data = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
+            except UserNotParticipant:
+                pass
+            except Exception as e:
+                logger.exception(e)
             else:
-                try:
-                    user_data = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
-                except UserNotParticipant:
-                    pass
-                except Exception as e:
-                    logger.exception(e)
-                else:
-                    if user_data.status != enums.ChatMemberStatus.BANNED:
-                        return True
+                if user_data.status != enums.ChatMemberStatus.BANNED:
+                    return True
         except Exception as e:
             logger.exception(e)
             return False
@@ -97,13 +94,13 @@ async def is_subscribed(bot, query):
 
 async def get_poster(query, bulk=False, id=False, file=None):
     if not id:
-        query = (query.strip()).lower()
+        query = query.strip().lower()
         title = query
         year = re.findall(r'[1-2]\d{3}$', query, re.IGNORECASE)
         if year:
             year = list_to_str(year[:1])
-            title = (query.replace(year, "")).strip()
-        elif file is not None:
+            title = query.replace(year, "").strip()
+        elif file:
             year = re.findall(r'[1-2]\d{3}', file, re.IGNORECASE)
             if year:
                 year = list_to_str(year[:1])
@@ -113,12 +110,12 @@ async def get_poster(query, bulk=False, id=False, file=None):
         if not movieid:
             return None
         if year:
-            filtered = list(filter(lambda k: str(k.get('year')) == str(year), movieid))
+            filtered = [k for k in movieid if str(k.get('year')) == str(year)]
             if not filtered:
                 filtered = movieid
         else:
             filtered = movieid
-        movieid = list(filter(lambda k: k.get('kind') in ['movie', 'tv series'], filtered))
+        movieid = [k for k in filtered if k.get('kind') in ['movie', 'tv series']]
         if not movieid:
             movieid = filtered
         if bulk:
@@ -129,21 +126,16 @@ async def get_poster(query, bulk=False, id=False, file=None):
     movie = imdb.get_movie(movieid)
     if not movie:
         return None
-    if movie.get("original air date"):
-        date = movie["original air date"]
-    elif movie.get("year"):
-        date = movie.get("year")
-    else:
-        date = "N/A"
+    date = movie.get("original air date") or movie.get("year") or "N/A"
     plot = ""
     if not LONG_IMDB_DESCRIPTION:
         plot = movie.get('plot')
-        if plot and len(plot) > 0:
+        if plot:
             plot = plot[0]
     else:
         plot = movie.get('plot outline')
     if plot and len(plot) > 800:
-        plot = plot[0:800] + "..."
+        plot = plot[:800] + "..."
     return {
         'title': movie.get('title'),
         'votes': movie.get('votes'),
@@ -182,19 +174,10 @@ async def broadcast_messages(user_id, message):
     except FloodWait as e:
         await asyncio.sleep(e.x)
         return await broadcast_messages(user_id, message)
-    except InputUserDeactivated:
+    except (InputUserDeactivated, UserIsBlocked, PeerIdInvalid):
         await db.delete_user(int(user_id))
-        logging.info(f"{user_id}-Removed from Database, since deleted account.")
-        return False, "Deleted"
-    except UserIsBlocked:
-        await db.delete_user(int(user_id))
-        logging.info(f"{user_id} -Blocked the bot.")
-        return False, "Blocked"
-    except PeerIdInvalid:
-        await db.delete_user(int(user_id))
-        logging.info(f"{user_id} - PeerIdInvalid")
-        return False, "Error"
-    except Exception as e:
+        return False, "Deleted/Blocked"
+    except Exception:
         return False, "Error"
 
 
@@ -209,32 +192,29 @@ async def broadcast_messages_group(chat_id, message):
     except FloodWait as e:
         await asyncio.sleep(e.x)
         return await broadcast_messages_group(chat_id, message)
-    except Exception as e:
+    except Exception:
         return False, "Error"
 
 
 async def search_gagala(text):
     usr_agent = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
-                        'Chrome/61.0.3163.100 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36'
     }
     text = text.replace(" ", '+')
     url = f'https://www.google.com/search?q={text}'
     response = requests.get(url, headers=usr_agent)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, 'html.parser')
-    titles = soup.find_all('h3')
-    return [title.getText() for title in titles]
+    return [title.getText() for title in soup.find_all('h3')]
 
 
 async def get_settings(group_id):
-    settings = await db.get_settings(group_id)
-    return settings
+    return await db.get_settings(group_id)
 
 
 async def save_group_settings(group_id, key, value):
     current = await get_settings(group_id)
-    current.update({key: value})
+    current[key] = value
     await db.update_settings(group_id, current)
 
 
@@ -255,26 +235,23 @@ def split_list(l, n):
 
 def get_file_id(msg: Message):
     if msg.media:
-        for message_type in (
-            "photo", "animation", "audio", "document", "video", "video_note", "voice", "sticker"
-        ):
-            obj = getattr(msg, message_type)
+        for t in ("photo", "animation", "audio", "document", "video", "video_note", "voice", "sticker"):
+            obj = getattr(msg, t)
             if obj:
-                setattr(obj, "message_type", message_type)
+                setattr(obj, "message_type", t)
                 return obj
 
 
 def extract_user(message: Message) -> Union[int, str]:
-    user_id = None
-    user_first_name = None
+    user_id = message.from_user.id
+    user_first_name = message.from_user.first_name
     if message.reply_to_message:
         user_id = message.reply_to_message.from_user.id
         user_first_name = message.reply_to_message.from_user.first_name
     elif len(message.command) > 1:
         if len(message.entities) > 1 and message.entities[1].type == enums.MessageEntityType.TEXT_MENTION:
-            required_entity = message.entities[1]
-            user_id = required_entity.user.id
-            user_first_name = required_entity.user.first_name
+            user_id = message.entities[1].user.id
+            user_first_name = message.entities[1].user.first_name
         else:
             user_id = message.command[1]
             user_first_name = user_id
@@ -282,9 +259,6 @@ def extract_user(message: Message) -> Union[int, str]:
             user_id = int(user_id)
         except ValueError:
             pass
-    else:
-        user_id = message.from_user.id
-        user_first_name = message.from_user.first_name
     return (user_id, user_first_name)
 
 
@@ -301,26 +275,26 @@ def list_to_str(k):
 
 
 def last_online(from_user):
-    time = ""
     if from_user.is_bot:
-        time += "Bot :("
-    elif from_user.status == enums.UserStatus.RECENTLY:
-        time += "Recently"
-    elif from_user.status == enums.UserStatus.LAST_WEEK:
-        time += "Within the last week"
-    elif from_user.status == enums.UserStatus.LAST_MONTH:
-        time += "Within the last month"
-    elif from_user.status == enums.UserStatus.LONG_AGO:
-        time += "A long time ago :("
-    elif from_user.status == enums.UserStatus.ONLINE:
-        time += "Currently Online"
-    elif from_user.status == enums.UserStatus.OFFLINE:
-        time += from_user.last_online_date.strftime("%a, %d %b %Y, %H:%M:%S")
-    return time
+        return "Bot"
+    status = from_user.status
+    if status == enums.UserStatus.RECENTLY:
+        return "Recently"
+    elif status == enums.UserStatus.LAST_WEEK:
+        return "Within the last week"
+    elif status == enums.UserStatus.LAST_MONTH:
+        return "Within the last month"
+    elif status == enums.UserStatus.LONG_AGO:
+        return "A long time ago"
+    elif status == enums.UserStatus.ONLINE:
+        return "Currently Online"
+    elif status == enums.UserStatus.OFFLINE:
+        return from_user.last_online_date.strftime("%a, %d %b %Y, %H:%M:%S")
+    return ""
 
 
 def split_quotes(text: str) -> List:
-    if not any(text.startswith(char) for char in START_CHAR):
+    if not any(text.startswith(c) for c in START_CHAR):
         return text.split(None, 1)
     counter = 1
     while counter < len(text):
@@ -330,7 +304,7 @@ def split_quotes(text: str) -> List:
             break
         counter += 1
     else:
-        return text.split(None,f 1)
+        return text.split(None, 1)
     key = remove_escapes(text[1:counter].strip())
     rest = text[counter + 1:].strip()
     if not key:
@@ -338,119 +312,17 @@ def split_quotes(text: str) -> List:
     return list(filter(None, [key, rest]))
 
 
-def gfilterparser(text, keyword):
-    if "buttonalert" in text:
-        text = (text.replace("\n", "\\n").replace("\t", "\\t"))
-    buttons = []
-    note_data = ""
-    prev = 0
-    i = 0
-    alerts = []
-    for match in BTN_URL_REGEX.finditer(text):
-        n_escapes = 0
-        to_check = match.start(1) - 1
-        while to_check > 0 and text[to_check] == "\\":
-            n_escapes += 1
-            to_check -= 1
-        if n_escapes % 2 == 0:
-            note_data += text[prev:match.start(1)]
-            prev = match.end(1)
-            if match.group(3) == "buttonalert":
-                if bool(match.group(5)) and buttons:
-                    buttons[-1].append(InlineKeyboardButton(
-                        text=match.group(2),
-                        callback_data=f"gfilteralert:{i}:{keyword}"
-                    ))
-                else:
-                    buttons.append([InlineKeyboardButton(
-                        text=match.group(2),
-                        callback_data=f"gfilteralert:{i}:{keyword}"
-                    )])
-                i += 1
-                alerts.append(match.group(4))
-            elif bool(match.group(5)) and buttons:
-                buttons[-1].append(InlineKeyboardButton(
-                    text=match.group(2),
-                    url=match.group(4).replace(" ", "")
-                ))
-            else:
-                buttons.append([InlineKeyboardButton(
-                    text=match.group(2),
-                    url=match.group(4).replace(" ", "")
-                )])
-        else:
-            note_data += text[prev:to_check]
-            prev = match.start(1) - 1
-    else:
-        note_data += text[prev:]
-    try:
-        return note_data, buttons, alerts
-    except:
-        return note_data, buttons, None
-
-
-def parser(text, keyword):
-    if "buttonalert" in text:
-        text = (text.replace("\n", "\\n").replace("\t", "\\t"))
-    buttons = []
-    note_data = ""
-    prev = 0
-    i = 0
-    alerts = []
-    for match in BTN_URL_REGEX.finditer(text):
-        n_escapes = 0
-        to_check = match.start(1) - 1
-        while to_check > 0 and text[to_check] == "\\":
-            n_escapes += 1
-            to_check -= 1
-        if n_escapes % 2 == 0:
-            note_data += text[prev:match.start(1)]
-            prev = match.end(1)
-            if match.group(3) == "buttonalert":
-                if bool(match.group(5)) and buttons:
-                    buttons[-1].append(InlineKeyboardButton(
-                        text=match.group(2),
-                        callback_data=f"alertmessage:{i}:{keyword}"
-                    ))
-                else:
-                    buttons.append([InlineKeyboardButton(
-                        text=match.group(2),
-                        callback_data=f"alertmessage:{i}:{keyword}"
-                    )])
-                i += 1
-                alerts.append(match.group(4))
-            elif bool(match.group(5)) and buttons:
-                buttons[-1].append(InlineKeyboardButton(
-                    text=match.group(2),
-                    url=match.group(4).replace(" ", "")
-                ))
-            else:
-                buttons.append([InlineKeyboardButton(
-                    text=match.group(2),
-                    url=match.group(4).replace(" ", "")
-                )])
-        else:
-            note_data += text[prev:to_check]
-            prev = match.start(1) - 1
-    else:
-        note_data += text[prev:]
-    try:
-        return note_data, buttons, alerts
-    except:
-        return note_data, buttons, None
-
-
 def remove_escapes(text: str) -> str:
     res = ""
-    is_escaped = False
-    for counter in range(len(text)):
-        if is_escaped:
-            res += text[counter]
-            is_escaped = False
-        elif text[counter] == "\\":
-            is_escaped = True
+    escaped = False
+    for c in text:
+        if escaped:
+            res += c
+            escaped = False
+        elif c == "\\":
+            escaped = True
         else:
-            res += text[counter]
+            res += c
     return res
 
 
@@ -463,141 +335,113 @@ def humanbytes(size):
     while size > power:
         size /= power
         n += 1
-    return str(round(size, 2)) + " " + Dic_powerN[n] + 'B'
+    return f"{round(size, 2)} {Dic_powerN[n]}B"
 
 
 async def get_clone_shortlink(link, url, api):
     shortzy = Shortzy(api_key=api, base_site=url)
-    link = await shortzy.convert(link)
-    return link
+    return await shortzy.convert(link)
 
 
 async def get_shortlink(chat_id, link):
     settings = await get_settings(chat_id)
-    if 'shortlink' in settings.keys():
-        URL = settings['shortlink']
-        API = settings['shortlink_api']
-    else:
-        URL = SHORTLINK_URL
-        API = SHORTLINK_API
-    if URL.startswith("shorturllink") or URL.startswith("terabox.in") or URL.startswith("urlshorten.in"):
-        URL = SHORTLINK_URL
-        API = SHORTLINK_API
+    URL = settings.get('shortlink', SHORTLINK_URL)
+    API = settings.get('shortlink_api', SHORTLINK_API)
     if URL == "api.shareus.io":
-        url = f'https://{URL}/easy_api'
-        params = {"key": API, "link": link}
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
-                    data = await response.text()
-                    return data
-        except Exception as e:
-            logger.error(e)
+                async with session.get(f'https://{URL}/easy_api', params={"key": API, "link": link}, ssl=False) as resp:
+                    return await resp.text()
+        except:
             return link
     else:
         shortzy = Shortzy(api_key=API, base_site=URL)
-        link = await shortzy.convert(link)
-        return link
+        return await shortzy.convert(link)
 
 
 async def get_tutorial(chat_id):
-    settings = await get_settings(chat_id)
-    return settings['tutorial']
+    return (await get_settings(chat_id)).get('tutorial', '')
 
 
 # ================== [INDIAEARNX VERIFICATION SHORTENER] ==================
 
 async def get_verify_shorted_link(link, url, api):
-    """Shorten verification link – supports IndiaEarnX & ShrinkMe (GET method)."""
-    API = api
+    API = api.strip()
     URL = url.lower().strip()
-    logger.info(f"[VERIFY] Using API: {API[-6:]}... URL: {URL}")
+    logger.info(f"[VERIFY] API: {API[-6:]}... | URL: {URL} | Link: {link[:50]}...")
 
-    # === INDIAEARNX ===
-    if "indiaearnx.com" in URL:
-        api_url = "https://indiaearnx.com/api"
-        params = {"api": API, "url": quote(link)}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(api_url, params=params) as response:
-                    logger.info(f"[DEBUG] IndiaEarnX status: {response.status}")
-                    if response.status == 200:
-                        result = await response.json()
-                        logger.info(f"[DEBUG] IndiaEarnX JSON: {result}")
-                        if result.get("status") == "success" and result.get("shortenedUrl"):
-                            return result["shortenedUrl"]
-        except Exception as e:
-            logger.error(f"IndiaEarnX error: {e}")
+    if "indiaearnx.com" not in URL:
+        logger.warning("[VERIFY] Not IndiaEarnX, skipping")
         return link
 
-    # === SHRINKME (Legacy) ===
-    if "shrinkme.io" in URL:
-        api_url = "https://shrinkme.io/api"
-        params = {"api": API, "url": quote(link)}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(api_url, params=params) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get("status") == "success" and result.get("shortenedUrl"):
-                            return result["shortenedUrl"]
-        except Exception as e:
-            logger.error(f"ShrinkMe error: {e}")
-        return link
+    api_url = "https://indiaearnx.com/api"
+    params = {"api": API, "url": quote(link)}
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, params=params, timeout=10) as resp:
+                logger.info(f"[INDIAEARNX] Status: {resp.status}")
+                if resp.status != 200:
+                    logger.error(f"[INDIAEARNX] HTTP {resp.status}")
+                    return link
+                data = await resp.json()
+                short = data.get("shortenedUrl") or data.get("short_url")
+                if short and short.startswith("http"):
+                    short = short.replace("\\/", "/")
+                    logger.info(f"[INDIAEARNX] SUCCESS: {short}")
+                    return short
+                else:
+                    logger.warning(f"[INDIAEARNX] Invalid short URL: {data}")
+    except Exception as e:
+        logger.error(f"[INDIAEARNX] Exception: {e}")
 
-    logger.warning(f"[VERIFY] No shortener matched: {URL}")
+    logger.warning("[INDIAEARNX] Failed → fallback")
     return link
 
 
 # ================== [INDIAEARNX FILE SHORTENER] ==================
 
 async def shorten_with_indiaearnx(link):
-    """Shorten file link using IndiaEarnX API."""
-    api_key = VERIFY_SHORTLINK_API
-    if not api_key:
-        logger.warning("VERIFY_SHORTLINK_API not set.")
+    if not VERIFY_SHORTLINK_API:
         return link
     api_url = "https://indiaearnx.com/api"
-    params = {"api": api_key, "url": quote(link)}
+    params = {"api": VERIFY_SHORTLINK_API, "url": quote(link)}
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, params=params) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    if result.get("status") == "success" and result.get("shortenedUrl"):
-                        return result["shortenedUrl"]
+            async with session.get(api_url, params=params) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    short = result.get("shortenedUrl")
+                    if short:
+                        return short.replace("\\/", "/")
     except Exception as e:
-        logger.error(f"IndiaEarnX file shorten error: {e}")
+        logger.error(f"IndiaEarnX file error: {e}")
     return link
 
 
-# ================== [VERIFICATION & TOKEN SYSTEM] ==================
+# ================== [VERIFICATION SYSTEM] ==================
 
 async def check_token(bot, userid, token):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    if user.id in TOKENS.keys():
-        TKN = TOKENS[user.id]
-        if token in TKN.keys():
-            return TKN[token] == False
-    return False
+    return user.id in TOKENS and token in TOKENS[user.id] and not TOKENS[user.id][token]
 
 
-async def get_token(bot, userid, link):
+async def get_token(bot, userid, base_tme_link):
     user = await bot.get_users(userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+    
     token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
-    TOKENS[user.id] = {token: False}
-    link = f"{link}verify-{user.id}-{token}"
-    shortened = await get_verify_shorted_link(link, VERIFY_SHORTLINK_URL, VERIFY_SHORTLINK_API)
-    if VERIFY_SECOND_SHORTNER == True:
-        snd_link = await get_verify_shorted_link(shortened, VERIFY_SND_SHORTLINK_URL, VERIFY_SND_SHORTLINK_API)
-        return str(snd_link)
-    return str(shortened)
+    raw_link = f"{base_tme_link}verify-{userid}-{token}"
+    TOKENS[userid] = {token: False}
+
+    short_link = await get_verify_shorted_link(raw_link, VERIFY_SHORTLINK_URL, VERIFY_SHORTLINK_API)
+    
+    return short_link if "indiaearnx.com" in short_link else raw_link
 
 
 async def verify_user(bot, userid, token):
@@ -605,9 +449,8 @@ async def verify_user(bot, userid, token):
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    TOKENS[user.id] = {token: True}
-    today = date.today()
-    VERIFIED[user.id] = str(today)
+    TOKENS[userid] = {token: True}
+    VERIFIED[userid] = date.today().isoformat()
 
 
 async def check_verification(bot, userid):
@@ -615,12 +458,9 @@ async def check_verification(bot, userid):
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    today = date.today()
-    if user.id in VERIFIED.keys():
-        EXP = VERIFIED[user.id]
-        years, month, day = EXP.split('-')
-        comp = date(int(years), int(month), int(day))
-        return comp >= today
+    if userid in VERIFIED:
+        exp = datetime.strptime(VERIFIED[userid], "%Y-%m-%d").date()
+        return exp >= date.today()
     return False
 
 
@@ -631,37 +471,31 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
     ENABLE_SHORTLINK = settings.get('is_shortlink', False)
 
     try:
-        if ENABLE_SHORTLINK:
+        if ENABLE_SHORTLINK and not await db.has_premium_access(userid) and SHORTLINK_MODE:
             for file in files:
-                title = file["file_name"]
-                size = get_size(file["file_size"])
-                if not await db.has_premium_access(userid) and SHORTLINK_MODE == True:
-                    file_link = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
-                    shortened_link = await shorten_with_indiaearnx(file_link)
-                    await bot.send_message(
-                        chat_id=userid,
-                        text=f"<b>Hey {user_name}\n\nFile: {title}\nSize: {size}</b>",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Download", url=shortened_link)]])
-                    )
-                else:
-                    f_caption = file.get("caption", title)
-                    await bot.send_cached_media(
-                        chat_id=userid,
-                        file_id=file["file_id"],
-                        caption=f_caption,
-                        protect_content=(ident == "filep"),
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton('Support Group', url=GRP_LNK), InlineKeyboardButton('Updates Channel', url=CHNL_LNK)],
-                            [InlineKeyboardButton("Bot Owner", url=OWNER_LNK)]
-                        ])
-                    )
+                file_link = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
+                short_link = await shorten_with_indiaearnx(file_link)
+                await bot.send_message(
+                    chat_id=userid,
+                    text=f"<b>Hey {user_name}\n\nFile: {file['file_name']}\nSize: {get_size(file['file_size'])}</b>",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Download", url=short_link)]])
+                )
         else:
             for file in files:
-                f_caption = file.get("caption", file["file_name"])
+                caption = file.get("caption") or file["file_name"]
+                if CUSTOM_FILE_CAPTION:
+                    try:
+                        caption = CUSTOM_FILE_CAPTION.format(
+                            file_name=file["file_name"],
+                            file_size=get_size(file["file_size"]),
+                            file_caption=file.get("caption", "")
+                        )
+                    except:
+                        pass
                 await bot.send_cached_media(
                     chat_id=userid,
                     file_id=file["file_id"],
-                    caption=f_caption,
+                    caption=caption,
                     protect_content=(ident == "filep"),
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton('Support Group', url=GRP_LNK), InlineKeyboardButton('Updates Channel', url=CHNL_LNK)],
@@ -675,8 +509,8 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
 async def get_cap(settings, remaining_seconds, files, query, total_results, search):
     short_links = {}
     for file in files:
-        orig_link = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
-        short_links[file['file_id']] = await shorten_with_indiaearnx(orig_link)
+        orig = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
+        short_links[file['file_id']] = await shorten_with_indiaearnx(orig)
 
     cap = ""
     if settings.get("imdb"):
@@ -684,18 +518,19 @@ async def get_cap(settings, remaining_seconds, files, query, total_results, sear
         if imdb_data:
             cap = script.IMDB_TEMPLATE_TXT.format(**imdb_data, **locals())
         else:
-            cap = f"<b>Results for: {search}\nRequested by: {query.from_user.mention}\nAuto-delete in {remaining_seconds}s</b>"
+            cap = f"<b>Results for: {search}\nBy: {query.from_user.mention}\nAuto-delete in {remaining_seconds}s</b>"
     else:
-        cap = f"<b>Results for: {search}\nRequested by: {query.from_user.mention}\nAuto-delete in {remaining_seconds}s</b>"
+        cap = f"<b>Results for: {search}\nBy: {query.from_user.mention}\nAuto-delete in {remaining_seconds}s</b>"
 
     cap += "\n\n<u>Your Files</u>\n\n"
     for file in files:
-        cap += f"<b><a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {file['file_name'].split('/')[-1]}</a></b>\n\n"
+        name = ' '.join([x for x in file['file_name'].split() if not x.startswith(('@', '[', 'www.'))])
+        cap += f"<b><a href='{short_links[file['file_id']]}'>[{get_size(file['file_size'])}] {name}</a></b>\n\n"
     return cap
 
 
 async def get_seconds(time_string):
-    value, unit = "", ""
+    value = ""
     i = 0
     while i < len(time_string) and time_string[i].isdigit():
         value += time_string[i]
