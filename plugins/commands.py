@@ -1315,7 +1315,17 @@ async def give_premium_cmd_handler(client, message):
             await message.reply_text("Premium access added to the user.")            
             await client.send_message(
                 chat_id=user_id,
-                text=f"<b>ᴘʀᴇᴍɪᴜᴍ ᴀᴅᴅᴇᴅ ᴛᴏ ʏᴏᴜʀ ᴀᴄᴄᴏᴜɴᴛ ꜰᴏʀ {time} ᴇɴᴊᴏʏ 😀\n</b>",                
+                text = f"""
+<b>👑 ᴄᴏɴɢʀᴀᴛꜱ 👑</b>
+
+💎 <b>ᴘʀᴇᴍɪᴜᴍ ᴜɴʟᴏᴄᴋᴇᴅ ꜰᴏʀ {time}</b>  
+🌟 ᴀʟʟ ᴘʀᴇᴍɪᴜᴍ ꜰᴇᴀᴛᴜʀᴇꜱ ᴀʀᴇ ɴᴏᴡ ᴀᴄᴄᴇꜱꜱɪʙʟᴇ  
+🎬 ᴇɴᴊᴏʏ ᴜʟᴛʀᴀ ꜱᴘᴇᴇᴅ, ᴀᴅ-ꜰʀᴇᴇ ꜱᴛʀᴇᴀᴍɪɴɢ & ᴘʀᴏ ᴛᴏᴏʟꜱ  
+🎉 ᴇɴᴊᴏʏ ᴀ ʀᴏʏᴀʟ ᴇxᴘᴇʀɪᴇɴᴄᴇ  
+
+🚀 <b>ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴘʀᴇᴍɪᴜᴍ ɢᴏꜰʟɪx!</b>  
+⚡ <b>ᴘᴏᴡᴇʀᴇᴅ ʙʏ ɢᴏꜰʟɪx ⚡</b>
+"""                
             )
         else:
             await message.reply_text("Invalid time format. Please use '1day for days', '1hour for hours', or '1min for minutes', or '1month for months' or '1year for year'")
@@ -1404,6 +1414,7 @@ async def purge_requests(client, message):
             parse_mode=enums.ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
+
 
 
 
