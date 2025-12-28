@@ -136,31 +136,53 @@ async def auto_approve(client, message: ChatJoinRequest):
             if f_caption is None:
                 f_caption = f"{title}"
             try:
-                if STREAM_MODE == True:
-                    log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=msg.get("file_id"))
-                    fileName = {quote_plus(get_name(log_msg))}
-                    stream = f"{URL}/watch/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-                    download = f"{URL}/download/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-
-                if STREAM_MODE == True:
-                    button = [[
-                        InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
-                        InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
-                    ],[
-                        InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
-                    ]]
-                    reply_markup = InlineKeyboardMarkup(button)
+                if STREAM_MODE:
+                    # Send file to log channel
+                    log_msg = await client.send_cached_media(
+                        chat_id=LOG_CHANNEL,
+                        file_id=msg.get("file_id")
+                    )
+            
+                    file_name = get_name(log_msg)
+                    quoted_name = quote_plus(file_name)
+                    file_hash = get_hash(log_msg)
+                    msg_id = log_msg.id
+            
+                    # ✅ CORRECT STREAMING SERVER URLS
+                    stream = f"{URL}/watch/{msg_id}/{quoted_name}?hash={file_hash}"
+                    download = f"{URL}/download/{msg_id}/{quoted_name}?hash={file_hash}"
+            
+                    buttons = [
+                        [
+                            InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream),
+                            InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                "• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •",
+                                web_app=WebAppInfo(url=stream)
+                            )
+                        ]
+                    ]
+            
+                    reply_markup = InlineKeyboardMarkup(buttons)
+            
                 else:
                     reply_markup = None
-                    
-                msg = await client.send_cached_media(
+            
+                sent = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=msg.get("file_id"),
                     caption=f_caption,
-                    protect_content=msg.get('protect', False),
+                    protect_content=msg.get("protect", False),
                     reply_markup=reply_markup
                 )
-                filesarr.append(msg)
+            
+                filesarr.append(sent)
+            
+            except Exception as e:
+                print(f"APPROVE STREAM ERROR: {e}")
+
                 
             except FloodWait as e:
                 await asyncio.sleep(e.value)
