@@ -349,26 +349,26 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
     temp.GETALL[key] = files
     settings = await get_settings(message.chat.id)
     pre = 'filep' if settings['file_secure'] else 'file'
-   if settings["button"]:
-    btn = [
-        [
-            InlineKeyboardButton(
-                text=(
-                    f"{get_size(file['file_size'])} ▷ "
-                    + (
-                        f"[S{m.group(1).zfill(2)}E{m.group(2).zfill(2)}] "
-                        if (m := re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', file['file_name']))
-                        else ""
-                    )
-                    + re.sub(r'\[.*?\]', '', file['file_name'])
-                        .replace("WEBRip", "")
-                        .strip()
-                ),
-                callback_data=f'{pre}#{file["file_id"]}'
-            )
+    if settings["button"]:
+        btn = [
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{get_size(file['file_size'])} ▷ "
+                        + (
+                            f"[S{m.group(1).zfill(2)}E{m.group(2).zfill(2)}] "
+                            if (m := re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', file['file_name']))
+                            else ""
+                        )
+                        + re.sub(r'\[.*?\]', '', file['file_name'])
+                            .replace("WEBRip", "")
+                            .strip()
+                    ),
+                    callback_data=f'{pre}#{file["file_id"]}'
+                )
+            ]
+            for file in files
         ]
-        for file in files
-    ]
 
         btn.insert(0, 
             [
@@ -4005,6 +4005,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
