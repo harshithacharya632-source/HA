@@ -775,489 +775,663 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
     await query.answer()
     
   #START HERE GPT  
+
+# import re
+# import logging
+# import asyncio
+# from difflib import SequenceMatcher
+# from pyrogram import Client, filters
+# from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+# from pyrogram.errors import MessageNotModified, FloodWait, MessageIdInvalid
+# import uuid
+
+# # Assuming these are defined elsewhere in your codebase
+# # from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, LOG_CHANNEL
+
+# # Define SEASONS to match season_patterns_map
+# SEASONS = [
+#     "season 1", "season 2", "season 3", "season 4", "season 5",
+#     "season 6", "season 7", "season 8", "season 9", "season 10"
+# ]
+
+# # Configure logging
+# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# # Cache for search results
+# SEARCH_CACHE = {}
+
+# async def get_cached_search_results(chat_id, query, max_results):
+#     cache_key = (chat_id, query, max_results)
+#     if cache_key in SEARCH_CACHE:
+#         logging.info(f"Cache hit for query: {query}")
+#         return SEARCH_CACHE[cache_key]
+#     logging.info(f"Cache miss, executing search for: {query}")
+#     try:
+#         result = await get_search_results(chat_id, query, max_results)
+#         SEARCH_CACHE[cache_key] = result
+#         return result
+#     except Exception as e:
+#         logging.error(f"Search error for query {query}: {e}")
+#         return [], 0, 0
+
+# @Client.on_callback_query(filters.regex(r"^fs#"))
+# async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
+#     try:
+#         data_parts = query.data.split("#")
+#         seas = data_parts[1]
+#         key = data_parts[2]
+#         page = int(data_parts[3]) if len(data_parts) > 3 else 0
+        
+#         logging.info(f"Callback data: {query.data}, seas: {seas}, key: {key}, page: {page}, user: {query.from_user.id}")
+        
+#         # Check user permission
+#         if query.message.reply_to_message:
+#             try:
+#                 if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+#                     logging.info(f"Permission denied for user {query.from_user.id}")
+#                     return await query.answer(
+#                         f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
+#                         show_alert=True,
+#                     )
+#             except Exception as e:
+#                 logging.warning(f"Permission check error: {e}")
+#         else:
+#             logging.warning("No reply_to_message found for permission check.")
+
+#         search = FRESH.get(key)
+        
+#         logging.info(f"FRESH key: {key}, value: {search}")
+        
+#         if not search:
+#             logging.error(f"Invalid key: {key}")
+#             await query.answer("❌ Invalid request! Key not found.", show_alert=True)
+#             return
+            
+#         original_search = search
+#         chat_id = query.message.chat.id
+#         files = []
+        
+#         # Expanded season patterns to match saved file names
+#         season_patterns_map = {
+#             "season 1": [
+#                 r"s\s*0?1\b", r"season\s*0?1\b", r"season-?1\b", r"s-?1\b", r"s01\b", r"s1e", r"season1e", 
+#                 r"season\s*01\b", r"season\s*1\b", r"season1\b", r"s\s*01\b", r"s\s*1\b", r"1st\s*season", 
+#                 r"first\s*season", r"season\s*one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1",
+#                 r"\b1x", r"1\s*x", r"s01e", r"season\s*1\s*e", r"s\s*1\s*e", r"season\.1\b", r"s\.1\b",
+#                 r"part\s*1\b", r"part-?1\b", r"chapter\s*1\b", r"ch\s*1\b", r"\b01\b", r"\b1\b",
+#                 r"s01\.e", r"s1\.e", r"season\.01\b", r"season_1\b", r"s_1\b", r"s01\s*e", r"s1\s*e"
+#             ],
+#             "season 2": [
+#                 r"s\s*0?2\b", r"season\s*0?2\b", r"season-?2\b", r"s-?2\b", r"s02\b", r"s2e", r"season2e", 
+#                 r"season\s*02\b", r"season\s*2\b", r"season2\b", r"s\s*02\b", r"s\s*2\b", r"2nd\s*season", 
+#                 r"second\s*season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2",
+#                 r"\b2x", r"2\s*x", r"s02e", r"season\s*2\s*e", r"s\s*2\s*e", r"season\.2\b", r"s\.2\b",
+#                 r"part\s*2\b", r"part-?2\b", r"chapter\s*2\b", r"ch\s*2\b", r"\b02\b", r"\b2\b",
+#                 r"s02\.e", r"s2\.e", r"season\.02\b", r"season_2\b", r"s_2\b", r"s02\s*e", r"s2\s*e", r"s02-e", r"s2-e"
+#             ],
+#             "season 3": [
+#                 r"s\s*0?3\b", r"season\s*0?3\b", r"season-?3\b", r"s-?3\b", r"s03\b", r"s3e", r"season3e", 
+#                 r"season\s*03\b", r"season\s*3\b", r"season3\b", r"s\s*03\b", r"s\s*3\b", r"3rd\s*season", 
+#                 r"third\s*season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3",
+#                 r"\b3x", r"3\s*x", r"s03e", r"season\s*3\s*e", r"s\s*3\s*e", r"season\.3\b", r"s\.3\b",
+#                 r"part\s*3\b", r"part-?3\b", r"chapter\s*3\b", r"ch\s*3\b", r"\b03\b", r"\b3\b",
+#                 r"s03\.e", r"s3\.e", r"season\.03\b", r"season_3\b", r"s_3\b", r"s03\s*e", r"s3\s*e", r"s03-e", r"s3-e"
+#             ],
+#             "season 4": [
+#                 r"s\s*0?4\b", r"season\s*0?4\b", r"season-?4\b", r"s-?4\b", r"s04\b", r"s4e", r"season4e", 
+#                 r"season\s*04\b", r"season\s*4\b", r"season4\b", r"s\s*04\b", r"s\s*4\b", r"4th\s*season", 
+#                 r"fourth\s*season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4",
+#                 r"\b4x", r"4\s*x", r"s04e", r"season\s*4\s*e", r"s\s*4\s*e", r"season\.4\b", r"s\.4\b",
+#                 r"part\s*4\b", r"part-?4\b", r"chapter\s*4\b", r"ch\s*4\b", r"\b04\b", r"\b4\b",
+#                 r"s04\.e", r"s4\.e", r"season\.04\b", r"season_4\b", r"s_4\b", r"s04\s*e", r"s4\s*e", r"s04-e", r"s4-e"
+#             ],
+#             "season 5": [
+#                 r"s\s*0?5\b", r"season\s*0?5\b", r"season-?5\b", r"s-?5\b", r"s05\b", r"s5e", r"season5e", 
+#                 r"season\s*05\b", r"season\s*5\b", r"season5\b", r"s\s*05\b", r"s\s*5\b", r"5th\s*season", 
+#                 r"fifth\s*season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5",
+#                 r"\b5x", r"5\s*x", r"s05e", r"season\s*5\s*e", r"s\s*5\s*e", r"season\.5\b", r"s\.5\b",
+#                 r"part\s*5\b", r"part-?5\b", r"chapter\s*5\b", r"ch\s*5\b", r"\b05\b", r"\b5\b",
+#                 r"s05\.e", r"s5\.e", r"season\.05\b", r"season_5\b", r"s_5\b", r"s05\s*e", r"s5\s*e", r"s05-e", r"s5-e"
+#             ],
+#             "season 6": [
+#                 r"s\s*0?6\b", r"season\s*0?6\b", r"season-?6\b", r"s-?6\b", r"s06\b", r"s6e", r"season6e", 
+#                 r"season\s*06\b", r"season\s*6\b", r"season6\b", r"s\s*06\b", r"s\s*6\b", r"6th\s*season", 
+#                 r"sixth\s*season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6",
+#                 r"\b6x", r"6\s*x", r"s06e", r"season\s*6\s*e", r"s\s*6\s*e", r"season\.6\b", r"s\.6\b",
+#                 r"part\s*6\b", r"part-?6\b", r"chapter\s*6\b", r"ch\s*6\b", r"\b06\b", r"\b6\b",
+#                 r"s06\.e", r"s6\.e", r"season\.06\b", r"season_6\b", r"s_6\b", r"s06\s*e", r"s6\s*e", r"s06-e", r"s6-e"
+#             ],
+#             "season 7": [
+#                 r"s\s*0?7\b", r"season\s*0?7\b", r"season-?7\b", r"s-?7\b", r"s07\b", r"s7e", r"season7e", 
+#                 r"season\s*07\b", r"season\s*7\b", r"season7\b", r"s\s*07\b", r"s\s*7\b", r"7th\s*season", 
+#                 r"seventh\s*season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7",
+#                 r"\b7x", r"7\s*x", r"s07e", r"season\s*7\s*e", r"s\s*7\s*e", r"season\.7\b", r"s\.7\b",
+#                 r"part\s*7\b", r"part-?7\b", r"chapter\s*7\b", r"ch\s*7\b", r"\b07\b", r"\b7\b",
+#                 r"s07\.e", r"s7\.e", r"season\.07\b", r"season_7\b", r"s_7\b", r"s07\s*e", r"s7\s*e", r"s07-e", r"s7-e"
+#             ],
+#             "season 8": [
+#                 r"s\s*0?8\b", r"season\s*0?8\b", r"season-?8\b", r"s-?8\b", r"s08\b", r"s8e", r"season8e", 
+#                 r"season\s*08\b", r"season\s*8\b", r"season8\b", r"s\s*08\b", r"s\s*8\b", r"8th\s*season", 
+#                 r"eighth\s*season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8",
+#                 r"\b8x", r"8\s*x", r"s08e", r"season\s*8\s*e", r"s\s*8\s*e", r"season\.8\b", r"s\.8\b",
+#                 r"part\s*8\b", r"part-?8\b", r"chapter\s*8\b", r"ch\s*8\b", r"\b08\b", r"\b8\b",
+#                 r"s08\.e", r"s8\.e", r"season\.08\b", r"season_8\b", r"s_8\b", r"s08\s*e", r"s8\s*e", r"s08-e", r"s8-e"
+#             ],
+#             "season 9": [
+#                 r"s\s*0?9\b", r"season\s*0?9\b", r"season-?9\b", r"s-?9\b", r"s09\b", r"s9e", r"season9e", 
+#                 r"season\s*09\b", r"season\s*9\b", r"season9\b", r"s\s*09\b", r"s\s*9\b", r"9th\s*season", 
+#                 r"ninth\s*season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9",
+#                 r"\b9x", r"9\s*x", r"s09e", r"season\s*9\s*e", r"s\s*9\s*e", r"season\.9\b", r"s\.9\b",
+#                 r"part\s*9\b", r"part-?9\b", r"chapter\s*9\b", r"ch\s*9\b", r"\b09\b", r"\b9\b",
+#                 r"s09\.e", r"s9\.e", r"season\.09\b", r"season_9\b", r"s_9\b", r"s09\s*e", r"s9\s*e", r"s09-e", r"s9-e"
+#             ],
+#             "season 10": [
+#                 r"s\s*10\b", r"season\s*10\b", r"season-?10\b", r"s-?10\b", r"s10\b", r"s10e", r"season10e", 
+#                 r"season\s*10\b", r"season10\b", r"s\s*10\b", r"10th\s*season", r"tenth\s*season", 
+#                 r"s10\b", r"season\s*-?\s*10", r"\b10x", r"10\s*x", r"s10e", r"season\s*10\s*e",
+#                 r"season\.10\b", r"s\.10\b", r"part\s*10\b", r"part-?10\b", r"chapter\s*10\b", r"ch\s*10\b", 
+#                 r"\b10\b", r"s10\.e", r"season\.10\b", r"season_10\b", r"s_10\b", r"s10\s*e", r"s10-e"
+#             ]
+#         }
+        
+#         # Get patterns for the selected season
+#         if seas in season_patterns_map:
+#             patterns = season_patterns_map[seas]
+#             season_num = seas.split()[-1]
+#             season_regex = re.compile("|".join(patterns), re.IGNORECASE)
+            
+#             # Perform a single broad search with increased max_results
+#             logging.info(f"Performing broad search for: {original_search}")
+#             try:
+#                 broad_files, _, _ = await asyncio.wait_for(
+#                     get_cached_search_results(chat_id, original_search, max_results=50000),
+#                     timeout=30.0
+#                 )
+#                 logging.info(f"Broad search found {len(broad_files)} files")
+#                 # Log file names for debugging
+#                 if broad_files:
+#                     logging.debug(f"Broad search files: {[f['file_name'] for f in broad_files[:50]]}")
+#             except asyncio.TimeoutError:
+#                 logging.error("Timeout on broad search")
+#                 broad_files = []
+#             except Exception as e:
+#                 logging.error(f"Broad search failed: {e}")
+#                 broad_files = []
+            
+#             # Filter exact matches
+#             exact_files = []
+#             unmatched_files = []
+#             for file in broad_files:
+#                 file_name_lower = file["file_name"].lower()
+#                 if season_regex.search(file_name_lower):
+#                     exact_files.append(file)
+#                     logging.debug(f"Exact matched file: {file['file_name']}")
+#                 else:
+#                     unmatched_files.append(file["file_name"])
+#                     logging.debug(f"Unmatched file: {file['file_name']}")
+            
+#             files = exact_files
+            
+#             # Fallback search mimicking direct search
+#             if not files and season_num:
+#                 fallback_query = f"{original_search} s{season_num.zfill(2)}"
+#                 logging.info(f"No exact matches, trying fallback search: {fallback_query}")
+#                 try:
+#                     fallback_files, _, _ = await asyncio.wait_for(
+#                         get_cached_search_results(chat_id, fallback_query, max_results=50000),
+#                         timeout=30.0
+#                     )
+#                     logging.info(f"Fallback search found {len(fallback_files)} files")
+#                     # Log file names for debugging
+#                     if fallback_files:
+#                         logging.debug(f"Fallback search files: {[f['file_name'] for f in fallback_files[:50]]}")
+#                     for file in fallback_files:
+#                         file_name_lower = file["file_name"].lower()
+#                         if season_regex.search(file_name_lower):
+#                             exact_files.append(file)
+#                             logging.debug(f"Fallback exact matched file: {file['file_name']}")
+#                         else:
+#                             unmatched_files.append(file["file_name"])
+#                             logging.debug(f"Fallback unmatched file: {file['file_name']}")
+#                     files = exact_files
+#                 except Exception as e:
+#                     logging.error(f"Fallback search failed: {e}")
+            
+#             # If fewer than 10 exact matches, add similar files
+#             similar_files = []
+#             if len(files) < 10 and broad_files:
+#                 target_str = f"{original_search.lower()} s{season_num.zfill(2)}"
+#                 for file in broad_files:
+#                     file_name_lower = file["file_name"].lower()
+#                     if not season_regex.search(file_name_lower):
+#                         similarity = SequenceMatcher(None, target_str, file_name_lower).ratio()
+#                         if similarity > 0.3:
+#                             file_copy = file.copy()
+#                             file_copy['is_similar'] = True
+#                             similar_files.append(file_copy)
+#                             logging.debug(f"Similar file added: {file['file_name']} (similarity: {similarity:.2f})")
+            
+#             files += similar_files
+            
+#             # Log unmatched files to LOG_CHANNEL (paginated)
+#             if unmatched_files and LOG_CHANNEL:
+#                 try:
+#                     batch_size = 50
+#                     for i in range(0, len(unmatched_files), batch_size):
+#                         batch = unmatched_files[i:i + batch_size]
+#                         await client.send_message(
+#                             chat_id=LOG_CHANNEL,
+#                             text=(
+#                                 f"🛠 **Debug: Unmatched Files for {original_search} {seas} (Batch {i//batch_size + 1})**\n"
+#                                 f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
+#                                 f"📂 Unmatched Files:\n" +
+#                                 "\n".join([f"- {name}" for name in batch])
+#                             )
+#                         )
+#                     logging.info(f"Logged {len(unmatched_files)} unmatched files for debugging")
+#                 except Exception as e:
+#                     logging.error(f"Failed to log unmatched files: {e}")
+        
+#         # Remove duplicates
+#         unique_files = []
+#         seen_file_ids = set()
+#         for file in files:
+#             if file["file_id"] not in seen_file_ids:
+#                 unique_files.append(file)
+#                 seen_file_ids.add(file["file_id"])
+        
+#         files = unique_files
+        
+#         # Sort files by episode number
+#         def get_episode_num(file):
+#             file_name_lower = file["file_name"].lower()
+#             ep_patterns = [
+#                 r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', 
+#                 r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)', r'\.(\d+)\.'
+#             ]
+#             for pattern in ep_patterns:
+#                 ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
+#                 if ep_match:
+#                     return int(ep_match.group(1))
+#             return 999
+        
+#         files = sorted(files, key=get_episode_num)
+        
+#         logging.info(f"After filtering, dedup, and sort: {len(files)} files (including {len(similar_files)} similar)")
+        
+#         if not files:
+#             logging.info("No files found for season after filtering")
+#             await query.answer("🚫 No Files Found for this Season 🚫", show_alert=True)
+#             # Log no files found to LOG_CHANNEL
+#             if LOG_CHANNEL:
+#                 try:
+#                     await client.send_message(
+#                         chat_id=LOG_CHANNEL,
+#                         text=(
+#                             f"🛠 **Debug: No Files Found for {original_search} {seas}**\n"
+#                             f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
+#                             f"🔎 Series: `{original_search}`\n"
+#                             f"📅 Season: `{seas}`\n"
+#                             f"📝 Note: No exact or similar matches found"
+#                         )
+#                     )
+#                     logging.info(f"Logged no files found for {original_search} {seas}")
+#                 except Exception as e:
+#                     logging.error(f"Failed to log no files found: {e}")
+#             return
+        
+#         # Log the series search to LOG_CHANNEL
+#         if LOG_CHANNEL:
+#             try:
+#                 await client.send_message(
+#                     chat_id=LOG_CHANNEL,
+#                     text=(
+#                         f"📩 **Series Search Log**\n"
+#                         f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
+#                         f"🔎 Series: `{original_search}`\n"
+#                         f"📅 Season: `{seas}`\n"
+#                         f"📂 Files Found: {len(files)} (including {len(similar_files)} similar)"
+#                     )
+#                 )
+#                 logging.info(f"Logged series search for {original_search} {seas} by {query.from_user.id}")
+#             except Exception as e:
+#                 logging.error(f"Failed to log series search: {e}")
+        
+#         # Store files for this season
+#         BUTTONS0[key] = f"{original_search} {seas}"
+#         temp.GETALL[key] = files
+        
+#         settings = await get_settings(query.message.chat.id)
+#         pre = 'filep' if settings['file_secure'] else 'file'
+        
+#         # Pagination: Show 10 files per page
+#         files_per_page = 10
+#         start_idx = page * files_per_page
+#         end_idx = start_idx + files_per_page
+#         paginated_files = files[start_idx:end_idx]
+#         total_pages = ((len(files) - 1) // files_per_page) + 1
+        
+#         if settings["button"]:
+#             btn = []
+#             for file in paginated_files:
+#                 season_num = seas.split()[-1]
+#                 file_name_lower = file["file_name"].lower()
+                
+#                 # Extract episode number
+#                 episode_num = "??"
+#                 ep_patterns = [
+#                     r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', 
+#                     r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)', r'\.(\d+)\.'
+#                 ]
+#                 for pattern in ep_patterns:
+#                     ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
+#                     if ep_match:
+#                         episode_num = ep_match.group(1)
+#                         break
+                
+#                 # Clean filename
+#                 file_name = file["file_name"]
+#                 clean_name = file_name
+#                 for prefix in ['[', '@', 'www.', 'http', 'https']:
+#                     if prefix in clean_name:
+#                         clean_name = clean_name.split(prefix, 1)[-1].strip()
+                
+#                 if len(clean_name) > 30:
+#                     clean_name = clean_name[:27] + "..."
+                
+#                 button_text = f"S{season_num.zfill(2)}E{episode_num.zfill(2)} | {get_size(file['file_size'])} | {clean_name}"
+                
+#                 if file.get('is_similar', False):
+#                     button_text += " (Similar)"
+                
+#                 btn.append([
+#                     InlineKeyboardButton(
+#                         text=button_text,
+#                         callback_data=f"{pre}#{file['file_id']}"
+#                     )
+#                 ])
+            
+#             # Add header
+#             btn.insert(0, [
+#                 InlineKeyboardButton(f"🎬 {original_search} - {seas.title()}", callback_data="ident")
+#             ])
+            
+#             btn.insert(1, [
+#                 InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{seas}#{key}"),
+#                 InlineKeyboardButton("🎭 Episodes", callback_data=f"episodes#{seas}#{key}"),
+#                 InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")
+#             ])
+            
+#             # Add pagination buttons
+#             if total_pages > 1:
+#                 prev_data = f"fs#{seas}#{key}#{page-1}" if page > 0 else "ident"
+#                 next_data = f"fs#{seas}#{key}#{page+1}" if (page + 1) < total_pages else "ident"
+#                 btn.append([
+#                     InlineKeyboardButton("⬅️ Prev", callback_data=prev_data),
+#                     InlineKeyboardButton(f"Page {page+1}/{total_pages}", callback_data="ident"),
+#                     InlineKeyboardButton("Next ➡️", callback_data=next_data)
+#                 ])
+#         else:
+#             btn = []
+#             btn.insert(0, [
+#                 InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{seas}#{key}"),
+#                 InlineKeyboardButton("🎭 Episodes", callback_data=f"episodes#{seas}#{key}"),
+#                 InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")
+#             ])
+        
+#         # Add back buttons
+#         btn.append([InlineKeyboardButton(text="↩️ Back to Seasons", callback_data=f"seasons#{key}")])
+#         btn.append([InlineKeyboardButton(text="🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")])
+        
+#         # Update message with timeout and retry
+#         try:
+#             await asyncio.wait_for(
+#                 query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
+#                 timeout=8.0
+#             )
+#         except FloodWait as e:
+#             logging.warning(f"FloodWait: Waiting for {e.value} seconds")
+#             await asyncio.sleep(e.value)
+#             await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
+#         except MessageNotModified:
+#             logging.info("Message not modified")
+#             pass
+#         except MessageIdInvalid:
+#             logging.error("Message ID invalid during edit_message_reply_markup")
+#             await query.answer("⚠️ Message no longer exists. Please start a new search.", show_alert=True)
+#         except asyncio.TimeoutError:
+#             logging.error("Timeout on edit_message_reply_markup")
+#             await query.answer("⚠️ Took too long to update. Try again.", show_alert=True)
+                
+#     except Exception as e:
+#         logging.error(f"Error in filter_seasons_cb_handler: {e}")
+#         import traceback
+#         logging.error(traceback.format_exc())
+#         await query.answer("❌ An error occurred! Check logs.", show_alert=True)
+
+# @Client.on_callback_query(filters.regex(r"^seasons#"))
+# async def seasons_cb_handler(client: Client, query: CallbackQuery):
+
+#     try:
+#         if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+#             return await query.answer(
+#                 f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+#                 show_alert=True,
+#             )
+#     except:
+#         pass
+    
+#     _, key = query.data.split("#")
+#     search = FRESH.get(key)
+#     BUTTONS[key] = None
+#     try:
+#         search = search.replace(' ', '_')
+#     except:
+#         pass
+#     btn = []
+#     for i in range(0, len(SEASONS)-1, 2):
+#         btn.append([
+#             InlineKeyboardButton(
+#                 text=SEASONS[i].title(),
+#                 callback_data=f"fs#{SEASONS[i].lower()}#{key}"
+#             ),
+#             InlineKeyboardButton(
+#                 text=SEASONS[i+1].title(),
+#                 callback_data=f"fs#{SEASONS[i+1].lower()}#{key}"
+#             ),
+#         ])
+
+#     btn.insert(
+#         0,
+#         [
+#             InlineKeyboardButton(
+#                 text="👇 𝖲𝖾𝗅𝖾𝖼𝗍 Season 👇", callback_data="ident"
+#             )
+#         ],
+#     )
+#     req = query.from_user.id
+#     offset = 0
+#     btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ​↭", callback_data=f"next_{req}_{key}_{offset}")])
+
+#     try:
+#         await query.edit_message_reply_markup(
+#             reply_markup=InlineKeyboardMarkup(btn)
+#         )
+#     except MessageNotModified:
+#         pass
 import re
 import logging
 import asyncio
-from difflib import SequenceMatcher
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from pyrogram.errors import MessageNotModified, FloodWait, MessageIdInvalid
-import uuid
+from pyrogram.errors import MessageNotModified, FloodWait
 
-# Assuming these are defined elsewhere in your codebase
-# from your_module import FRESH, BUTTONS0, temp, get_settings, get_search_results, get_size, LOG_CHANNEL
+# REQUIRED GLOBALS (already exist in your project)
+# FRESH, BUTTONS0, BUTTONS, temp, get_settings, get_search_results, get_size
 
-# Define SEASONS to match season_patterns_map
 SEASONS = [
     "season 1", "season 2", "season 3", "season 4", "season 5",
     "season 6", "season 7", "season 8", "season 9", "season 10"
 ]
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 
-# Cache for search results
-SEARCH_CACHE = {}
-
-async def get_cached_search_results(chat_id, query, max_results):
-    cache_key = (chat_id, query, max_results)
-    if cache_key in SEARCH_CACHE:
-        logging.info(f"Cache hit for query: {query}")
-        return SEARCH_CACHE[cache_key]
-    logging.info(f"Cache miss, executing search for: {query}")
-    try:
-        result = await get_search_results(chat_id, query, max_results)
-        SEARCH_CACHE[cache_key] = result
-        return result
-    except Exception as e:
-        logging.error(f"Search error for query {query}: {e}")
-        return [], 0, 0
-
+# ======================================================
+#  SEASON FILE LIST (FILES INSIDE A SEASON) WITH PAGING
+# ======================================================
 @Client.on_callback_query(filters.regex(r"^fs#"))
 async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
     try:
-        data_parts = query.data.split("#")
-        seas = data_parts[1]
-        key = data_parts[2]
-        page = int(data_parts[3]) if len(data_parts) > 3 else 0
-        
-        logging.info(f"Callback data: {query.data}, seas: {seas}, key: {key}, page: {page}, user: {query.from_user.id}")
-        
-        # Check user permission
+        data = query.data.split("#")
+        seas = data[1]
+        key = data[2]
+        page = int(data[3]) if len(data) > 3 else 0
+
+        # Permission check
         if query.message.reply_to_message:
-            try:
-                if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                    logging.info(f"Permission denied for user {query.from_user.id}")
-                    return await query.answer(
-                        f"⚠️ Hello {query.from_user.first_name},\nThis is not your movie request,\nRequest yours...",
-                        show_alert=True,
-                    )
-            except Exception as e:
-                logging.warning(f"Permission check error: {e}")
-        else:
-            logging.warning("No reply_to_message found for permission check.")
+            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+                return await query.answer("⚠️ Not your request", show_alert=True)
 
         search = FRESH.get(key)
-        
-        logging.info(f"FRESH key: {key}, value: {search}")
-        
         if not search:
-            logging.error(f"Invalid key: {key}")
-            await query.answer("❌ Invalid request! Key not found.", show_alert=True)
-            return
-            
-        original_search = search
+            return await query.answer("❌ Invalid request", show_alert=True)
+
         chat_id = query.message.chat.id
-        files = []
-        
-        # Expanded season patterns to match saved file names
-        season_patterns_map = {
-            "season 1": [
-                r"s\s*0?1\b", r"season\s*0?1\b", r"season-?1\b", r"s-?1\b", r"s01\b", r"s1e", r"season1e", 
-                r"season\s*01\b", r"season\s*1\b", r"season1\b", r"s\s*01\b", r"s\s*1\b", r"1st\s*season", 
-                r"first\s*season", r"season\s*one", r"s1\b", r"season\s*-?\s*01", r"season\s*-?\s*1",
-                r"\b1x", r"1\s*x", r"s01e", r"season\s*1\s*e", r"s\s*1\s*e", r"season\.1\b", r"s\.1\b",
-                r"part\s*1\b", r"part-?1\b", r"chapter\s*1\b", r"ch\s*1\b", r"\b01\b", r"\b1\b",
-                r"s01\.e", r"s1\.e", r"season\.01\b", r"season_1\b", r"s_1\b", r"s01\s*e", r"s1\s*e"
-            ],
-            "season 2": [
-                r"s\s*0?2\b", r"season\s*0?2\b", r"season-?2\b", r"s-?2\b", r"s02\b", r"s2e", r"season2e", 
-                r"season\s*02\b", r"season\s*2\b", r"season2\b", r"s\s*02\b", r"s\s*2\b", r"2nd\s*season", 
-                r"second\s*season", r"s2\b", r"season\s*-?\s*02", r"season\s*-?\s*2",
-                r"\b2x", r"2\s*x", r"s02e", r"season\s*2\s*e", r"s\s*2\s*e", r"season\.2\b", r"s\.2\b",
-                r"part\s*2\b", r"part-?2\b", r"chapter\s*2\b", r"ch\s*2\b", r"\b02\b", r"\b2\b",
-                r"s02\.e", r"s2\.e", r"season\.02\b", r"season_2\b", r"s_2\b", r"s02\s*e", r"s2\s*e", r"s02-e", r"s2-e"
-            ],
-            "season 3": [
-                r"s\s*0?3\b", r"season\s*0?3\b", r"season-?3\b", r"s-?3\b", r"s03\b", r"s3e", r"season3e", 
-                r"season\s*03\b", r"season\s*3\b", r"season3\b", r"s\s*03\b", r"s\s*3\b", r"3rd\s*season", 
-                r"third\s*season", r"s3\b", r"season\s*-?\s*03", r"season\s*-?\s*3",
-                r"\b3x", r"3\s*x", r"s03e", r"season\s*3\s*e", r"s\s*3\s*e", r"season\.3\b", r"s\.3\b",
-                r"part\s*3\b", r"part-?3\b", r"chapter\s*3\b", r"ch\s*3\b", r"\b03\b", r"\b3\b",
-                r"s03\.e", r"s3\.e", r"season\.03\b", r"season_3\b", r"s_3\b", r"s03\s*e", r"s3\s*e", r"s03-e", r"s3-e"
-            ],
-            "season 4": [
-                r"s\s*0?4\b", r"season\s*0?4\b", r"season-?4\b", r"s-?4\b", r"s04\b", r"s4e", r"season4e", 
-                r"season\s*04\b", r"season\s*4\b", r"season4\b", r"s\s*04\b", r"s\s*4\b", r"4th\s*season", 
-                r"fourth\s*season", r"s4\b", r"season\s*-?\s*04", r"season\s*-?\s*4",
-                r"\b4x", r"4\s*x", r"s04e", r"season\s*4\s*e", r"s\s*4\s*e", r"season\.4\b", r"s\.4\b",
-                r"part\s*4\b", r"part-?4\b", r"chapter\s*4\b", r"ch\s*4\b", r"\b04\b", r"\b4\b",
-                r"s04\.e", r"s4\.e", r"season\.04\b", r"season_4\b", r"s_4\b", r"s04\s*e", r"s4\s*e", r"s04-e", r"s4-e"
-            ],
-            "season 5": [
-                r"s\s*0?5\b", r"season\s*0?5\b", r"season-?5\b", r"s-?5\b", r"s05\b", r"s5e", r"season5e", 
-                r"season\s*05\b", r"season\s*5\b", r"season5\b", r"s\s*05\b", r"s\s*5\b", r"5th\s*season", 
-                r"fifth\s*season", r"s5\b", r"season\s*-?\s*05", r"season\s*-?\s*5",
-                r"\b5x", r"5\s*x", r"s05e", r"season\s*5\s*e", r"s\s*5\s*e", r"season\.5\b", r"s\.5\b",
-                r"part\s*5\b", r"part-?5\b", r"chapter\s*5\b", r"ch\s*5\b", r"\b05\b", r"\b5\b",
-                r"s05\.e", r"s5\.e", r"season\.05\b", r"season_5\b", r"s_5\b", r"s05\s*e", r"s5\s*e", r"s05-e", r"s5-e"
-            ],
-            "season 6": [
-                r"s\s*0?6\b", r"season\s*0?6\b", r"season-?6\b", r"s-?6\b", r"s06\b", r"s6e", r"season6e", 
-                r"season\s*06\b", r"season\s*6\b", r"season6\b", r"s\s*06\b", r"s\s*6\b", r"6th\s*season", 
-                r"sixth\s*season", r"s6\b", r"season\s*-?\s*06", r"season\s*-?\s*6",
-                r"\b6x", r"6\s*x", r"s06e", r"season\s*6\s*e", r"s\s*6\s*e", r"season\.6\b", r"s\.6\b",
-                r"part\s*6\b", r"part-?6\b", r"chapter\s*6\b", r"ch\s*6\b", r"\b06\b", r"\b6\b",
-                r"s06\.e", r"s6\.e", r"season\.06\b", r"season_6\b", r"s_6\b", r"s06\s*e", r"s6\s*e", r"s06-e", r"s6-e"
-            ],
-            "season 7": [
-                r"s\s*0?7\b", r"season\s*0?7\b", r"season-?7\b", r"s-?7\b", r"s07\b", r"s7e", r"season7e", 
-                r"season\s*07\b", r"season\s*7\b", r"season7\b", r"s\s*07\b", r"s\s*7\b", r"7th\s*season", 
-                r"seventh\s*season", r"s7\b", r"season\s*-?\s*07", r"season\s*-?\s*7",
-                r"\b7x", r"7\s*x", r"s07e", r"season\s*7\s*e", r"s\s*7\s*e", r"season\.7\b", r"s\.7\b",
-                r"part\s*7\b", r"part-?7\b", r"chapter\s*7\b", r"ch\s*7\b", r"\b07\b", r"\b7\b",
-                r"s07\.e", r"s7\.e", r"season\.07\b", r"season_7\b", r"s_7\b", r"s07\s*e", r"s7\s*e", r"s07-e", r"s7-e"
-            ],
-            "season 8": [
-                r"s\s*0?8\b", r"season\s*0?8\b", r"season-?8\b", r"s-?8\b", r"s08\b", r"s8e", r"season8e", 
-                r"season\s*08\b", r"season\s*8\b", r"season8\b", r"s\s*08\b", r"s\s*8\b", r"8th\s*season", 
-                r"eighth\s*season", r"s8\b", r"season\s*-?\s*08", r"season\s*-?\s*8",
-                r"\b8x", r"8\s*x", r"s08e", r"season\s*8\s*e", r"s\s*8\s*e", r"season\.8\b", r"s\.8\b",
-                r"part\s*8\b", r"part-?8\b", r"chapter\s*8\b", r"ch\s*8\b", r"\b08\b", r"\b8\b",
-                r"s08\.e", r"s8\.e", r"season\.08\b", r"season_8\b", r"s_8\b", r"s08\s*e", r"s8\s*e", r"s08-e", r"s8-e"
-            ],
-            "season 9": [
-                r"s\s*0?9\b", r"season\s*0?9\b", r"season-?9\b", r"s-?9\b", r"s09\b", r"s9e", r"season9e", 
-                r"season\s*09\b", r"season\s*9\b", r"season9\b", r"s\s*09\b", r"s\s*9\b", r"9th\s*season", 
-                r"ninth\s*season", r"s9\b", r"season\s*-?\s*09", r"season\s*-?\s*9",
-                r"\b9x", r"9\s*x", r"s09e", r"season\s*9\s*e", r"s\s*9\s*e", r"season\.9\b", r"s\.9\b",
-                r"part\s*9\b", r"part-?9\b", r"chapter\s*9\b", r"ch\s*9\b", r"\b09\b", r"\b9\b",
-                r"s09\.e", r"s9\.e", r"season\.09\b", r"season_9\b", r"s_9\b", r"s09\s*e", r"s9\s*e", r"s09-e", r"s9-e"
-            ],
-            "season 10": [
-                r"s\s*10\b", r"season\s*10\b", r"season-?10\b", r"s-?10\b", r"s10\b", r"s10e", r"season10e", 
-                r"season\s*10\b", r"season10\b", r"s\s*10\b", r"10th\s*season", r"tenth\s*season", 
-                r"s10\b", r"season\s*-?\s*10", r"\b10x", r"10\s*x", r"s10e", r"season\s*10\s*e",
-                r"season\.10\b", r"s\.10\b", r"part\s*10\b", r"part-?10\b", r"chapter\s*10\b", r"ch\s*10\b", 
-                r"\b10\b", r"s10\.e", r"season\.10\b", r"season_10\b", r"s_10\b", r"s10\s*e", r"s10-e"
-            ]
-        }
-        
-        # Get patterns for the selected season
-        if seas in season_patterns_map:
-            patterns = season_patterns_map[seas]
-            season_num = seas.split()[-1]
-            season_regex = re.compile("|".join(patterns), re.IGNORECASE)
-            
-            # Perform a single broad search with increased max_results
-            logging.info(f"Performing broad search for: {original_search}")
-            try:
-                broad_files, _, _ = await asyncio.wait_for(
-                    get_cached_search_results(chat_id, original_search, max_results=50000),
-                    timeout=30.0
-                )
-                logging.info(f"Broad search found {len(broad_files)} files")
-                # Log file names for debugging
-                if broad_files:
-                    logging.debug(f"Broad search files: {[f['file_name'] for f in broad_files[:50]]}")
-            except asyncio.TimeoutError:
-                logging.error("Timeout on broad search")
-                broad_files = []
-            except Exception as e:
-                logging.error(f"Broad search failed: {e}")
-                broad_files = []
-            
-            # Filter exact matches
-            exact_files = []
-            unmatched_files = []
-            for file in broad_files:
-                file_name_lower = file["file_name"].lower()
-                if season_regex.search(file_name_lower):
-                    exact_files.append(file)
-                    logging.debug(f"Exact matched file: {file['file_name']}")
-                else:
-                    unmatched_files.append(file["file_name"])
-                    logging.debug(f"Unmatched file: {file['file_name']}")
-            
-            files = exact_files
-            
-            # Fallback search mimicking direct search
-            if not files and season_num:
-                fallback_query = f"{original_search} s{season_num.zfill(2)}"
-                logging.info(f"No exact matches, trying fallback search: {fallback_query}")
-                try:
-                    fallback_files, _, _ = await asyncio.wait_for(
-                        get_cached_search_results(chat_id, fallback_query, max_results=50000),
-                        timeout=30.0
-                    )
-                    logging.info(f"Fallback search found {len(fallback_files)} files")
-                    # Log file names for debugging
-                    if fallback_files:
-                        logging.debug(f"Fallback search files: {[f['file_name'] for f in fallback_files[:50]]}")
-                    for file in fallback_files:
-                        file_name_lower = file["file_name"].lower()
-                        if season_regex.search(file_name_lower):
-                            exact_files.append(file)
-                            logging.debug(f"Fallback exact matched file: {file['file_name']}")
-                        else:
-                            unmatched_files.append(file["file_name"])
-                            logging.debug(f"Fallback unmatched file: {file['file_name']}")
-                    files = exact_files
-                except Exception as e:
-                    logging.error(f"Fallback search failed: {e}")
-            
-            # If fewer than 10 exact matches, add similar files
-            similar_files = []
-            if len(files) < 10 and broad_files:
-                target_str = f"{original_search.lower()} s{season_num.zfill(2)}"
-                for file in broad_files:
-                    file_name_lower = file["file_name"].lower()
-                    if not season_regex.search(file_name_lower):
-                        similarity = SequenceMatcher(None, target_str, file_name_lower).ratio()
-                        if similarity > 0.3:
-                            file_copy = file.copy()
-                            file_copy['is_similar'] = True
-                            similar_files.append(file_copy)
-                            logging.debug(f"Similar file added: {file['file_name']} (similarity: {similarity:.2f})")
-            
-            files += similar_files
-            
-            # Log unmatched files to LOG_CHANNEL (paginated)
-            if unmatched_files and LOG_CHANNEL:
-                try:
-                    batch_size = 50
-                    for i in range(0, len(unmatched_files), batch_size):
-                        batch = unmatched_files[i:i + batch_size]
-                        await client.send_message(
-                            chat_id=LOG_CHANNEL,
-                            text=(
-                                f"🛠 **Debug: Unmatched Files for {original_search} {seas} (Batch {i//batch_size + 1})**\n"
-                                f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
-                                f"📂 Unmatched Files:\n" +
-                                "\n".join([f"- {name}" for name in batch])
-                            )
-                        )
-                    logging.info(f"Logged {len(unmatched_files)} unmatched files for debugging")
-                except Exception as e:
-                    logging.error(f"Failed to log unmatched files: {e}")
-        
+        season_num = seas.split()[-1]
+
+        season_regex = re.compile(
+            rf"(s0?{season_num}\b|season\s*0?{season_num}\b)",
+            re.IGNORECASE
+        )
+
+        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+
+        season_files = [
+            f for f in files
+            if season_regex.search(f["file_name"].lower())
+        ]
+
+        if not season_files:
+            return await query.answer("🚫 No files found", show_alert=True)
+
         # Remove duplicates
-        unique_files = []
-        seen_file_ids = set()
-        for file in files:
-            if file["file_id"] not in seen_file_ids:
-                unique_files.append(file)
-                seen_file_ids.add(file["file_id"])
-        
-        files = unique_files
-        
-        # Sort files by episode number
-        def get_episode_num(file):
-            file_name_lower = file["file_name"].lower()
-            ep_patterns = [
-                r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', 
-                r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)', r'\.(\d+)\.'
-            ]
-            for pattern in ep_patterns:
-                ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
-                if ep_match:
-                    return int(ep_match.group(1))
-            return 999
-        
-        files = sorted(files, key=get_episode_num)
-        
-        logging.info(f"After filtering, dedup, and sort: {len(files)} files (including {len(similar_files)} similar)")
-        
-        if not files:
-            logging.info("No files found for season after filtering")
-            await query.answer("🚫 No Files Found for this Season 🚫", show_alert=True)
-            # Log no files found to LOG_CHANNEL
-            if LOG_CHANNEL:
-                try:
-                    await client.send_message(
-                        chat_id=LOG_CHANNEL,
-                        text=(
-                            f"🛠 **Debug: No Files Found for {original_search} {seas}**\n"
-                            f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
-                            f"🔎 Series: `{original_search}`\n"
-                            f"📅 Season: `{seas}`\n"
-                            f"📝 Note: No exact or similar matches found"
-                        )
-                    )
-                    logging.info(f"Logged no files found for {original_search} {seas}")
-                except Exception as e:
-                    logging.error(f"Failed to log no files found: {e}")
-            return
-        
-        # Log the series search to LOG_CHANNEL
-        if LOG_CHANNEL:
-            try:
-                await client.send_message(
-                    chat_id=LOG_CHANNEL,
-                    text=(
-                        f"📩 **Series Search Log**\n"
-                        f"👤 User: {query.from_user.mention} (`{query.from_user.id}`)\n"
-                        f"🔎 Series: `{original_search}`\n"
-                        f"📅 Season: `{seas}`\n"
-                        f"📂 Files Found: {len(files)} (including {len(similar_files)} similar)"
-                    )
-                )
-                logging.info(f"Logged series search for {original_search} {seas} by {query.from_user.id}")
-            except Exception as e:
-                logging.error(f"Failed to log series search: {e}")
-        
-        # Store files for this season
-        BUTTONS0[key] = f"{original_search} {seas}"
-        temp.GETALL[key] = files
-        
-        settings = await get_settings(query.message.chat.id)
-        pre = 'filep' if settings['file_secure'] else 'file'
-        
-        # Pagination: Show 10 files per page
-        files_per_page = 10
-        start_idx = page * files_per_page
-        end_idx = start_idx + files_per_page
-        paginated_files = files[start_idx:end_idx]
-        total_pages = ((len(files) - 1) // files_per_page) + 1
-        
-        if settings["button"]:
-            btn = []
-            for file in paginated_files:
-                season_num = seas.split()[-1]
-                file_name_lower = file["file_name"].lower()
-                
-                # Extract episode number
-                episode_num = "??"
-                ep_patterns = [
-                    r'e\s*(\d+)', r'episode\s*(\d+)', r'ep\s*(\d+)', r'\[(\d+)\]', 
-                    r'e-?(\d+)', r'ep-?(\d+)', r'x(\d+)', r'\.(\d+)\.'
-                ]
-                for pattern in ep_patterns:
-                    ep_match = re.search(pattern, file_name_lower, re.IGNORECASE)
-                    if ep_match:
-                        episode_num = ep_match.group(1)
-                        break
-                
-                # Clean filename
-                file_name = file["file_name"]
-                clean_name = file_name
-                for prefix in ['[', '@', 'www.', 'http', 'https']:
-                    if prefix in clean_name:
-                        clean_name = clean_name.split(prefix, 1)[-1].strip()
-                
-                if len(clean_name) > 30:
-                    clean_name = clean_name[:27] + "..."
-                
-                button_text = f"S{season_num.zfill(2)}E{episode_num.zfill(2)} | {get_size(file['file_size'])} | {clean_name}"
-                
-                if file.get('is_similar', False):
-                    button_text += " (Similar)"
-                
-                btn.append([
-                    InlineKeyboardButton(
-                        text=button_text,
-                        callback_data=f"{pre}#{file['file_id']}"
-                    )
-                ])
-            
-            # Add header
-            btn.insert(0, [
-                InlineKeyboardButton(f"🎬 {original_search} - {seas.title()}", callback_data="ident")
-            ])
-            
-            btn.insert(1, [
-                InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{seas}#{key}"),
-                InlineKeyboardButton("🎭 Episodes", callback_data=f"episodes#{seas}#{key}"),
-                InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")
-            ])
-            
-            # Add pagination buttons
-            if total_pages > 1:
-                prev_data = f"fs#{seas}#{key}#{page-1}" if page > 0 else "ident"
-                next_data = f"fs#{seas}#{key}#{page+1}" if (page + 1) < total_pages else "ident"
-                btn.append([
-                    InlineKeyboardButton("⬅️ Prev", callback_data=prev_data),
-                    InlineKeyboardButton(f"Page {page+1}/{total_pages}", callback_data="ident"),
-                    InlineKeyboardButton("Next ➡️", callback_data=next_data)
-                ])
-        else:
-            btn = []
-            btn.insert(0, [
-                InlineKeyboardButton(f'📊 Quality', callback_data=f"qualities#{seas}#{key}"),
-                InlineKeyboardButton("🎭 Episodes", callback_data=f"episodes#{seas}#{key}"),
-                InlineKeyboardButton("📺 Seasons", callback_data=f"seasons#{key}")
-            ])
-        
-        # Add back buttons
-        btn.append([InlineKeyboardButton(text="↩️ Back to Seasons", callback_data=f"seasons#{key}")])
-        btn.append([InlineKeyboardButton(text="🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")])
-        
-        # Update message with timeout and retry
-        try:
-            await asyncio.wait_for(
-                query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn)),
-                timeout=8.0
-            )
-        except FloodWait as e:
-            logging.warning(f"FloodWait: Waiting for {e.value} seconds")
-            await asyncio.sleep(e.value)
-            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
-        except MessageNotModified:
-            logging.info("Message not modified")
-            pass
-        except MessageIdInvalid:
-            logging.error("Message ID invalid during edit_message_reply_markup")
-            await query.answer("⚠️ Message no longer exists. Please start a new search.", show_alert=True)
-        except asyncio.TimeoutError:
-            logging.error("Timeout on edit_message_reply_markup")
-            await query.answer("⚠️ Took too long to update. Try again.", show_alert=True)
-                
-    except Exception as e:
-        logging.error(f"Error in filter_seasons_cb_handler: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
-        await query.answer("❌ An error occurred! Check logs.", show_alert=True)
+        unique = {}
+        for f in season_files:
+            unique[f["file_id"]] = f
+        season_files = list(unique.values())
 
-@Client.on_callback_query(filters.regex(r"^seasons#"))
-async def seasons_cb_handler(client: Client, query: CallbackQuery):
+        # Sort by episode
+        def get_episode(file):
+            m = re.search(r"[Ee](\d+)", file["file_name"])
+            return int(m.group(1)) if m else 999
 
-    try:
-        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-            return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
-                show_alert=True,
-            )
-    except:
-        pass
-    
-    _, key = query.data.split("#")
-    search = FRESH.get(key)
-    BUTTONS[key] = None
-    try:
-        search = search.replace(' ', '_')
-    except:
-        pass
-    btn = []
-    for i in range(0, len(SEASONS)-1, 2):
-        btn.append([
-            InlineKeyboardButton(
-                text=SEASONS[i].title(),
-                callback_data=f"fs#{SEASONS[i].lower()}#{key}"
-            ),
-            InlineKeyboardButton(
-                text=SEASONS[i+1].title(),
-                callback_data=f"fs#{SEASONS[i+1].lower()}#{key}"
-            ),
+        season_files.sort(key=get_episode)
+
+        settings = await get_settings(chat_id)
+        pre = "filep" if settings.get("file_secure") else "file"
+
+        FILES_PER_PAGE = 12
+        total_pages = (len(season_files) - 1) // FILES_PER_PAGE + 1
+        start = page * FILES_PER_PAGE
+        end = start + FILES_PER_PAGE
+        page_files = season_files[start:end]
+
+        btn = []
+
+        for file in page_files:
+            ep = re.search(r"[Ee](\d+)", file["file_name"])
+            episode = ep.group(1).zfill(2) if ep else "??"
+
+            clean_name = re.sub(r"\[.*?\]", "", file["file_name"]).strip()
+            if len(clean_name) > 45:
+                clean_name = clean_name[:42] + "..."
+
+            text = f"{get_size(file['file_size'])} ▷ [S{season_num.zfill(2)}E{episode}] {clean_name}"
+
+            btn.append([
+                InlineKeyboardButton(text=text, callback_data=f"{pre}#{file['file_id']}")
+            ])
+
+        # Header
+        btn.insert(0, [
+            InlineKeyboardButton(f"🎬 {search} — {seas.title()}", callback_data="ident")
         ])
 
-    btn.insert(
-        0,
-        [
-            InlineKeyboardButton(
-                text="👇 𝖲𝖾𝗅𝖾𝖼𝗍 Season 👇", callback_data="ident"
-            )
-        ],
-    )
-    req = query.from_user.id
-    offset = 0
-    btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ​↭", callback_data=f"next_{req}_{key}_{offset}")])
+        # Pagination
+        if total_pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"fs#{seas}#{key}#{page-1}"))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
+            if page + 1 < total_pages:
+                nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"fs#{seas}#{key}#{page+1}"))
+            btn.append(nav)
 
-    try:
-        await query.edit_message_reply_markup(
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
+        btn.append([
+            InlineKeyboardButton("↩️ Back to Seasons", callback_data=f"seasons#{key}"),
+            InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")
+        ])
+
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
+
+    except FloodWait as e:
+        await asyncio.sleep(e.value)
     except MessageNotModified:
         pass
+
+
+# ======================================================
+#  SEASON BUTTON LIST WITH PAGINATION (FIXED)
+# ======================================================
+@Client.on_callback_query(filters.regex(r"^seasons#"))
+async def seasons_cb_handler(client: Client, query: CallbackQuery):
+    data = query.data.split("#")
+    key = data[1]
+    page = int(data[2]) if len(data) > 2 else 0
+
+    PER_PAGE = 6
+    total_pages = (len(SEASONS) - 1) // PER_PAGE + 1
+    start = page * PER_PAGE
+    end = start + PER_PAGE
+    page_seasons = SEASONS[start:end]
+
+    btn = []
+
+    for i in range(0, len(page_seasons), 2):
+        row = []
+        row.append(
+            InlineKeyboardButton(
+                page_seasons[i].title(),
+                callback_data=f"fs#{page_seasons[i]}#{key}"
+            )
+        )
+        if i + 1 < len(page_seasons):
+            row.append(
+                InlineKeyboardButton(
+                    page_seasons[i + 1].title(),
+                    callback_data=f"fs#{page_seasons[i + 1]}#{key}"
+                )
+            )
+        btn.append(row)
+
+    btn.insert(0, [
+        InlineKeyboardButton("👇 Select Season 👇", callback_data="ident")
+    ])
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"seasons#{key}#{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
+        if page + 1 < total_pages:
+            nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"seasons#{key}#{page+1}"))
+        btn.append(nav)
+
+    btn.append([
+        InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")
+    ])
+
+    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
 
 #End Here
 @Client.on_callback_query(filters.regex(r"^qualities#"))
@@ -4005,6 +4179,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
