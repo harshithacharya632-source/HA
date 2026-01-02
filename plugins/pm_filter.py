@@ -776,7 +776,6 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
     
 #start here
 
-
 import re
 import logging
 import asyncio
@@ -791,16 +790,62 @@ from imdb import IMDb
 logging.basicConfig(level=logging.INFO)
 
 ia = IMDb()
-IMDB_CACHE = {}
 
+# =========================
+# GLOBAL CACHES (FAST)
+# =========================
+SEARCH_CACHE = {}      # key -> all files
+SEASON_CACHE = {}      # key -> available seasons
+IMDB_CACHE = {}        # title -> total seasons
+
+
+# =========================
+# FETCH ALL FILES ONCE
+# =========================
+async def get_all_search_results_cached(chat_id, query, key):
+    if key in SEARCH_CACHE:
+        return SEARCH_CACHE[key]
+
+    all_files = []
+    offset = 0
+
+    while True:
+        files, next_offset, _ = await get_search_results(
+            chat_id=chat_id,
+            query=query,
+            offset=offset
+        )
+
+        if not files:
+            break
+
+        all_files.extend(files)
+
+        if next_offset is None:
+            break
+
+        offset = next_offset
+
+        if len(all_files) >= 10000:
+            break
+
+    SEARCH_CACHE[key] = all_files
+    return all_files
+
+
+# =========================
+# IMDb SEASON COUNT (CACHED)
+# =========================
 def get_imdb_total_seasons(title: str):
     if title in IMDB_CACHE:
         return IMDB_CACHE[title]
+
     try:
         results = ia.search_movie(title)
         if not results:
             IMDB_CACHE[title] = None
             return None
+
         movie = results[0]
         ia.update(movie)
         total = movie.get("number of seasons")
@@ -812,41 +857,33 @@ def get_imdb_total_seasons(title: str):
 
 
 # ======================================================
-#  FILE LIST INSIDE A SEASON (WITH PAGINATION)
+# FILE LIST INSIDE A SEASON (INSTANT)
 # ======================================================
 @Client.on_callback_query(filters.regex(r"^fs#"))
 async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
     try:
         data = query.data.split("#")
-        seas = data[1]              # "season X"
+        seas = data[1]
         key = data[2]
         page = int(data[3]) if len(data) > 3 else 0
 
-        if query.message.reply_to_message:
-            if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
-                return await query.answer("⚠️ Not your request", show_alert=True)
-
         search = FRESH.get(key)
-        if not search:
-            return await query.answer("❌ Invalid request", show_alert=True)
-
         chat_id = query.message.chat.id
         season_num = int(seas.split()[-1])
+
+        files = SEARCH_CACHE.get(key)
+        if not files:
+            files = await get_all_search_results_cached(chat_id, search, key)
 
         season_regex = re.compile(
             rf"(?:^|[\s._-])(?:s|season)[\s._-]*0?{season_num}(?:[\s._-]|$)",
             re.IGNORECASE
         )
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
         season_files = [
             f for f in files
             if season_regex.search(f["file_name"].lower())
         ]
-
-        if not season_files:
-            return await query.answer("🚫 No files found", show_alert=True)
 
         unique = {}
         for f in season_files:
@@ -862,27 +899,24 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         settings = await get_settings(chat_id)
         pre = "filep" if settings.get("file_secure") else "file"
 
-        FILES_PER_PAGE = 12
-        total_pages = (len(season_files) - 1) // FILES_PER_PAGE + 1
-        start = page * FILES_PER_PAGE
-        end = start + FILES_PER_PAGE
-        page_files = season_files[start:end]
+        PER_PAGE = 12
+        total_pages = (len(season_files) - 1) // PER_PAGE + 1
+        start = page * PER_PAGE
+        end = start + PER_PAGE
 
         btn = []
 
-        for file in page_files:
+        for file in season_files[start:end]:
             ep = re.search(r"[Ee](\d+)", file["file_name"])
             episode = ep.group(1).zfill(2) if ep else "??"
 
-            clean_name = re.sub(r"\[.*?\]", "", file["file_name"]).strip()
-            if len(clean_name) > 45:
-                clean_name = clean_name[:42] + "..."
+            clean = re.sub(r"\[.*?\]", "", file["file_name"]).strip()
+            if len(clean) > 45:
+                clean = clean[:42] + "..."
 
-            text = f"{get_size(file['file_size'])} ▷ [S{season_num:02d}E{episode}] {clean_name}"
+            text = f"{get_size(file['file_size'])} ▷ [S{season_num:02d}E{episode}] {clean}"
 
-            btn.append([
-                InlineKeyboardButton(text=text, callback_data=f"{pre}#{file['file_id']}")
-            ])
+            btn.append([InlineKeyboardButton(text, callback_data=f"{pre}#{file['file_id']}")])
 
         btn.insert(0, [
             InlineKeyboardButton(f"🎬 {search} — Season {season_num}", callback_data="ident")
@@ -891,16 +925,10 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         if total_pages > 1:
             nav = []
             if page > 0:
-                nav.append(
-                    InlineKeyboardButton("⬅️ Prev", callback_data=f"fs#season {season_num}#{key}#{page-1}")
-                )
-            nav.append(
-                InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident")
-            )
+                nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"fs#season {season_num}#{key}#{page-1}"))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
             if page + 1 < total_pages:
-                nav.append(
-                    InlineKeyboardButton("Next ➡️", callback_data=f"fs#season {season_num}#{key}#{page+1}")
-                )
+                nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"fs#season {season_num}#{key}#{page+1}"))
             btn.append(nav)
 
         btn.append([
@@ -908,7 +936,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")
         ])
 
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
 
     except FloodWait as e:
         await asyncio.sleep(e.value)
@@ -917,7 +945,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
 
 
 # ======================================================
-#  SEASON BUTTON LIST (IMDB + DB VALIDATED)
+# SEASON BUTTON LIST (INSTANT)
 # ======================================================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client: Client, query: CallbackQuery):
@@ -927,56 +955,51 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
         page = int(data[2]) if len(data) > 2 else 0
 
         search = FRESH.get(key)
-        if not search:
-            return await query.answer("❌ Invalid request", show_alert=True)
-
         chat_id = query.message.chat.id
 
-        imdb_total = get_imdb_total_seasons(search)
+        files = SEARCH_CACHE.get(key)
+        if not files:
+            files = await get_all_search_results_cached(chat_id, search, key)
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+        if key not in SEASON_CACHE:
+            imdb_total = get_imdb_total_seasons(search)
+            season_set = set()
 
-        season_set = set()
-        for f in files:
-            match = re.search(
-                r"(?:^|[\s._-])(?:s|season)[\s._-]*0?(\d{1,2})(?:[\s._-]|$)",
-                f["file_name"].lower()
-            )
-            if match:
-                s = int(match.group(1))
-                if imdb_total:
-                    if 1 <= s <= imdb_total:
+            for f in files:
+                match = re.search(
+                    r"(?:^|[\s._-])(?:s|season)[\s._-]*0?(\d{1,2})(?:[\s._-]|$)",
+                    f["file_name"].lower()
+                )
+                if match:
+                    s = int(match.group(1))
+                    if imdb_total:
+                        if 1 <= s <= imdb_total:
+                            season_set.add(s)
+                    else:
                         season_set.add(s)
-                else:
-                    season_set.add(s)
 
-        if not season_set:
-            return await query.answer("🚫 No seasons found", show_alert=True)
+            SEASON_CACHE[key] = sorted(season_set)
 
-        seasons = sorted(season_set)
+        seasons = SEASON_CACHE[key]
 
         PER_PAGE = 6
         total_pages = (len(seasons) - 1) // PER_PAGE + 1
         start = page * PER_PAGE
         end = start + PER_PAGE
-        page_seasons = seasons[start:end]
 
         btn = []
 
-        for i in range(0, len(page_seasons), 2):
-            row = [
-                InlineKeyboardButton(
-                    f"Season {page_seasons[i]}",
-                    callback_data=f"fs#season {page_seasons[i]}#{key}"
-                )
-            ]
-            if i + 1 < len(page_seasons):
-                row.append(
-                    InlineKeyboardButton(
-                        f"Season {page_seasons[i + 1]}",
-                        callback_data=f"fs#season {page_seasons[i + 1]}#{key}"
-                    )
-                )
+        for i in range(0, len(seasons[start:end]), 2):
+            row = []
+            row.append(InlineKeyboardButton(
+                f"Season {seasons[start:end][i]}",
+                callback_data=f"fs#season {seasons[start:end][i]}#{key}"
+            ))
+            if i + 1 < len(seasons[start:end]):
+                row.append(InlineKeyboardButton(
+                    f"Season {seasons[start:end][i+1]}",
+                    callback_data=f"fs#season {seasons[start:end][i+1]}#{key}"
+                ))
             btn.append(row)
 
         btn.insert(0, [
@@ -986,26 +1009,21 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
         if total_pages > 1:
             nav = []
             if page > 0:
-                nav.append(
-                    InlineKeyboardButton("⬅️ Prev", callback_data=f"seasons#{key}#{page-1}")
-                )
-            nav.append(
-                InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident")
-            )
+                nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"seasons#{key}#{page-1}"))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
             if page + 1 < total_pages:
-                nav.append(
-                    InlineKeyboardButton("Next ➡️", callback_data=f"seasons#{key}#{page+1}")
-                )
+                nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"seasons#{key}#{page+1}"))
             btn.append(nav)
 
         btn.append([
             InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")
         ])
 
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
 
     except MessageNotModified:
         pass
+
 
 
 
@@ -3755,6 +3773,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
