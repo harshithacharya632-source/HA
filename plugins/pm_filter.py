@@ -352,9 +352,29 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
     if settings["button"]:
         btn = [
             [
+                # InlineKeyboardButton(
+                #     text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                # ),
+                name = file['file_name']
+                
+                # detect season & episode (S01E02)
+                se = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', name)
+                
+                # clean filename BUT KEEP "COMBINED"
+                clean_name = re.sub(r'\[.*?\]', '', name)
+                clean_name = clean_name.replace("WEBRip", "").strip()
+                
+                # movie vs series format
+                if se:
+                    button_text = f"{get_size(file['file_size'])} ▷ [S{se.group(1).zfill(2)}E{se.group(2).zfill(2)}] {clean_name}"
+                else:
+                    button_text = f"{get_size(file['file_size'])} ▷ {clean_name}"
+                
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=button_text,
+                    callback_data=f'{pre}#{file["file_id"]}'
                 ),
+
             ]
             for file in files
         ]
@@ -3993,6 +4013,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
