@@ -30,22 +30,7 @@ BUTTONS0 = {}
 BUTTONS1 = {}
 BUTTONS2 = {}
 SPELL_CHECK = {}
-#555
-@Client.on_message(filters.private & filters.command("start"))
-async def start_payload_handler(client, message):
-    if len(message.command) > 1:
-        payload = message.command[1]
 
-        if payload.startswith("getfile-"):
-            query = payload.replace("getfile-", "").replace("-", " ")
-
-            # convert /start payload into a normal user text search
-            message.text = query
-            message.command = None
-
-            await pm_filter(client, message)
-            return
-#555
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
     if message.chat.id != SUPPORT_CHAT_ID:
@@ -3680,6 +3665,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
