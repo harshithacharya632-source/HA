@@ -117,3 +117,28 @@ async def filter_stats():
     totalcollections = len(collections)
 
     return totalcollections, totalcount
+
+# =========================
+# GET FILE LANGUAGE (NEW)
+# =========================
+async def get_file_language_by_text(text: str, group_id: int):
+    """
+    Fetch language info from filter DB using filter text or filename
+    """
+    mycol = mydb[str(group_id)]
+
+    data = mycol.find_one(
+        {"text": text},
+        {"language": 1}
+    )
+
+    if not data:
+        return "Unknown"
+
+    lang = data.get("language")
+
+    if isinstance(lang, list):
+        return ", ".join(lang)
+
+    return lang or "Unknown"
+
