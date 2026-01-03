@@ -244,14 +244,12 @@ Nᴀᴍᴇ - {}"""
 
 𝗠𝗲𝘀𝘀𝗮𝗴𝗲 <b>: {}</b>"""
 
-    CAPTION = """📂 ғɪʟᴇɴᴀᴍᴇ : {file_name}
+    CAPTION = """<b>📂 ғɪʟᴇɴᴀᴍᴇ :</b> {file_name}
 
-⚙️ sɪᴢᴇ : {file_size}
-🌐 ʟᴀɴɢᴜᴀɢᴇ : {language}
-
-♨️ Goflix file  
-🔗 <a href="https://t.me/trendi_Backup">📢 Goflix Update Channel</a>  
-🎬 <a href="https://t.me/gofixmovie">🎥 Goflix Movies Channel</a>
+<b>⚙️ sɪᴢᴇ :</b> {file_size}
+      ♨️ Goflix file   
+🔗 <a href='https://t.me/trendi_Backup'>📢 Update Channel</a>
+🎬 <a href='https://t.me/gofixmovie'>🎥 Movie Group</a>
 """
 
     IMDB_TEMPLATE_TXT = """
@@ -758,6 +756,7 @@ Example:- /set_caption 📕 File Name: {filename}
 
 
     
+
 
 
 
