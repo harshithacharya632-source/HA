@@ -244,10 +244,12 @@ Nᴀᴍᴇ - {}"""
 
 𝗠𝗲𝘀𝘀𝗮𝗴𝗲 <b>: {}</b>"""
 
-    CAPTION = """<b>📂 ғɪʟᴇɴᴀᴍᴇ : {file_name}
+    CAPTION = """<b>📂 ғɪʟᴇɴᴀᴍᴇ :</b> {file_name}
 
-<b>⚙️ sɪᴢᴇ : {file_size}</b>
-      ♨️ Goflix file   
+<b>⚙️ sɪᴢᴇ :</b> {file_size}
+<b>🌐 ʟᴀɴɢᴜᴀɢᴇ :</b> {language}
+
+♨️ Goflix file  
 🔗 <a href='https://t.me/trendi_Backup'>📢 Update Channel</a>
 🎬 <a href='https://t.me/gofixmovie'>🎥 Movie Group</a>
 """
@@ -756,6 +758,7 @@ Example:- /set_caption 📕 File Name: {filename}
 
 
     
+
 
 
 
