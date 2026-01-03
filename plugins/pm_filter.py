@@ -32,11 +32,19 @@ BUTTONS2 = {}
 SPELL_CHECK = {}
 #555
 @Client.on_message(filters.private & filters.command("start"))
-async def start_search(client, message):
+async def start_payload_handler(client, message):
     if len(message.command) > 1:
-        query = " ".join(message.command[1:]).replace("_", " ")
-        # Forward query as normal text so pm_filter search works
-        await message.reply_text(query)
+        payload = message.command[1]
+
+        if payload.startswith("getfile-"):
+            query = payload.replace("getfile-", "").replace("-", " ")
+
+            # convert /start payload into a normal user text search
+            message.text = query
+            message.command = None
+
+            await pm_filter(client, message)
+            return
 #555
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
@@ -3672,6 +3680,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
