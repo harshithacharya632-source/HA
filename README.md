@@ -2,7 +2,7 @@
   <img src="https://ibb.co/0RQMzgyB (https://ibb.co/0RQMzgyB)" alt="Goflix-Bot Logo">
 </p>
 <h1 align="center">
-  VJ FILTER BOT
+  Goflix Team 
 </h1>
 
 ![Typing SVG](https://readme-typing-svg.herokuapp.com/?lines=Welcome+To+VJ+Filter+Bot!)
@@ -204,6 +204,7 @@ Selling The Codes To Other People For Money Is *Strictly Prohibited*.</b>
 </pre>
 </p>
 </details>
+
 
 
 
