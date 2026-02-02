@@ -1,9 +1,12 @@
-# Auto delete user messages after 3 minutes (NON-BLOCKING)
+# Auto delete user messages after 3 minutes (SAFE VERSION)
 
 import asyncio
 from pyrogram import Client, filters
 
-@Client.on_message(filters.private & filters.incoming & ~filters.bot)
+@Client.on_message(
+    filters.private & filters.incoming & ~filters.bot,
+    group=100   # VERY IMPORTANT
+)
 async def auto_delete_user_messages(client, message):
 
     async def delete_later(msg):
@@ -13,5 +16,4 @@ async def auto_delete_user_messages(client, message):
         except:
             pass
 
-    # run in background so other handlers still work
     asyncio.create_task(delete_later(message))
