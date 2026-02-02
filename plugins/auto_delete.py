@@ -26,7 +26,7 @@ async def auto_delete_user_messages(client, message):
             return
 
     async def delete_later(msg):
-        await asyncio.sleep(180)  # 3 minutes
+        await asyncio.sleep(70)  # 3 minutes
         try:
             await msg.delete()
         except:
