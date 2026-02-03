@@ -2100,7 +2100,13 @@ async def cb_handler(client: Client, query: CallbackQuery):
             buttons = [
                 [
                     InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream_url),
-                    InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download_url),
+                    InlineKeyboardButton(
+                        "ℹ️ ɪɴꜰᴏ •",
+                        callback_data=f"extract_data:{file_id}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download_url)
                 ],
                 [
                     InlineKeyboardButton(
@@ -2109,6 +2115,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     )
                 ]
             ]
+
     
             await query.message.edit_reply_markup(
                 InlineKeyboardMarkup(buttons)
@@ -3665,6 +3672,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
