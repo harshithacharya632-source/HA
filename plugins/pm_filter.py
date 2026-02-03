@@ -2080,29 +2080,47 @@ async def cb_handler(client: Client, query: CallbackQuery):
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
 # START HERE
     elif query.data.startswith("generate_stream_link"):
-        _, file_id = query.data.split(":")
-        try:
-            log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
-            fileName = {quote_plus(get_name(log_msg))}
-            stream = f"{URL}/watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-            download = f"{URL}/download/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-            button = [[
-                InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
-                InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
-            ],[
-                InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
-            ]]
+    _, file_id = query.data.split(":", 1)
 
-            await query.message.edit_reply_markup(
-                InlineKeyboardMarkup(buttons)
-            )
-    
-        except Exception as e:
-            await query.answer(
-                f"Something went wrong ❌\n\n{e}",
-                show_alert=True
-            )
-    
+    try:
+        log_msg = await client.send_cached_media(
+            chat_id=LOG_CHANNEL,
+            file_id=file_id
+        )
+
+        file_name = quote_plus(get_name(log_msg))
+        file_hash = get_hash(log_msg)
+
+        stream = f"{URL}/watch/{log_msg.id}/{file_name}?hash={file_hash}"
+        download = f"{URL}/download/{log_msg.id}/{file_name}?hash={file_hash}"
+
+        button = [
+            [
+                InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream),
+                InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download)
+            ],
+            [
+                InlineKeyboardButton(
+                    "• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •",
+                    web_app=WebAppInfo(url=stream)
+                )
+            ]
+        ]
+
+        # ✅ FIXED HERE
+        await query.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(button)
+        )
+
+        await query.answer()
+
+    except Exception as e:
+        await query.answer(
+            f"Something went wrong ❌\n\n{e}",
+            show_alert=True
+        )
+
+    ######
         
     elif query.data == "reqinfo":
         await query.answer(text=script.REQINFO, show_alert=True)
@@ -3648,6 +3666,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
