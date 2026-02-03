@@ -276,8 +276,7 @@ async def start(client, message):
                     reply_markup = InlineKeyboardMarkup(button)
                 else:
                     reply_markup = None
-
-               #######     
+                    
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=msg.get("file_id"),
@@ -467,23 +466,18 @@ async def start(client, message):
                     
             if STREAM_MODE == True:
                 button = [
-                    [
-                        InlineKeyboardButton(
-                            'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-                            callback_data=f'generate_stream_link:{file_id}'
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            'ᴀᴜᴅɪᴏ & sᴜʙs ɪɴғᴏ',
-                            callback_data=f'extract_data:{file_id}'
-                        )
-                    ]
+                    [InlineKeyboardButton(
+                        'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                        callback_data=f'generate_stream_link:{file_id}'
+                    )],
+                    [InlineKeyboardButton(
+                        'ℹ️ AUDIO & SUBS INFO',
+                        callback_data=f'extract_data:{file_id}'
+                    )]
                 ]
                 
                 reply_markup = InlineKeyboardMarkup(button)
-
-
+####
             else:
                 reply_markup = None
 
@@ -548,21 +542,18 @@ async def start(client, message):
                    
             if STREAM_MODE == True:
                 button = [
-                    [
-                        InlineKeyboardButton(
-                            'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-                            callback_data=f'generate_stream_link:{file_id}'
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            'ᴀᴜᴅɪᴏ & sᴜʙs ɪɴғᴏ',
-                            callback_data=f'extract_data:{file_id}'
-                        )
-                    ]
+                    [InlineKeyboardButton(
+                        'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                        callback_data=f'generate_stream_link:{file_id}'
+                    )],
+                    [InlineKeyboardButton(
+                        'ℹ️ AUDIO & SUBS INFO',
+                        callback_data=f'extract_data:{file_id}'
+                    )]
                 ]
                 
                 reply_markup = InlineKeyboardMarkup(button)
+
 
             else:
                 reply_markup = None
@@ -623,21 +614,18 @@ async def start(client, message):
             
     if STREAM_MODE == True:
         button = [
-            [
-                InlineKeyboardButton(
-                    'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-                    callback_data=f'generate_stream_link:{file_id}'
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    'ᴀᴜᴅɪᴏ & sᴜʙs ɪɴғᴏ',
-                    callback_data=f'extract_data:{file_id}'
-                )
-            ]
+            [InlineKeyboardButton(
+                'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                callback_data=f'generate_stream_link:{file_id}'
+            )],
+            [InlineKeyboardButton(
+                'ℹ️ AUDIO & SUBS INFO',
+                callback_data=f'extract_data:{file_id}'
+            )]
         ]
         
         reply_markup = InlineKeyboardMarkup(button)
+
 
     else:
         reply_markup = None
@@ -1467,6 +1455,7 @@ async def purge_requests(client, message):
             parse_mode=enums.ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
+
 
 
 
