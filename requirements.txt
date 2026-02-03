@@ -38,4 +38,9 @@ psutil==5.9.4
 dnspython==2.3.0
 ffmpeg-python>=0.2.0
 openai==0.25.0
+telegraph
+pymediainfo
+aiofiles
+requests
 git+https://github.com/Joelkb/cinemagoer
+
