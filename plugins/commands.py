@@ -359,13 +359,23 @@ async def start(client, message):
                     stream = f"{URL}/watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
                     download = f"{URL}/download/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
  
-                if STREAM_MODE == True:
-                    button = [[
-                        InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
-                        InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
-                    ],[
-                        InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
-                    ]]
+                    if STREAM_MODE == True:
+                        button = [[
+                            InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream),
+                            InlineKeyboardButton(
+                                "ℹ️ ɪɴꜰᴏ •",
+                                callback_data=f"extract_data:{file_id}"
+                            )
+                        ],[
+                            InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download)
+                        ],[
+                            InlineKeyboardButton(
+                                "• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •",
+                                web_app=WebAppInfo(url=stream)
+                            )
+                        ]]
+
+                    
                     reply_markup = InlineKeyboardMarkup(button)
                 else:
                     reply_markup = None
@@ -1435,6 +1445,7 @@ async def purge_requests(client, message):
             parse_mode=enums.ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
+
 
 
 
