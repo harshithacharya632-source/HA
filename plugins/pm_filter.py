@@ -2097,21 +2097,15 @@ async def cb_handler(client: Client, query: CallbackQuery):
             stream_url = f"{URL}/watch/{msg_id}/{file_name}?hash={file_hash}"
             download_url = f"{URL}/download/{msg_id}/{file_name}?hash={file_hash}"
     
-            buttons = [
+            button = [
                 [
-                    InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream_url),
-                    InlineKeyboardButton(
-                        "ℹ️ ɪɴꜰᴏ •",
-                        callback_data=f"extract_data:{file_id}"
-                    )
-                ],
-                [
-                    InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download_url)
+                    InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream),
+                    InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
                 ],
                 [
                     InlineKeyboardButton(
                         "• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •",
-                        web_app=WebAppInfo(url=stream_url)
+                        web_app=WebAppInfo(url=stream)
                     )
                 ]
             ]
@@ -3672,6 +3666,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
