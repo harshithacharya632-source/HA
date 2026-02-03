@@ -13,7 +13,6 @@ from pymediainfo import MediaInfo
 
 from database.ia_filterdb import get_file_details
 from info import LOG_CHANNEL
-from dreamxbotz.util.file_properties import get_name
 
 print("extract.py loaded")
 
@@ -90,7 +89,9 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
         )
 
 
-        file_name = get_name(log_msg)
+        media = getattr(log_msg, log_msg.media.value) if log_msg.media else None
+        file_name = media.file_name if media and media.file_name else "Media File"
+        
         safe_title = (
             file_name.replace(".", " ")
             .replace("_", " ")
@@ -102,6 +103,7 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
             .replace("mkv", "")
             .replace("mp4", "")
         )
+
 
         media = getattr(log_msg, log_msg.media.value) if log_msg.media else None
         file_size = getattr(media, "file_size", 0) or 0
