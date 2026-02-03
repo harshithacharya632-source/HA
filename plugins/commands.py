@@ -489,16 +489,20 @@ async def start(client, message):
                 button = [
                     [
                         InlineKeyboardButton(
-                            'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                            '▶️ STREAM AND DOWNLOAD',
                             callback_data=f'generate_stream_link:{file_id}'
-                        ),
+                        )
+                    ],
+                    [
                         InlineKeyboardButton(
                             'ℹ️ AUDIO & SUBS INFO',
                             callback_data=f'extract_data:{file_id}'
                         )
                     ]
                 ]
+                
                 reply_markup = InlineKeyboardMarkup(button)
+
             else:
                 reply_markup = None
 
@@ -565,15 +569,18 @@ async def start(client, message):
                 button = [
                     [
                         InlineKeyboardButton(
-                            'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                            '▶️ STREAM AND DOWNLOAD',
                             callback_data=f'generate_stream_link:{file_id}'
-                        ),
+                        )
+                    ],
+                    [
                         InlineKeyboardButton(
                             'ℹ️ AUDIO & SUBS INFO',
                             callback_data=f'extract_data:{file_id}'
                         )
                     ]
                 ]
+                
                 reply_markup = InlineKeyboardMarkup(button)
             else:
                 reply_markup = None
@@ -636,15 +643,18 @@ async def start(client, message):
         button = [
             [
                 InlineKeyboardButton(
-                    'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                    '▶️ STREAM AND DOWNLOAD',
                     callback_data=f'generate_stream_link:{file_id}'
-                ),
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     'ℹ️ AUDIO & SUBS INFO',
                     callback_data=f'extract_data:{file_id}'
                 )
             ]
         ]
+        
         reply_markup = InlineKeyboardMarkup(button)
     else:
         reply_markup = None
@@ -1474,6 +1484,7 @@ async def purge_requests(client, message):
             parse_mode=enums.ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
+
 
 
 
