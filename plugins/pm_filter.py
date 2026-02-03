@@ -2081,36 +2081,18 @@ async def cb_handler(client: Client, query: CallbackQuery):
 # START HERE
     elif query.data.startswith("generate_stream_link"):
         _, file_id = query.data.split(":")
-    
         try:
-            # Send cached media to log channel
-            log_msg = await client.send_cached_media(
-                chat_id=LOG_CHANNEL,
-                file_id=file_id
-            )
-    
-            file_name = quote_plus(get_name(log_msg))
-            file_hash = get_hash(log_msg)
-            msg_id = log_msg.id
-    
-            # STREAM & DOWNLOAD URLS (NEW STREAMING REPO)
-            stream_url = f"{URL}/watch/{msg_id}/{file_name}?hash={file_hash}"
-            download_url = f"{URL}/download/{msg_id}/{file_name}?hash={file_hash}"
-    
-            button = [
-                [
-                    InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream),
-                    InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
-                ],
-                [
-                    InlineKeyboardButton(
-                        "• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •",
-                        web_app=WebAppInfo(url=stream)
-                    )
-                ]
-            ]
+            log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
+            fileName = {quote_plus(get_name(log_msg))}
+            stream = f"{URL}/watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+            download = f"{URL}/download/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+            button = [[
+                InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
+                InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
+            ],[
+                InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
+            ]]
 
-    
             await query.message.edit_reply_markup(
                 InlineKeyboardMarkup(buttons)
             )
@@ -3666,6 +3648,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
