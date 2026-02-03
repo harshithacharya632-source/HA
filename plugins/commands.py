@@ -260,44 +260,24 @@ async def start(client, message):
             if f_caption is None:
                 f_caption = f"{title}"
             try:
-                if STREAM_MODE:
-                    # Send cached media to log channel
-                    log_msg = await client.send_cached_media(
-                        chat_id=LOG_CHANNEL,
-                        file_id=msg.get("file_id")
-                    )
-            
-                    file_name = quote_plus(get_name(log_msg))
-                    file_hash = get_hash(log_msg)
-                    msg_id = log_msg.id
-            
-                    # ✅ NEW STREAMING SERVER URLS
-                    stream = f"{URL}/watch/{msg_id}/{file_name}?hash={file_hash}"
-                    download = f"{URL}/download/{msg_id}/{file_name}?hash={file_hash}"
-            
-                    button = [
-                        [
-                            InlineKeyboardButton("• ᴡᴀᴛᴄʜ •", url=stream),
-                            InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
-                        ],
-                        [
-                            InlineKeyboardButton(
-                                "• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •",
-                                web_app=WebAppInfo(url=stream)
-                            )
-                        ]
-                    ]
-            
+                if STREAM_MODE == True:
+                    log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=msg.get("file_id"))
+                    fileName = {quote_plus(get_name(log_msg))}
+                    stream = f"{URL}/watch/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+                    download = f"{URL}/download/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+
+                if STREAM_MODE == True:
+                    button = [[
+                        InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
+                        InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
+                    ],[
+                        InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
+                    ]]
                     reply_markup = InlineKeyboardMarkup(button)
-            
                 else:
                     reply_markup = None
-            
-            except Exception as e:
-                print(f"STREAM ERROR: {e}")
-                reply_markup = None
 
-                    
+               #######     
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=msg.get("file_id"),
@@ -1487,6 +1467,7 @@ async def purge_requests(client, message):
             parse_mode=enums.ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
+
 
 
 
