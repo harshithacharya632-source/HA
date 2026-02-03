@@ -85,9 +85,10 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
             return
 
         log_msg = await client.send_cached_media(
-            chat_id=BIN_CHANNEL,
+            chat_id=LOG_CHANNEL,
             file_id=file_id
         )
+
 
         file_name = get_name(log_msg)
         safe_title = (
