@@ -1,6 +1,3 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
 
 import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram
 from datetime import datetime, timedelta, date, time
@@ -124,7 +121,7 @@ async def next_page(bot, query):
             [
                # InlineKeyboardButton('ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                # InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -138,7 +135,7 @@ async def next_page(bot, query):
             [
              #   InlineKeyboardButton('ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
              #   InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -374,7 +371,7 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
             [
                # InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                # InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -388,7 +385,7 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
             [
               #  InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
               #  InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -540,7 +537,7 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
             [
                # InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                # InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -554,7 +551,7 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -708,7 +705,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -722,7 +719,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -1313,7 +1310,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -1327,7 +1324,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -2916,7 +2913,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             [
                # InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                # InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -2930,7 +2927,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("ᯓ ✈︎𝐒𝐄𝐀𝐒𝐎𝐍𝐒ᯓ ✈︎",  callback_data=f"seasons#{key}")
+                InlineKeyboardButton("ᯓ  𝐒𝐄𝐀𝐒𝐎𝐍𝐒  ᯓ",  callback_data=f"seasons#{key}")
             ]
         )
         btn.insert(0, [
@@ -3667,6 +3664,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
