@@ -15,6 +15,7 @@ from database.connections_mdb import mydb, active_connection, all_connections, d
 from database.gfilters_mdb import find_gfilter, get_gfilters, del_allg
 from urllib.parse import quote_plus
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
+from premium import premium_name
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
@@ -27,6 +28,12 @@ BUTTONS0 = {}
 BUTTONS1 = {}
 BUTTONS2 = {}
 SPELL_CHECK = {}
+
+@Client.on_message(filters.private & filters.text)
+async def premium_test(client, message):
+    await message.reply_text(
+        premium_name(message.from_user)
+    )
 
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
@@ -3664,6 +3671,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
