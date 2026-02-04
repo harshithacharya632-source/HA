@@ -28,12 +28,6 @@ BUTTONS1 = {}
 BUTTONS2 = {}
 SPELL_CHECK = {}
 
-@Client.on_message(filters.private & filters.text)
-async def premium_test(client, message):
-    await message.reply_text(
-        premium_name(message.from_user)
-    )
-
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
     if message.chat.id != SUPPORT_CHAT_ID:
@@ -3671,6 +3665,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
