@@ -161,7 +161,7 @@ if 'DYNO' in environ:
     ON_HEROKU = True
 else:
     ON_HEROKU = False
-URL = environ.get("URL", "https://thin-celestina-goflix-1e523ecf.koyeb.app")
+URL = environ.get("URL", "https://continuing-mala-goflixstream-source-d902aa2d.koyeb.app")
 
 
 # Rename Info : If True Then Bot Rename File Else Not
@@ -186,6 +186,7 @@ else:
     OTHER_DB_URI = O_DB_URI       # This Db Is For Other Data Store
     FILE_DB_URI = F_DB_URI        # This Db Is For File Data Store
     SEC_FILE_DB_URI = S_DB_URI    # This Db is for File Data Store When First Db Is Going To Be Full.
+
 
 
 
