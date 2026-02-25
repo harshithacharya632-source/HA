@@ -774,99 +774,37 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
 #start here
 
 import re
-import asyncio
 from pyrogram import Client, filters
-from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from pyrogram.errors import MessageNotModified
 
 # ===============================
-# SEASON FILE LIST
-# callback: fs#season 1#key#page
+# REGEX HELPERS
 # ===============================
-@Client.on_callback_query(filters.regex(r"^fs#"))
-async def filter_seasons_cb_handler(client, query: CallbackQuery):
-    try:
-        data = query.data.split("#")
+SEASON_RE = re.compile(
+    r"(?:season\s*|s)(\d{1,2})",
+    re.IGNORECASE
+)
 
-        seas = data[1]          # "season 1"
-        key = data[2]
-        page = int(data[3]) if len(data) > 3 else 0
+EPISODE_RE = re.compile(
+    r"(?:e|episode|x)(\d{1,3})",
+    re.IGNORECASE
+)
 
-        search = FRESH.get(key)
-        chat_id = query.message.chat.id
-        season_num = seas.split()[-1]
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+def extract_season(filename: str):
+    m = SEASON_RE.search(filename)
+    return int(m.group(1)) if m else None
 
-        season_regex = re.compile(
-            rf"(s0?{season_num}\b|season\s*0?{season_num}\b)",
-            re.IGNORECASE
-        )
 
-        season_files = [
-            f for f in files
-            if season_regex.search(f["file_name"].lower())
-        ]
-
-        if not season_files:
-            return await query.answer("🚫 No files found", show_alert=True)
-
-        season_files = list({f["file_id"]: f for f in season_files}.values())
-
-        def ep_no(f):
-            m = re.search(r"[Ee](\d+)", f["file_name"])
-            return int(m.group(1)) if m else 999
-
-        season_files.sort(key=ep_no)
-
-        FILES_PER_PAGE = 12
-        total_pages = (len(season_files) - 1) // FILES_PER_PAGE + 1
-        start = page * FILES_PER_PAGE
-        end = start + FILES_PER_PAGE
-
-        btn = []
-
-        for file in season_files[start:end]:
-            ep = re.search(r"[Ee](\d+)", file["file_name"])
-            episode = ep.group(1).zfill(2) if ep else "??"
-
-            text = f"{get_size(file['file_size'])} ▷ S{season_num}E{episode} {file['file_name'][:40]}"
-            btn.append([
-                InlineKeyboardButton(text, callback_data=f"file#{file['file_id']}")
-            ])
-
-        btn.insert(0, [
-            InlineKeyboardButton(f"🎬 {search} — {seas.title()}", callback_data="ident")
-        ])
-
-        if total_pages > 1:
-            nav = []
-            if page > 0:
-                nav.append(
-                    InlineKeyboardButton("⬅️ Prev", callback_data=f"fs#{seas}#{key}#{page-1}")
-                )
-            nav.append(
-                InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident")
-            )
-            if page + 1 < total_pages:
-                nav.append(
-                    InlineKeyboardButton("Next ➡️", callback_data=f"fs#{seas}#{key}#{page+1}")
-                )
-            btn.append(nav)
-
-        btn.append([
-            InlineKeyboardButton("↩️ Back to Seasons", callback_data=f"seasons#{key}"),
-            InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")
-        ])
-
-        await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
-
-    except MessageNotModified:
-        pass
+def extract_episode(filename: str):
+    m = EPISODE_RE.search(filename)
+    return int(m.group(1)) if m else 999
 
 
 # ===============================
 # SEASON LIST
+# callback: seasons#key
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client, query: CallbackQuery):
@@ -879,35 +817,139 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 
         season_set = set()
         for f in files:
-            m = re.search(r"(season|s)(\d+)", f["file_name"].lower())
-            if m:
-                season_set.add(int(m.group(2)))
+            s = extract_season(f["file_name"])
+            if s:
+                season_set.add(s)
+
+        if not season_set:
+            return await query.answer("🚫 No seasons found", show_alert=True)
 
         seasons = sorted(season_set)
-
         btn = []
+
         for i in range(0, len(seasons), 2):
             row = [
                 InlineKeyboardButton(
                     f"Season {seasons[i]}",
-                    callback_data=f"fs#season {seasons[i]}#{key}"
+                    callback_data=f"fs#s{seasons[i]}#{key}#0"
                 )
             ]
             if i + 1 < len(seasons):
                 row.append(
                     InlineKeyboardButton(
                         f"Season {seasons[i+1]}",
-                        callback_data=f"fs#season {seasons[i+1]}#{key}"
+                        callback_data=f"fs#s{seasons[i+1]}#{key}#0"
                     )
                 )
             btn.append(row)
 
         btn.insert(0, [
-            InlineKeyboardButton("☣︎ 𝐒𝐞𝐥𝐞𝐜𝐭 𝐒𝐞𝐚𝐬𝐨𝐧 ☣︎", callback_data="ident")
+            InlineKeyboardButton("⇊ SELECT SEASON ⇊", callback_data="ident")
         ])
 
         btn.append([
-            InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{query.from_user.id}_{key}_0")
+            InlineKeyboardButton(
+                "🏠 Back to Home",
+                callback_data=f"next_{query.from_user.id}_{key}_0"
+            )
+        ])
+
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+
+    except MessageNotModified:
+        pass
+
+
+# ===============================
+# SEASON FILE LIST
+# callback: fs#s1#key#page
+# ===============================
+@Client.on_callback_query(filters.regex(r"^fs#"))
+async def filter_seasons_cb_handler(client, query: CallbackQuery):
+    try:
+        _, season_tag, key, page = query.data.split("#")
+        page = int(page)
+        season_no = int(season_tag[1:])
+
+        search = FRESH.get(key)
+        chat_id = query.message.chat.id
+
+        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+
+        season_files = [
+            f for f in files
+            if extract_season(f["file_name"]) == season_no
+        ]
+
+        if not season_files:
+            return await query.answer("🚫 No files found", show_alert=True)
+
+        # Remove duplicates
+        season_files = list({f["file_id"]: f for f in season_files}.values())
+
+        # Sort by episode number
+        season_files.sort(key=lambda x: extract_episode(x["file_name"]))
+
+        FILES_PER_PAGE = 12
+        total_pages = (len(season_files) - 1) // FILES_PER_PAGE + 1
+        start = page * FILES_PER_PAGE
+        end = start + FILES_PER_PAGE
+
+        btn = []
+
+        for f in season_files[start:end]:
+            ep = extract_episode(f["file_name"])
+            ep_txt = f"E{str(ep).zfill(2)}" if ep != 999 else "E??"
+
+            text = f"{get_size(f['file_size'])} ▷ S{season_no}{ep_txt} {f['file_name'][:35]}"
+            btn.append([
+                InlineKeyboardButton(
+                    text,
+                    callback_data=f"file#{f['file_id']}"
+                )
+            ])
+
+        btn.insert(0, [
+            InlineKeyboardButton(
+                f"🎬 {search} — Season {season_no}",
+                callback_data="ident"
+            )
+        ])
+
+        # Pagination
+        if total_pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(
+                    InlineKeyboardButton(
+                        "⬅️ Prev",
+                        callback_data=f"fs#s{season_no}#{key}#{page-1}"
+                    )
+                )
+            nav.append(
+                InlineKeyboardButton(
+                    f"{page+1}/{total_pages}",
+                    callback_data="ident"
+                )
+            )
+            if page + 1 < total_pages:
+                nav.append(
+                    InlineKeyboardButton(
+                        "Next ➡️",
+                        callback_data=f"fs#s{season_no}#{key}#{page+1}"
+                    )
+                )
+            btn.append(nav)
+
+        btn.append([
+            InlineKeyboardButton(
+                "↩️ Back to Seasons",
+                callback_data=f"seasons#{key}"
+            ),
+            InlineKeyboardButton(
+                "🏠 Back to Home",
+                callback_data=f"next_{query.from_user.id}_{key}_0"
+            )
         ])
 
         await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
@@ -3665,6 +3707,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
