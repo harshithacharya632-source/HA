@@ -890,7 +890,7 @@ async def filter_seasons_cb_handler(client, query: CallbackQuery):
         # Sort by episode number
         season_files.sort(key=lambda x: extract_episode(x["file_name"]))
 
-        FILES_PER_PAGE = 12
+        FILES_PER_PAGE = 8
         total_pages = (len(season_files) - 1) // FILES_PER_PAGE + 1
         start = page * FILES_PER_PAGE
         end = start + FILES_PER_PAGE
@@ -3707,6 +3707,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
