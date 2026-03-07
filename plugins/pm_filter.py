@@ -2001,6 +2001,150 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 parse_mode=enums.ParseMode.HTML,
                 reply_to_message_id=query.message.id
             )
+### STAERT BTN
+@Client.on_callback_query(filters.regex(
+    r"^(show_option|uploaded|unavailable|already_available|alalert|upalert|unalert)"
+))
+async def request_status_handler(client: Client, query: CallbackQuery):
+
+    data = query.data
+
+    # ================= show options =================
+
+    if data.startswith("show_option"):
+        ident, from_user = data.split("#", 1)
+
+        btn = [[
+                InlineKeyboardButton("Uɴᴀᴠᴀɪʟᴀʙʟᴇ", callback_data=f"unavailable#{from_user}"),
+                InlineKeyboardButton("Uᴘʟᴏᴀᴅᴇᴅ", callback_data=f"uploaded#{from_user}")
+            ],[
+                InlineKeyboardButton("Aʟʀᴇᴀᴅʏ Aᴠᴀɪʟᴀʙʟᴇ", callback_data=f"already_available#{from_user}")
+            ]]
+
+        btn2 = [[
+            InlineKeyboardButton("Vɪᴇᴡ Sᴛᴀᴛᴜs", url=f"{query.message.link}")
+        ]]
+
+        if query.from_user.id in ADMINS:
+            await query.message.edit_reply_markup(
+                InlineKeyboardMarkup(btn + btn2)
+            )
+            await query.answer("Hᴇʀᴇ ᴀʀᴇ ᴛʜᴇ ᴏᴘᴛɪᴏɴs !")
+        else:
+            await query.answer(
+                "Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴇɴᴛ ʀɪɢʜᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !",
+                show_alert=True
+            )
+
+    # ================= unavailable =================
+
+    elif data.startswith("unavailable"):
+
+        ident, from_user = data.split("#", 1)
+
+        btn = [[
+            InlineKeyboardButton(
+                "⚠️ Uɴᴀᴠᴀɪʟᴀʙʟᴇ ⚠️",
+                callback_data=f"unalert#{from_user}"
+            )
+        ]]
+
+        btn2 = [[
+            InlineKeyboardButton('Jᴏɪɴ Cʜᴀɴɴᴇʟ', url=link.invite_link),
+            InlineKeyboardButton("Vɪᴇᴡ Sᴛᴀᴛᴜs", url=f"{query.message.link}")
+        ]]
+
+        if query.from_user.id in ADMINS:
+
+            user = await client.get_users(from_user)
+            content = query.message.text
+
+            await query.message.edit_text(
+                f"<b><strike>{content}</strike></b>",
+                reply_markup=InlineKeyboardMarkup(btn)
+            )
+
+            await query.answer("Sᴇᴛ ᴛᴏ Uɴᴀᴠᴀɪʟᴀʙʟᴇ !")
+
+            try:
+
+                await client.send_message(
+                    chat_id=int(from_user),
+                    text=f"<b>Hᴇʏ {user.mention}, Sᴏʀʀʏ Yᴏᴜʀ ʀᴇǫᴜᴇsᴛ ɪs ᴜɴᴀᴠᴀɪʟᴀʙʟᴇ.</b>",
+                    reply_markup=InlineKeyboardMarkup(btn2)
+                )
+
+            except UserIsBlocked:
+
+                await client.send_message(
+                    chat_id=int(SUPPORT_CHAT_ID),
+                    text=f"<b>{user.mention} ʙʟᴏᴄᴋᴇᴅ ᴛʜᴇ ʙᴏᴛ.</b>",
+                    reply_markup=InlineKeyboardMarkup(btn2)
+                )
+
+        else:
+            await query.answer(
+                "Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴇɴᴛ ʀɪɢʜᴛs !",
+                show_alert=True
+            )
+
+    # ================= uploaded =================
+
+    elif data.startswith("uploaded"):
+
+        ident, from_user = data.split("#", 1)
+
+        btn = [[
+            InlineKeyboardButton(
+                "✅ Uᴘʟᴏᴀᴅᴇᴅ ✅",
+                callback_data=f"upalert#{from_user}"
+            )
+        ]]
+
+        btn2 = [[
+            InlineKeyboardButton('Jᴏɪɴ Cʜᴀɴɴᴇʟ', url=link.invite_link),
+            InlineKeyboardButton("Vɪᴇᴡ Sᴛᴀᴛᴜs", url=f"{query.message.link}")
+        ],[
+            InlineKeyboardButton(
+                "Rᴇǫᴜᴇsᴛ Gʀᴏᴜᴘ Lɪɴᴋ",
+                url="https://t.me/gofixmovie"
+            )
+        ]]
+
+        if query.from_user.id in ADMINS:
+
+            user = await client.get_users(from_user)
+            content = query.message.text
+
+            await query.message.edit_text(
+                f"<b><strike>{content}</strike></b>",
+                reply_markup=InlineKeyboardMarkup(btn)
+            )
+
+            await query.answer("Sᴇᴛ ᴛᴏ Uᴘʟᴏᴀᴅᴇᴅ !")
+
+            try:
+
+                await client.send_message(
+                    chat_id=int(from_user),
+                    text=f"<b>Hᴇʏ {user.mention}, Yᴏᴜʀ ʀᴇǫᴜᴇsᴛ ʜᴀs ʙᴇᴇɴ ᴜᴘʟᴏᴀᴅᴇᴅ.</b>",
+                    reply_markup=InlineKeyboardMarkup(btn2)
+                )
+
+            except UserIsBlocked:
+
+                await client.send_message(
+                    chat_id=int(SUPPORT_CHAT_ID),
+                    text=f"<b>{user.mention} ʙʟᴏᴄᴋᴇᴅ ᴛʜᴇ ʙᴏᴛ.</b>",
+                    reply_markup=InlineKeyboardMarkup(btn2)
+                )
+
+        else:
+            await query.answer(
+                "Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴇɴᴛ ʀɪɢʜᴛs !",
+                show_alert=True
+            )
+######2  
 
     elif query.data.startswith("show_option"):
         ident, from_user = query.data.split("#", 1)
@@ -3763,6 +3907,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
