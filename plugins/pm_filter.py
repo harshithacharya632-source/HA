@@ -2003,7 +2003,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
             )
 
     elif query.data.startswith("show_option"):
-        await query.answer()
         ident, from_user = query.data.split("#", 1)
     
         btn = [[
@@ -2026,7 +2025,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
     
     elif query.data.startswith("unavailable"):
-        await query.answer()
         ident, from_user = query.data.split("#", 1)
     
         btn = [[
@@ -2066,7 +2064,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
     
     elif query.data.startswith("uploaded"):
-        await query.answer()
         ident, from_user = query.data.split("#", 1)
     
         btn = [[
@@ -2108,7 +2105,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
     
     elif query.data.startswith("already_available"):
-        await query.answer()
         ident, from_user = query.data.split("#", 1)
     
         btn = [[
@@ -3767,6 +3763,7 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
 
 
 
