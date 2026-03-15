@@ -781,15 +781,11 @@ from pyrogram.errors import MessageNotModified
 # ===============================
 # REGEX HELPERS
 # ===============================
-SEASON_RE = re.compile(
-    r"(?:season\s*|s)(\d{1,2})",
-    re.IGNORECASE
-)
+SEASON_RE = re.compile(r"(?:season\s*|s)(\d{1,2})", re.IGNORECASE)
 
-EPISODE_RE = re.compile(
-    r"(?:e|episode|x)(\d{1,3})",
-    re.IGNORECASE
-)
+EPISODE_RE = re.compile(r"(?:e|episode|x)(\d{1,3})", re.IGNORECASE)
+
+RANGE_EP_RE = re.compile(r"e\d{1,3}\s*-\s*e\d{1,3}", re.IGNORECASE)
 
 
 def extract_season(filename: str):
@@ -802,20 +798,45 @@ def extract_episode(filename: str):
     return int(m.group(1)) if m else None
 
 
+def is_combined_file(name: str):
+
+    name = name.lower()
+
+    if "combined" in name:
+        return True
+
+    if "complete" in name:
+        return True
+
+    if "batch" in name:
+        return True
+
+    if "pack" in name:
+        return True
+
+    if RANGE_EP_RE.search(name):
+        return True
+
+    return False
+
+
 # ===============================
 # SEASON LIST
-# callback: seasons#key
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client, query: CallbackQuery):
+
     try:
+
         _, key = query.data.split("#")
+
         search = FRESH.get(key)
         chat_id = query.message.chat.id
 
         files, _, _ = await get_search_results(chat_id, search, max_results=50000)
 
         season_set = set()
+
         for f in files:
             s = extract_season(f["file_name"])
             if s:
@@ -825,22 +846,27 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             return await query.answer("🚫 No seasons found", show_alert=True)
 
         seasons = sorted(season_set)
+
         btn = []
 
         for i in range(0, len(seasons), 2):
+
             row = [
                 InlineKeyboardButton(
                     f"Season {seasons[i]}",
                     callback_data=f"eps#s{seasons[i]}#{key}#{query.from_user.id}"
                 )
             ]
+
             if i + 1 < len(seasons):
+
                 row.append(
                     InlineKeyboardButton(
                         f"Season {seasons[i+1]}",
                         callback_data=f"eps#s{seasons[i+1]}#{key}#{query.from_user.id}"
                     )
                 )
+
             btn.append(row)
 
         btn.insert(0, [
@@ -862,7 +888,6 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 
 # ===============================
 # EPISODE LIST
-# callback: eps#s1#key#user
 # ===============================
 @Client.on_callback_query(filters.regex(r"^eps#"))
 async def episode_selector(client, query: CallbackQuery):
@@ -876,6 +901,7 @@ async def episode_selector(client, query: CallbackQuery):
         )
 
     season_no = int(season_tag[1:])
+
     search = FRESH.get(key)
     chat_id = query.message.chat.id
 
@@ -885,17 +911,18 @@ async def episode_selector(client, query: CallbackQuery):
     combined_exist = False
 
     for f in files:
-        if extract_season(f["file_name"]) == season_no:
 
-            ep = extract_episode(f["file_name"])
+        name = f["file_name"]
+
+        if extract_season(name) == season_no:
+
+            ep = extract_episode(name)
 
             if ep:
                 episode_set.add(ep)
-            else:
-                combined_exist = True
 
-    if not episode_set and not combined_exist:
-        return await query.answer("🚫 Episodes not found", show_alert=True)
+            if is_combined_file(name):
+                combined_exist = True
 
     episodes = sorted(episode_set)
 
@@ -908,8 +935,8 @@ async def episode_selector(client, query: CallbackQuery):
         )
     ])
 
-    # Combined Button
     if combined_exist:
+
         btn.append([
             InlineKeyboardButton(
                 "📦 Combined Files",
@@ -918,14 +945,18 @@ async def episode_selector(client, query: CallbackQuery):
         ])
 
     for i in range(0, len(episodes), 3):
+
         row = []
+
         for ep in episodes[i:i+3]:
+
             row.append(
                 InlineKeyboardButton(
                     f"E{str(ep).zfill(2)}",
                     callback_data=f"fs#s{season_no}e{ep}#{key}#0#{user}"
                 )
             )
+
         btn.append(row)
 
     btn.append([
@@ -940,10 +971,10 @@ async def episode_selector(client, query: CallbackQuery):
 
 # ===============================
 # FILE LIST
-# callback: fs#s1e1#key#page#user
 # ===============================
 @Client.on_callback_query(filters.regex(r"^fs#"))
 async def filter_files(client, query: CallbackQuery):
+
     try:
 
         _, tag, key, page, user = query.data.split("#")
@@ -956,6 +987,7 @@ async def filter_files(client, query: CallbackQuery):
 
         season_no = int(tag.split("e")[0][1:])
         episode_no = int(tag.split("e")[1])
+
         page = int(page)
 
         search = FRESH.get(key)
@@ -966,6 +998,7 @@ async def filter_files(client, query: CallbackQuery):
         filtered = []
 
         for f in files:
+
             if (
                 extract_season(f["file_name"]) == season_no and
                 extract_episode(f["file_name"]) == episode_no
@@ -976,6 +1009,7 @@ async def filter_files(client, query: CallbackQuery):
             return await query.answer("🚫 File not found", show_alert=True)
 
         FILES_PER_PAGE = 8
+
         total_pages = (len(filtered) - 1) // FILES_PER_PAGE + 1
 
         start = page * FILES_PER_PAGE
@@ -984,6 +1018,7 @@ async def filter_files(client, query: CallbackQuery):
         btn = []
 
         for f in filtered[start:end]:
+
             text = f"{get_size(f['file_size'])} ▷ {f['file_name'][:40]}"
 
             btn.append([
@@ -1048,7 +1083,6 @@ async def filter_files(client, query: CallbackQuery):
 
 # ===============================
 # COMBINED FILES
-# callback: combined#s1#key#page#user
 # ===============================
 @Client.on_callback_query(filters.regex(r"^combined#"))
 async def combined_files(client, query: CallbackQuery):
@@ -1072,10 +1106,10 @@ async def combined_files(client, query: CallbackQuery):
     combined = []
 
     for f in files:
-        if (
-            extract_season(f["file_name"]) == season_no and
-            extract_episode(f["file_name"]) is None
-        ):
+
+        name = f["file_name"]
+
+        if extract_season(name) == season_no and is_combined_file(name):
             combined.append(f)
 
     if not combined:
@@ -1090,6 +1124,7 @@ async def combined_files(client, query: CallbackQuery):
     btn = []
 
     for f in combined[start:end]:
+
         text = f"{get_size(f['file_size'])} ▷ {f['file_name'][:40]}"
 
         btn.append([
