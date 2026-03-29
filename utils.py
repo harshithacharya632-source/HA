@@ -643,9 +643,18 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
                 size = get_size(file["file_size"])
                 if not await db.has_premium_access(userid) and SHORTLINK_MODE == True:
                     file_link = f"https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}"
+                    ######111111
                     shortened_link = await shorten_with_shrinkme(file_link)
-                    await bot.send_message(chat_id=userid, text=f"<b>Hey there {user_name}\n\nSecure link to your file has successfully been generated please click download button\n\nFile Name : {title}\nFile Size : {size}</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Download", url=shortened_link)]]))
-                else:
+                    web_url = f"https://married-viper-goflixbots-a375dc8b.koyeb.app/?url={shortened_link}"  
+                    await bot.send_message(
+                        chat_id=userid,
+                        text=f"<b>Hey there {user_name}\n\nSecure link to your file has successfully been generated please click download button\n\nFile Name : {title}\nFile Size : {size}</b>",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔐 Verify & Download", url=web_url)]
+                        ])
+                    )
+                    #####222222222222
+                    
                     f_caption = file["caption"]
                     title = file["file_name"]
                     size = get_size(file["file_size"])
