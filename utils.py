@@ -1,6 +1,4 @@
-# Don't Remove Credit @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+
 import logging, asyncio, os, re, random, pytz, aiohttp, requests, string, json, http.client
 from info import *
 from imdb import Cinemagoer
@@ -16,6 +14,7 @@ from database.join_reqs import JoinReqs
 from bs4 import BeautifulSoup
 from shortzy import Shortzy
 from urllib.parse import quote
+import time
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -543,35 +542,58 @@ async def get_verify_shorted_link(link, url, api):
     else:
         return link
 
+# ================== [VERIFICATION SYSTEM - FIXED 🔐] ==================
 
-# ================== [VERIFICATION SYSTEM] ==================
+import time  # make sure this is imported at top
 
 async def check_token(bot, userid, token):
     user = await bot.get_users(userid)
+
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    if user.id in TOKENS.keys():
-        TKN = TOKENS[user.id]
-        if token in TKN.keys():
-            is_used = TKN[token]
-            if is_used == True:
-                return False
-            else:
-                return True
-    else:
+
+    data = TOKENS.get(token)
+
+    if not data:
         return False
+
+    # ❌ already used
+    if data["used"]:
+        return False
+
+    # ❌ expired
+    if data["expiry"] < time.time():
+        return False
+
+    # 🔥 MAIN FIX (anti-bypass)
+    if data["user_id"] != user.id:
+        return False
+
+    return True
 
 
 async def get_token(bot, userid, link):
     user = await bot.get_users(userid)
+
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
-    TOKENS[user.id] = {token: False}
-    link = f"{link}verify-{user.id}-{token}"
+
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+
+    # 🔥 NEW SECURE STORAGE
+    TOKENS[token] = {
+        "user_id": user.id,
+        "used": False,
+        "expiry": time.time() + 300  # 5 min expiry
+    }
+
+    # ❌ REMOVE user_id from URL
+    link = f"{link}verify-{token}"
+
     shortened_verify_url = await get_verify_shorted_link(link, VERIFY_SHORTLINK_URL, VERIFY_SHORTLINK_API)
+
     if VERIFY_SECOND_SHORTNER == True:
         snd_link = await get_verify_shorted_link(shortened_verify_url, VERIFY_SND_SHORTLINK_URL, VERIFY_SND_SHORTLINK_API)
         return str(snd_link)
@@ -581,10 +603,19 @@ async def get_token(bot, userid, link):
 
 async def verify_user(bot, userid, token):
     user = await bot.get_users(userid)
+
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
-    TOKENS[user.id] = {token: True}
+
+    data = TOKENS.get(token)
+
+    if not data:
+        return
+
+    # 🔥 mark token used
+    data["used"] = True
+
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
     VERIFIED[user.id] = str(today)
@@ -592,22 +623,25 @@ async def verify_user(bot, userid, token):
 
 async def check_verification(bot, userid):
     user = await bot.get_users(userid)
+
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
+
     if user.id in VERIFIED.keys():
         EXP = VERIFIED[user.id]
         years, month, day = EXP.split('-')
         comp = date(int(years), int(month), int(day))
+
         if comp < today:
             return False
         else:
             return True
     else:
         return False
-
 
 # ================== [FILE SHORTENER — INDIAEARNX] ==================
 
