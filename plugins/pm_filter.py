@@ -715,7 +715,7 @@ def clean_series_name(name: str):
 
     name = name.lower()
 
-    # REMOVE FILE EXTENSION
+    # REMOVE EXTENSION
     name = re.sub(
         r'\.(mkv|mp4|avi|mov)$',
         '',
@@ -737,7 +737,58 @@ def clean_series_name(name: str):
         name
     )
 
+    # ===============================
+    # REMOVE RANDOM PREFIX WORDS
+    # ===============================
+    prefix_words = [
+
+        "hdt",
+        "hdhub",
+        "mm",
+        "mzm",
+        "ss",
+        "tv",
+        "show",
+        "series",
+
+        "10bit",
+        "hevc",
+        "x264",
+        "x265",
+        "h264",
+
+        "480p",
+        "540p",
+        "720p",
+        "1080p",
+        "2160p",
+
+        "psa",
+        "rarbg",
+        "yts",
+        "etrg",
+        "tgx",
+
+        "web",
+        "webdl",
+        "webrip",
+        "bluray",
+        "brrip",
+
+        "nf",
+        "goflix"
+    ]
+
+    words = name.split()
+
+    while words and words[0] in prefix_words:
+        words.pop(0)
+
+    name = " ".join(words)
+
+    # ===============================
     # SPLIT BEFORE SEASON / EPISODE
+    # ===============================
     split_data = re.split(
         r's\d{1,2}e\d{1,3}|season\s*\d{1,2}|ep\s*\d{1,3}|episode\s*\d{1,3}',
         name,
@@ -747,9 +798,12 @@ def clean_series_name(name: str):
     if split_data:
         name = split_data[0]
 
+    # ===============================
     # STOP WORDS
+    # ===============================
     stop_words = [
 
+        # QUALITY
         "480p",
         "540p",
         "720p",
@@ -757,18 +811,21 @@ def clean_series_name(name: str):
         "2160p",
         "4k",
 
+        # CODEC
         "x264",
         "x265",
         "h264",
         "hevc",
         "10bit",
 
+        # AUDIO
         "aac",
         "ddp5",
         "dd",
         "2ch",
         "6ch",
 
+        # SOURCE
         "hdrip",
         "webrip",
         "webdl",
@@ -776,6 +833,7 @@ def clean_series_name(name: str):
         "brrip",
         "dvdrip",
 
+        # LANG
         "english",
         "hindi",
         "tamil",
@@ -786,6 +844,7 @@ def clean_series_name(name: str):
         "multi",
         "audio",
 
+        # RANDOM
         "psa",
         "rarbg",
         "yts",
@@ -798,20 +857,25 @@ def clean_series_name(name: str):
         "nf",
         "proper",
 
+        # FILE
         "mkv",
         "mp4",
         "avi",
 
+        # EXTRA
         "complete",
         "combined",
         "batch",
         "pack",
         "chapter",
         "part",
-        "vol"
+        "vol",
+        "v01",
+        "v02",
+        "v03"
     ]
 
-    words = []
+    final_words = []
 
     for word in name.split():
 
@@ -830,9 +894,29 @@ def clean_series_name(name: str):
         if len(word) <= 1:
             continue
 
-        words.append(word)
+        final_words.append(word)
 
-    title = " ".join(words)
+    # REMOVE EPISODE TITLE GARBAGE
+    if len(final_words) > 3:
+
+        last = final_words[-1]
+
+        garbage_words = [
+            "papa",
+            "piggyback",
+            "dear",
+            "chapter",
+            "inside",
+            "finale"
+        ]
+
+        if last in garbage_words:
+            final_words.pop()
+
+    # KEEP TITLE SHORT
+    final_words = final_words[:4]
+
+    title = " ".join(final_words)
 
     title = re.sub(
         r'\s+',
@@ -1104,13 +1188,16 @@ async def episode_selector(client, query: CallbackQuery):
             )
         ])
 
-    episodes = sorted(episode_set)
+    # ONLY 8 EPISODES PER PAGE
+    EP_PER_PAGE = 8
 
-    for i in range(0, len(episodes), 3):
+    episodes = sorted(episode_set)[:EP_PER_PAGE]
+
+    for i in range(0, len(episodes), 4):
 
         row = []
 
-        for ep in episodes[i:i+3]:
+        for ep in episodes[i:i+4]:
 
             row.append(
                 InlineKeyboardButton(
