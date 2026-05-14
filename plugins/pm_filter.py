@@ -690,17 +690,17 @@ def is_combined_file(name: str):
 
     name = name.lower()
 
-    if "combined" in name:
-        return True
+    keywords = [
+        "combined",
+        "complete",
+        "batch",
+        "pack"
+    ]
 
-    if "complete" in name:
-        return True
+    for k in keywords:
 
-    if "batch" in name:
-        return True
-
-    if "pack" in name:
-        return True
+        if k in name:
+            return True
 
     if RANGE_EP_RE.search(name):
         return True
@@ -737,9 +737,7 @@ def clean_series_name(name: str):
         name
     )
 
-    # ===============================
     # REMOVE RANDOM PREFIX WORDS
-    # ===============================
     prefix_words = [
 
         "hdt",
@@ -786,9 +784,7 @@ def clean_series_name(name: str):
 
     name = " ".join(words)
 
-    # ===============================
     # SPLIT BEFORE SEASON / EPISODE
-    # ===============================
     split_data = re.split(
         r's\d{1,2}e\d{1,3}|season\s*\d{1,2}|ep\s*\d{1,3}|episode\s*\d{1,3}',
         name,
@@ -798,12 +794,9 @@ def clean_series_name(name: str):
     if split_data:
         name = split_data[0]
 
-    # ===============================
     # STOP WORDS
-    # ===============================
     stop_words = [
 
-        # QUALITY
         "480p",
         "540p",
         "720p",
@@ -811,21 +804,18 @@ def clean_series_name(name: str):
         "2160p",
         "4k",
 
-        # CODEC
         "x264",
         "x265",
         "h264",
         "hevc",
         "10bit",
 
-        # AUDIO
         "aac",
         "ddp5",
         "dd",
         "2ch",
         "6ch",
 
-        # SOURCE
         "hdrip",
         "webrip",
         "webdl",
@@ -833,7 +823,6 @@ def clean_series_name(name: str):
         "brrip",
         "dvdrip",
 
-        # LANG
         "english",
         "hindi",
         "tamil",
@@ -844,7 +833,6 @@ def clean_series_name(name: str):
         "multi",
         "audio",
 
-        # RANDOM
         "psa",
         "rarbg",
         "yts",
@@ -857,12 +845,10 @@ def clean_series_name(name: str):
         "nf",
         "proper",
 
-        # FILE
         "mkv",
         "mp4",
         "avi",
 
-        # EXTRA
         "complete",
         "combined",
         "batch",
@@ -913,7 +899,7 @@ def clean_series_name(name: str):
         if last in garbage_words:
             final_words.pop()
 
-    # KEEP TITLE SHORT
+    # KEEP SHORT
     final_words = final_words[:4]
 
     title = " ".join(final_words)
@@ -972,7 +958,18 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             if bad:
                 continue
 
-            series_set.add(series_name)
+            # SEARCH FILTER
+            search_query = search.lower().strip()
+            series_lower = series_name.lower().strip()
+
+            if search_query == series_lower:
+                series_set.add(series_name)
+
+            elif series_lower.startswith(search_query + " "):
+                series_set.add(series_name)
+
+            elif f" {search_query} " in f" {series_lower} ":
+                series_set.add(series_name)
 
         if not series_set:
 
@@ -985,6 +982,19 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 
         SERIES_STORE[key] = series_list
 
+        PAGE_SIZE = 8
+
+        current_page = 0
+
+        start = current_page * PAGE_SIZE
+        end = start + PAGE_SIZE
+
+        current_series = series_list[start:end]
+
+        total_pages = (
+            (len(series_list) - 1) // PAGE_SIZE
+        ) + 1
+
         btn = []
 
         btn.append([
@@ -994,7 +1004,7 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             )
         ])
 
-        for i, name in enumerate(series_list[:80]):
+        for i, name in enumerate(current_series):
 
             btn.append([
                 InlineKeyboardButton(
@@ -1002,6 +1012,26 @@ async def seasons_cb_handler(client, query: CallbackQuery):
                     callback_data=f"series#{key}#{i}#{query.from_user.id}"
                 )
             ])
+
+        nav = []
+
+        nav.append(
+            InlineKeyboardButton(
+                f"1/{total_pages}",
+                callback_data="ident"
+            )
+        )
+
+        if total_pages > 1:
+
+            nav.append(
+                InlineKeyboardButton(
+                    "Next ➡️",
+                    callback_data=f"seriespage#{key}#1#{query.from_user.id}"
+                )
+            )
+
+        btn.append(nav)
 
         await query.edit_message_reply_markup(
             InlineKeyboardMarkup(btn)
@@ -1012,12 +1042,12 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 
 
 # ===============================
-# SERIES -> SEASONS
+# SERIES PAGE SYSTEM
 # ===============================
-@Client.on_callback_query(filters.regex(r"^series#"))
-async def series_season_selector(client, query: CallbackQuery):
+@Client.on_callback_query(filters.regex(r"^seriespage#"))
+async def series_page_system(client, query: CallbackQuery):
 
-    _, key, sid, user = query.data.split("#")
+    _, key, page, user = query.data.split("#")
 
     if int(user) != query.from_user.id:
 
@@ -1026,91 +1056,69 @@ async def series_season_selector(client, query: CallbackQuery):
             show_alert=True
         )
 
-    try:
+    page = int(page)
 
-        series_name = SERIES_STORE[key][int(sid)]
+    series_list = SERIES_STORE.get(key, [])
 
-    except:
+    PAGE_SIZE = 8
 
-        return await query.answer(
-            "🚫 Series not found",
-            show_alert=True
-        )
+    total_pages = (
+        (len(series_list) - 1) // PAGE_SIZE
+    ) + 1
 
-    USER_SELECTED_SERIES[user] = series_name
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
 
-    search = FRESH.get(key)
-
-    chat_id = query.message.chat.id
-
-    files, _, _ = await get_search_results(
-        chat_id,
-        search,
-        max_results=50000
-    )
-
-    seasons = set()
-
-    for f in files:
-
-        fname = f["file_name"]
-
-        clean_name = clean_series_name(fname)
-
-        if clean_name.lower() != series_name.lower():
-            continue
-
-        season = extract_season(fname)
-
-        if season:
-            seasons.add(season)
-
-    if not seasons:
-
-        return await query.answer(
-            "🚫 No seasons found",
-            show_alert=True
-        )
+    current_series = series_list[start:end]
 
     btn = []
 
     btn.append([
         InlineKeyboardButton(
-            f"📺 {series_name[:40]}",
+            "📺 AVAILABLE SERIES",
             callback_data="ident"
         )
     ])
 
-    seasons = sorted(seasons)
+    for i, name in enumerate(current_series):
 
-    for i in range(0, len(seasons), 2):
+        actual_index = start + i
 
-        row = []
-
-        row.append(
+        btn.append([
             InlineKeyboardButton(
-                f"Season {seasons[i]}",
-                callback_data=f"eps#s{seasons[i]}#{key}#{user}"
+                name[:50],
+                callback_data=f"series#{key}#{actual_index}#{user}"
+            )
+        ])
+
+    nav = []
+
+    if page > 0:
+
+        nav.append(
+            InlineKeyboardButton(
+                "⬅️ Prev",
+                callback_data=f"seriespage#{key}#{page-1}#{user}"
             )
         )
 
-        if i + 1 < len(seasons):
-
-            row.append(
-                InlineKeyboardButton(
-                    f"Season {seasons[i+1]}",
-                    callback_data=f"eps#s{seasons[i+1]}#{key}#{user}"
-                )
-            )
-
-        btn.append(row)
-
-    btn.append([
+    nav.append(
         InlineKeyboardButton(
-            "↩️ Back",
-            callback_data=f"seasons#{key}"
+            f"{page+1}/{total_pages}",
+            callback_data="ident"
         )
-    ])
+    )
+
+    if page + 1 < total_pages:
+
+        nav.append(
+            InlineKeyboardButton(
+                "Next ➡️",
+                callback_data=f"seriespage#{key}#{page+1}#{user}"
+            )
+        )
+
+    btn.append(nav)
 
     await query.edit_message_reply_markup(
         InlineKeyboardMarkup(btn)
@@ -1170,11 +1178,26 @@ async def episode_selector(client, query: CallbackQuery):
         if is_combined_file(fname):
             combined_exist = True
 
+    episodes = sorted(episode_set)
+
+    PAGE_SIZE = 8
+
+    page = 0
+
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+
+    current_eps = episodes[start:end]
+
+    total_pages = (
+        (len(episodes) - 1) // PAGE_SIZE
+    ) + 1
+
     btn = []
 
     btn.append([
         InlineKeyboardButton(
-            f"🎬 {selected_series[:30]} S{season_no}",
+            f"🎬 {selected_series[:25]} S{season_no}",
             callback_data="ident"
         )
     ])
@@ -1188,16 +1211,11 @@ async def episode_selector(client, query: CallbackQuery):
             )
         ])
 
-    # ONLY 8 EPISODES PER PAGE
-    EP_PER_PAGE = 8
-
-    episodes = sorted(episode_set)[:EP_PER_PAGE]
-
-    for i in range(0, len(episodes), 4):
+    for i in range(0, len(current_eps), 4):
 
         row = []
 
-        for ep in episodes[i:i+4]:
+        for ep in current_eps[i:i+4]:
 
             row.append(
                 InlineKeyboardButton(
@@ -1207,6 +1225,26 @@ async def episode_selector(client, query: CallbackQuery):
             )
 
         btn.append(row)
+
+    nav = []
+
+    nav.append(
+        InlineKeyboardButton(
+            f"1/{total_pages}",
+            callback_data="ident"
+        )
+    )
+
+    if total_pages > 1:
+
+        nav.append(
+            InlineKeyboardButton(
+                "Next ➡️",
+                callback_data=f"epspage#s{season_no}#{key}#1#{user}"
+            )
+        )
+
+    btn.append(nav)
 
     btn.append([
         InlineKeyboardButton(
@@ -1218,191 +1256,6 @@ async def episode_selector(client, query: CallbackQuery):
     await query.edit_message_reply_markup(
         InlineKeyboardMarkup(btn)
     )
-
-
-# ===============================
-# FILE LIST
-# ===============================
-@Client.on_callback_query(filters.regex(r"^fs#"))
-async def filter_files(client, query: CallbackQuery):
-
-    try:
-
-        _, tag, key, page, user = query.data.split("#")
-
-        if int(user) != query.from_user.id:
-
-            return await query.answer(
-                "⚠️ Not your search",
-                show_alert=True
-            )
-
-        season_no = int(tag.split("e")[0][1:])
-        episode_no = int(tag.split("e")[1])
-
-        selected_series = USER_SELECTED_SERIES.get(user)
-
-        search = FRESH.get(key)
-
-        chat_id = query.message.chat.id
-
-        files, _, _ = await get_search_results(
-            chat_id,
-            search,
-            max_results=50000
-        )
-
-        filtered = []
-
-        for f in files:
-
-            fname = f["file_name"]
-
-            clean_name = clean_series_name(fname)
-
-            if clean_name.lower() != selected_series.lower():
-                continue
-
-            if extract_season(fname) != season_no:
-                continue
-
-            if extract_episode(fname) != episode_no:
-                continue
-
-            filtered.append(f)
-
-        if not filtered:
-
-            return await query.answer(
-                "🚫 No files found",
-                show_alert=True
-            )
-
-        btn = []
-
-        btn.append([
-            InlineKeyboardButton(
-                f"🎬 S{season_no}E{str(episode_no).zfill(2)}",
-                callback_data="ident"
-            )
-        ])
-
-        for file in filtered[:30]:
-
-            text = file["file_name"][:45]
-
-            btn.append([
-                InlineKeyboardButton(
-                    text,
-                    callback_data=f"file#{file['file_id']}"
-                )
-            ])
-
-        btn.append([
-            InlineKeyboardButton(
-                "↩️ Back",
-                callback_data=f"eps#s{season_no}#{key}#{user}"
-            )
-        ])
-
-        await query.edit_message_reply_markup(
-            InlineKeyboardMarkup(btn)
-        )
-
-    except Exception as e:
-
-        print(e)
-
-
-# ===============================
-# COMBINED FILES
-# ===============================
-@Client.on_callback_query(filters.regex(r"^combined#"))
-async def combined_files(client, query: CallbackQuery):
-
-    try:
-
-        _, season_tag, key, page, user = query.data.split("#")
-
-        if int(user) != query.from_user.id:
-
-            return await query.answer(
-                "⚠️ Not your search",
-                show_alert=True
-            )
-
-        season_no = int(season_tag[1:])
-
-        selected_series = USER_SELECTED_SERIES.get(user)
-
-        search = FRESH.get(key)
-
-        chat_id = query.message.chat.id
-
-        files, _, _ = await get_search_results(
-            chat_id,
-            search,
-            max_results=50000
-        )
-
-        combined = []
-
-        for f in files:
-
-            fname = f["file_name"]
-
-            clean_name = clean_series_name(fname)
-
-            if clean_name.lower() != selected_series.lower():
-                continue
-
-            if extract_season(fname) != season_no:
-                continue
-
-            if is_combined_file(fname):
-                combined.append(f)
-
-        if not combined:
-
-            return await query.answer(
-                "🚫 No combined files",
-                show_alert=True
-            )
-
-        btn = []
-
-        btn.append([
-            InlineKeyboardButton(
-                f"📦 {selected_series[:25]} S{season_no}",
-                callback_data="ident"
-            )
-        ])
-
-        for file in combined[:30]:
-
-            text = file["file_name"][:45]
-
-            btn.append([
-                InlineKeyboardButton(
-                    text,
-                    callback_data=f"file#{file['file_id']}"
-                )
-            ])
-
-        btn.append([
-            InlineKeyboardButton(
-                "↩️ Back",
-                callback_data=f"eps#s{season_no}#{key}#{user}"
-            )
-        ])
-
-        await query.edit_message_reply_markup(
-            InlineKeyboardMarkup(btn)
-        )
-
-    except Exception as e:
-
-        print(e)
     
 
 # SESSON End Here ##############
