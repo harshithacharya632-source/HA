@@ -627,6 +627,8 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
 # =========================================================
 
 import re
+from difflib import SequenceMatcher
+
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from pyrogram.errors import MessageNotModified
@@ -635,46 +637,22 @@ from pyrogram.errors import MessageNotModified
 # REGEX HELPERS
 # ===============================
 
-SEASON_RE = re.compile(
-    r"(?:season\s*|s)(\d{1,2})",
-    re.IGNORECASE
-)
+SEASON_RE = re.compile(r"(?:season\s*|s)(\d{1,2})", re.IGNORECASE)
 
-EPISODE_RE = re.compile(
-    r"(?:e|episode|x)(\d{1,3})",
-    re.IGNORECASE
-)
+EPISODE_RE = re.compile(r"(?:e|episode|x)(\d{1,3})", re.IGNORECASE)
 
-RANGE_EP_RE = re.compile(
-    r"e\d{1,3}\s*-\s*e\d{1,3}",
-    re.IGNORECASE
-)
+RANGE_EP_RE = re.compile(r"e\d{1,3}\s*-\s*e\d{1,3}", re.IGNORECASE)
 
-# ===============================
-# EXTRACT SEASON
-# ===============================
 
 def extract_season(filename: str):
-
     m = SEASON_RE.search(filename)
-
     return int(m.group(1)) if m else None
 
-
-# ===============================
-# EXTRACT EPISODE
-# ===============================
 
 def extract_episode(filename: str):
-
     m = EPISODE_RE.search(filename)
-
     return int(m.group(1)) if m else None
 
-
-# ===============================
-# COMBINED FILE CHECK
-# ===============================
 
 def is_combined_file(name: str):
 
@@ -699,71 +677,39 @@ def is_combined_file(name: str):
 
 
 # ===============================
-# CLEAN SERIES NAME
+# SERIES MATCHING
 # ===============================
 
-def clean_series_name(name):
+def clean_title(text):
 
-    name = name.lower()
+    text = text.lower()
 
-    name = re.sub(r'\.(mkv|mp4|avi)$', '', name)
+    text = re.sub(r'(s\d{1,2})', '', text)
+    text = re.sub(r'(season\s*\d{1,2})', '', text)
+    text = re.sub(r'(e\d{1,3})', '', text)
+    text = re.sub(r'(episode\s*\d{1,3})', '', text)
 
-    name = re.sub(r'[\.\_\-]+', ' ', name)
+    text = re.sub(r'[\.\_\-]', ' ', text)
 
-    name = re.sub(r'\b(19|20)\d{2}\b', '', name)
+    text = re.sub(r'\s+', ' ', text).strip()
 
-    split_data = re.split(
-        r's\d{1,2}e\d{1,3}|season\s*\d{1,2}|episode\s*\d{1,3}',
-        name,
-        flags=re.I
-    )
+    return text
 
-    if split_data:
-        name = split_data[0]
 
-    stop_words = [
+def is_related_series(search, filename):
 
-        "480p",
-        "720p",
-        "1080p",
-        "2160p",
+    s1 = clean_title(search)
+    s2 = clean_title(filename)
 
-        "x264",
-        "x265",
-        "10bit",
-        "hevc",
+    if s1 in s2:
+        return True
 
-        "bluray",
-        "webdl",
-        "webrip",
+    ratio = SequenceMatcher(None, s1, s2).ratio()
 
-        "hindi",
-        "english",
-        "tamil",
-        "telugu",
-        "kannada",
+    if ratio >= 0.55:
+        return True
 
-        "combined",
-        "complete",
-        "batch",
-        "pack"
-    ]
-
-    final = []
-
-    for w in name.split():
-
-        if w in stop_words:
-            break
-
-        if len(w) <= 1:
-            continue
-
-        final.append(w)
-
-    final = final[:4]
-
-    return " ".join(final).title().strip()
+    return False
 
 
 # ===============================
@@ -774,8 +720,6 @@ def clean_series_name(name):
 async def seasons_cb_handler(client, query: CallbackQuery):
 
     try:
-
-        await query.answer()
 
         _, key = query.data.split("#")
 
@@ -789,29 +733,23 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             max_results=50000
         )
 
-        season_set = set()
+        matched_files = []
 
         for f in files:
 
-            try:
+            if is_related_series(search, f["file_name"]):
+                matched_files.append(f)
 
-                fname = f["file_name"]
+        season_set = set()
 
-                # SEARCH NAME MUST MATCH
-                if search.lower() not in fname.lower():
-                    continue
+        for f in matched_files:
 
-                s = extract_season(fname)
+            s = extract_season(f["file_name"])
 
-                # REMOVE FAKE SEASONS
-                if s and s <= 30:
-                    season_set.add(s)
-
-            except:
-                pass
+            if s:
+                season_set.add(s)
 
         if not season_set:
-
             return await query.answer(
                 "🚫 No seasons found",
                 show_alert=True
@@ -820,13 +758,6 @@ async def seasons_cb_handler(client, query: CallbackQuery):
         seasons = sorted(season_set)
 
         btn = []
-
-        btn.insert(0, [
-            InlineKeyboardButton(
-                f"📺 {search.title()} Seasons",
-                callback_data="ident"
-            )
-        ])
 
         for i in range(0, len(seasons), 2):
 
@@ -847,6 +778,13 @@ async def seasons_cb_handler(client, query: CallbackQuery):
                 )
 
             btn.append(row)
+
+        btn.insert(0, [
+            InlineKeyboardButton(
+                f"🎬 {search}",
+                callback_data="ident"
+            )
+        ])
 
         btn.append([
             InlineKeyboardButton(
@@ -872,11 +810,9 @@ async def episode_selector(client, query: CallbackQuery):
 
     _, season_tag, key, user = query.data.split("#")
 
-    # OWNER CHECK
     if int(user) != query.from_user.id:
-
         return await query.answer(
-            "⚠️ This is not your search\nSearch your own in Goflix 🍿",
+            "⚠️ This is not your search. Please search your own.",
             show_alert=True
         )
 
@@ -892,82 +828,66 @@ async def episode_selector(client, query: CallbackQuery):
         max_results=50000
     )
 
+    matched_files = []
+
+    for f in files:
+
+        if is_related_series(search, f["file_name"]):
+            matched_files.append(f)
+
     episode_set = set()
 
     combined_exist = False
 
-    filtered_files = []
+    for f in matched_files:
 
-    # FILTER ONLY REAL FILES
-    for f in files:
+        name = f["file_name"]
 
-        try:
-
-            name = f["file_name"]
-
-            # SAME SEASON ONLY
-            if extract_season(name) != season_no:
-                continue
-
-            # SEARCH NAME MUST MATCH
-            clean_name = name.lower()
-
-            if search.lower() not in clean_name:
-                continue
-
-            filtered_files.append(f)
+        if extract_season(name) == season_no:
 
             ep = extract_episode(name)
 
-            # REMOVE FAKE EPISODES
-            if ep and ep <= 100:
+            if ep:
                 episode_set.add(ep)
 
-            # COMBINED CHECK
             if is_combined_file(name):
                 combined_exist = True
 
-        except:
-            pass
+    episodes = sorted(episode_set)
 
-    if not filtered_files:
-
+    if not episodes and not combined_exist:
         return await query.answer(
-            "🚫 No files found",
+            "🚫 No episodes found",
             show_alert=True
         )
-
-    episodes = sorted(episode_set)
 
     btn = []
 
     btn.append([
         InlineKeyboardButton(
-            f"🎬 {search.title()} • Season {season_no}",
+            f"🎬 {search} Season {season_no}",
             callback_data="ident"
         )
     ])
 
-    # COMBINED FILE BUTTON
     if combined_exist:
 
         btn.append([
             InlineKeyboardButton(
-                f"📦 {search.title()} Combined",
+                "📦 Combined Files",
                 callback_data=f"combined#s{season_no}#{key}#0#{user}"
             )
         ])
 
-    # EPISODE BUTTONS
     for i in range(0, len(episodes), 3):
 
         row = []
 
-        for ep in episodes[i:i+3]:
+        for ep in episodes[i:i + 3]:
 
             row.append(
                 InlineKeyboardButton(
-                    f"{search.title()} E{str(ep).zfill(2)}",
+                    f"E{str(ep).zfill(2)}",
                     callback_data=f"fs#s{season_no}e{ep}#{key}#0#{user}"
                 )
             )
@@ -998,9 +918,8 @@ async def filter_files(client, query: CallbackQuery):
         _, tag, key, page, user = query.data.split("#")
 
         if int(user) != query.from_user.id:
-
             return await query.answer(
-                "⚠️ This is not your search\nSearch your own in Goflix 🍿",
+                "⚠️ This is not your search. Please search your own.",
                 show_alert=True
             )
 
@@ -1024,24 +943,16 @@ async def filter_files(client, query: CallbackQuery):
 
         for f in files:
 
-            try:
+            if not is_related_series(search, f["file_name"]):
+                continue
 
-                name = f["file_name"]
-
-                if search.lower() not in name.lower():
-                    continue
-
-                if (
-                    extract_season(name) == season_no and
-                    extract_episode(name) == episode_no
-                ):
-                    filtered.append(f)
-
-            except:
-                pass
+            if (
+                extract_season(f["file_name"]) == season_no and
+                extract_episode(f["file_name"]) == episode_no
+            ):
+                filtered.append(f)
 
         if not filtered:
-
             return await query.answer(
                 "🚫 File not found",
                 show_alert=True
@@ -1052,18 +963,13 @@ async def filter_files(client, query: CallbackQuery):
         total_pages = (len(filtered) - 1) // FILES_PER_PAGE + 1
 
         start = page * FILES_PER_PAGE
-
         end = start + FILES_PER_PAGE
 
         btn = []
 
         for f in filtered[start:end]:
 
-            text = (
-                f"{search.title()} • "
-                f"{get_size(f['file_size'])} ▷ "
-                f"{f['file_name'][:40]}"
-            )
+            text = f"{get_size(f['file_size'])} ▷ {f['file_name'][:40]}"
 
             btn.append([
                 InlineKeyboardButton(
@@ -1074,7 +980,6 @@ async def filter_files(client, query: CallbackQuery):
 
         btn.insert(0, [
             InlineKeyboardButton(
-                f"{search.title()} • "
                 f"S{season_no}E{str(episode_no).zfill(2)}",
                 callback_data="ident"
             )
@@ -1140,9 +1045,8 @@ async def combined_files(client, query: CallbackQuery):
     _, season_tag, key, page, user = query.data.split("#")
 
     if int(user) != query.from_user.id:
-
         return await query.answer(
-            "⚠️ This is not your search\nSearch your own in Goflix 🍿",
+            "⚠️ This is not your search. Please search your own.",
             show_alert=True
         )
 
@@ -1164,24 +1068,15 @@ async def combined_files(client, query: CallbackQuery):
 
     for f in files:
 
-        try:
+        name = f["file_name"]
 
-            name = f["file_name"]
+        if not is_related_series(search, name):
+            continue
 
-            if search.lower() not in name.lower():
-                continue
-
-            if (
-                extract_season(name) == season_no and
-                is_combined_file(name)
-            ):
-                combined.append(f)
-
-        except:
-            pass
+        if extract_season(name) == season_no and is_combined_file(name):
+            combined.append(f)
 
     if not combined:
-
         return await query.answer(
             "🚫 No combined files",
             show_alert=True
@@ -1192,18 +1087,13 @@ async def combined_files(client, query: CallbackQuery):
     total_pages = (len(combined) - 1) // FILES_PER_PAGE + 1
 
     start = page * FILES_PER_PAGE
-
     end = start + FILES_PER_PAGE
 
     btn = []
 
     for f in combined[start:end]:
 
-        text = (
-            f"{search.title()} • "
-            f"{get_size(f['file_size'])} ▷ "
-            f"{f['file_name'][:40]}"
-        )
+        text = f"{get_size(f['file_size'])} ▷ {f['file_name'][:40]}"
 
         btn.append([
             InlineKeyboardButton(
@@ -1214,7 +1104,7 @@ async def combined_files(client, query: CallbackQuery):
 
     btn.insert(0, [
         InlineKeyboardButton(
-            f"📦 {search.title()} Season {season_no} Combined",
+            f"📦 Season {season_no} Combined",
             callback_data="ident"
         )
     ])
