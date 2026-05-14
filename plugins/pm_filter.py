@@ -623,89 +623,208 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
 
 import re
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from pyrogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    CallbackQuery
+)
 from pyrogram.errors import MessageNotModified
 
-# ===============================
-# REGEX HELPERS
-# ===============================
+# =========================================================
+# GLOBAL STORE
+# =========================================================
 
-SEASON_RE = re.compile(r"(?:season\s*|s)(\d{1,2})", re.IGNORECASE)
+SERIES_STORE = {}
+USER_SELECTED_SERIES = {}
 
-EPISODE_RE = re.compile(r"(?:e|episode|x)(\d{1,3})", re.IGNORECASE)
+# =========================================================
+# REGEX
+# =========================================================
 
-RANGE_EP_RE = re.compile(r"e\d{1,3}\s*-\s*e\d{1,3}", re.IGNORECASE)
+SEASON_RE = re.compile(
+    r'(?:s|season)[\s\.\-\_]*(\d{1,2})(?!\d)',
+    re.I
+)
 
+EP_RE = re.compile(
+    r'(?:e|ep|episode)[\s\.\-\_]*(\d{1,3})(?!\d)',
+    re.I
+)
 
-# ===============================
+RANGE_EP_RE = re.compile(
+    r'e\d+\s*-\s*e\d+',
+    re.I
+)
+
+# =========================================================
 # EXTRACT SEASON
-# ===============================
+# =========================================================
 
-def extract_season(filename: str):
+def extract_season(text):
 
-    m = SEASON_RE.search(filename)
+    m = SEASON_RE.search(text)
 
     if not m:
         return None
 
-    season = int(m.group(1))
+    try:
 
-    # REMOVE FAKE SEASONS
-    if season > 24:
+        season = int(m.group(1))
+
+        if season < 1:
+            return None
+
+        if season > 24:
+            return None
+
+        return season
+
+    except:
         return None
 
-    return season
 
-
-# ===============================
+# =========================================================
 # EXTRACT EPISODE
-# ===============================
+# =========================================================
 
-def extract_episode(filename: str):
+def extract_episode(text):
 
-    m = EPISODE_RE.search(filename)
+    m = EP_RE.search(text)
 
     if not m:
         return None
 
-    ep = int(m.group(1))
+    try:
 
-    # REMOVE FAKE EPISODES
-    if ep > 999:
+        ep = int(m.group(1))
+
+        if ep < 1:
+            return None
+
+        if ep > 999:
+            return None
+
+        return ep
+
+    except:
         return None
 
-    return ep
 
+# =========================================================
+# COMBINED CHECK
+# =========================================================
 
-# ===============================
-# COMBINED FILE CHECK
-# ===============================
+def is_combined_file(text):
 
-def is_combined_file(name: str):
+    text = text.lower()
 
-    name = name.lower()
+    keywords = [
+        "combined",
+        "complete",
+        "batch",
+        "pack"
+    ]
 
-    if "combined" in name:
-        return True
+    for k in keywords:
 
-    if "complete" in name:
-        return True
+        if k in text:
+            return True
 
-    if "batch" in name:
-        return True
-
-    if "pack" in name:
-        return True
-
-    if RANGE_EP_RE.search(name):
+    if RANGE_EP_RE.search(text):
         return True
 
     return False
 
 
-# ===============================
-# SEASON LIST
-# ===============================
+# =========================================================
+# CLEAN SERIES NAME
+# =========================================================
+
+def clean_series_name(name):
+
+    name = name.lower()
+
+    name = re.sub(
+        r'\.(mkv|mp4|avi)$',
+        '',
+        name
+    )
+
+    name = re.sub(
+        r'[\.\_\-]+',
+        ' ',
+        name
+    )
+
+    name = re.sub(
+        r'\b(19|20)\d{2}\b',
+        '',
+        name
+    )
+
+    split_data = re.split(
+        r's\d{1,2}e\d{1,3}|season\s*\d{1,2}|episode\s*\d{1,3}',
+        name,
+        flags=re.I
+    )
+
+    if split_data:
+        name = split_data[0]
+
+    stop_words = [
+
+        "480p",
+        "720p",
+        "1080p",
+        "2160p",
+
+        "x264",
+        "x265",
+        "10bit",
+        "hevc",
+
+        "bluray",
+        "webdl",
+        "webrip",
+
+        "hindi",
+        "english",
+        "tamil",
+        "telugu",
+        "kannada",
+
+        "combined",
+        "complete",
+        "batch",
+        "pack",
+
+        "aac",
+        "ddp5",
+        "esub"
+    ]
+
+    final = []
+
+    for w in name.split():
+
+        if w in stop_words:
+            break
+
+        if len(w) <= 1:
+            continue
+
+        final.append(w)
+
+    final = final[:5]
+
+    title = " ".join(final).strip()
+
+    return title.title()
+
+
+# =========================================================
+# SERIES LIST
+# =========================================================
 
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client, query: CallbackQuery):
@@ -726,61 +845,62 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             max_results=50000
         )
 
-        season_set = set()
+        series_set = set()
 
         for f in files:
 
             try:
 
-                s = extract_season(f["file_name"])
+                name = f["file_name"]
 
-                if s:
-                    season_set.add(s)
+                if not extract_season(name):
+                    continue
+
+                clean = clean_series_name(name)
+
+                if not clean:
+                    continue
+
+                if search.lower() not in clean.lower():
+                    continue
+
+                series_set.add(clean)
 
             except:
                 pass
 
-        if not season_set:
+        if not series_set:
 
             return await query.answer(
-                "🚫 No seasons found",
+                "🚫 No series found",
                 show_alert=True
             )
 
-        seasons = sorted(season_set)
+        series_list = sorted(series_set)
+
+        SERIES_STORE[key] = series_list
 
         btn = []
 
-        btn.insert(0, [
+        btn.append([
             InlineKeyboardButton(
-                "⇊ SELECT SEASON ⇊",
+                f"📺 {search.title()} Related Series",
                 callback_data="ident"
             )
         ])
 
-        for i in range(0, len(seasons), 2):
+        for i, series_name in enumerate(series_list[:8]):
 
-            row = [
+            btn.append([
                 InlineKeyboardButton(
-                    f"Season {seasons[i]}",
-                    callback_data=f"eps#s{seasons[i]}#{key}#{query.from_user.id}"
+                    series_name[:55],
+                    callback_data=f"series#{key}#{i}#{query.from_user.id}"
                 )
-            ]
-
-            if i + 1 < len(seasons):
-
-                row.append(
-                    InlineKeyboardButton(
-                        f"Season {seasons[i+1]}",
-                        callback_data=f"eps#s{seasons[i+1]}#{key}#{query.from_user.id}"
-                    )
-                )
-
-            btn.append(row)
+            ])
 
         btn.append([
             InlineKeyboardButton(
-                "🏠 Back to Home",
+                "🏠 Home",
                 callback_data=f"next_{query.from_user.id}_{key}_0"
             )
         ])
@@ -789,13 +909,134 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             InlineKeyboardMarkup(btn)
         )
 
-    except MessageNotModified:
-        pass
+    except Exception as e:
+
+        print("SERIES LIST ERROR:", e)
 
 
-# ===============================
-# EPISODE LIST WITH PAGINATION
-# ===============================
+# =========================================================
+# SERIES -> SEASONS
+# =========================================================
+
+@Client.on_callback_query(filters.regex(r"^series#"))
+async def series_selector(client, query: CallbackQuery):
+
+    try:
+
+        await query.answer()
+
+        _, key, sid, user = query.data.split("#")
+
+        if int(user) != query.from_user.id:
+
+            return await query.answer(
+                "⚠️ This is not your search\nSearch your own in Goflix 🍿",
+                show_alert=True
+            )
+
+        sid = int(sid)
+
+        try:
+
+            series_name = SERIES_STORE[key][sid]
+
+        except:
+
+            return await query.answer(
+                "🚫 Series expired",
+                show_alert=True
+            )
+
+        USER_SELECTED_SERIES[user] = series_name
+
+        search = FRESH.get(key)
+
+        files, _, _ = await get_search_results(
+            query.message.chat.id,
+            search,
+            max_results=50000
+        )
+
+        seasons = set()
+
+        for f in files:
+
+            try:
+
+                name = f["file_name"]
+
+                clean_name = clean_series_name(name)
+
+                if clean_name.lower() != series_name.lower():
+                    continue
+
+                season = extract_season(name)
+
+                if season:
+                    seasons.add(season)
+
+            except:
+                pass
+
+        if not seasons:
+
+            return await query.answer(
+                "🚫 No seasons found",
+                show_alert=True
+            )
+
+        seasons = sorted(seasons)
+
+        btn = []
+
+        btn.append([
+            InlineKeyboardButton(
+                f"📺 {series_name[:40]}",
+                callback_data="ident"
+            )
+        ])
+
+        for i in range(0, len(seasons), 2):
+
+            row = []
+
+            row.append(
+                InlineKeyboardButton(
+                    f"Season {seasons[i]}",
+                    callback_data=f"eps#s{seasons[i]}#{key}#{user}"
+                )
+            )
+
+            if i + 1 < len(seasons):
+
+                row.append(
+                    InlineKeyboardButton(
+                        f"Season {seasons[i+1]}",
+                        callback_data=f"eps#s{seasons[i+1]}#{key}#{user}"
+                    )
+                )
+
+            btn.append(row)
+
+        btn.append([
+            InlineKeyboardButton(
+                "↩️ Back",
+                callback_data=f"seasons#{key}"
+            )
+        ])
+
+        await query.edit_message_reply_markup(
+            InlineKeyboardMarkup(btn)
+        )
+
+    except Exception as e:
+
+        print("SERIES SELECT ERROR:", e)
+
+
+# =========================================================
+# EPISODE SELECTOR
+# =========================================================
 
 @Client.on_callback_query(filters.regex(r"^eps#"))
 async def episode_selector(client, query: CallbackQuery):
@@ -806,7 +1047,6 @@ async def episode_selector(client, query: CallbackQuery):
 
         data = query.data.split("#")
 
-        # eps#s1#key#user#page
         if len(data) == 5:
 
             _, season_tag, key, user, page = data
@@ -819,7 +1059,6 @@ async def episode_selector(client, query: CallbackQuery):
 
             page = 0
 
-        # SEARCH OWNER CHECK
         if int(user) != query.from_user.id:
 
             return await query.answer(
@@ -831,10 +1070,17 @@ async def episode_selector(client, query: CallbackQuery):
 
         search = FRESH.get(key)
 
-        chat_id = query.message.chat.id
+        selected_series = USER_SELECTED_SERIES.get(user)
+
+        if not selected_series:
+
+            return await query.answer(
+                "🚫 Search expired",
+                show_alert=True
+            )
 
         files, _, _ = await get_search_results(
-            chat_id,
+            query.message.chat.id,
             search,
             max_results=50000
         )
@@ -848,6 +1094,11 @@ async def episode_selector(client, query: CallbackQuery):
             try:
 
                 name = f["file_name"]
+
+                clean_name = clean_series_name(name)
+
+                if clean_name.lower() != selected_series.lower():
+                    continue
 
                 if extract_season(name) != season_no:
                     continue
@@ -872,10 +1123,6 @@ async def episode_selector(client, query: CallbackQuery):
                 show_alert=True
             )
 
-        # ===============================
-        # PAGINATION
-        # ===============================
-
         PAGE_SIZE = 8
 
         total_pages = (
@@ -892,12 +1139,11 @@ async def episode_selector(client, query: CallbackQuery):
 
         btn.append([
             InlineKeyboardButton(
-                f"🎬 {search} Season {season_no}",
+                f"🎬 {selected_series[:35]} • S{season_no}",
                 callback_data="ident"
             )
         ])
 
-        # COMBINED FILES
         if combined_exist:
 
             btn.append([
@@ -907,7 +1153,6 @@ async def episode_selector(client, query: CallbackQuery):
                 )
             ])
 
-        # EPISODE BUTTONS
         for i in range(0, len(current_eps), 4):
 
             row = []
@@ -922,10 +1167,6 @@ async def episode_selector(client, query: CallbackQuery):
                 )
 
             btn.append(row)
-
-        # ===============================
-        # NEXT / PREV
-        # ===============================
 
         if total_pages > 1:
 
@@ -960,8 +1201,8 @@ async def episode_selector(client, query: CallbackQuery):
 
         btn.append([
             InlineKeyboardButton(
-                "↩️ Back to Seasons",
-                callback_data=f"seasons#{key}"
+                "↩️ Back",
+                callback_data=f"series#{key}#0#{user}"
             )
         ])
 
@@ -974,150 +1215,9 @@ async def episode_selector(client, query: CallbackQuery):
         print("EPISODE ERROR:", e)
 
 
-# ===============================
-# FILE LIST
-# ===============================
-
-@Client.on_callback_query(filters.regex(r"^fs#"))
-async def filter_files(client, query: CallbackQuery):
-
-    try:
-
-        await query.answer()
-
-        _, tag, key, page, user = query.data.split("#")
-
-        if int(user) != query.from_user.id:
-
-            return await query.answer(
-                "⚠️ This is not your search\nSearch your own in Goflix 🍿",
-                show_alert=True
-            )
-
-        season_no = int(tag.split("e")[0][1:])
-        episode_no = int(tag.split("e")[1])
-
-        page = int(page)
-
-        search = FRESH.get(key)
-
-        chat_id = query.message.chat.id
-
-        files, _, _ = await get_search_results(
-            chat_id,
-            search,
-            max_results=50000
-        )
-
-        filtered = []
-
-        for f in files:
-
-            try:
-
-                if (
-                    extract_season(f["file_name"]) == season_no and
-                    extract_episode(f["file_name"]) == episode_no
-                ):
-                    filtered.append(f)
-
-            except:
-                pass
-
-        if not filtered:
-
-            return await query.answer(
-                "🚫 File not found",
-                show_alert=True
-            )
-
-        FILES_PER_PAGE = 8
-
-        total_pages = (
-            (len(filtered) - 1) // FILES_PER_PAGE
-        ) + 1
-
-        start = page * FILES_PER_PAGE
-
-        end = start + FILES_PER_PAGE
-
-        btn = []
-
-        btn.insert(0, [
-            InlineKeyboardButton(
-                f"S{season_no}E{str(episode_no).zfill(2)}",
-                callback_data="ident"
-            )
-        ])
-
-        for f in filtered[start:end]:
-
-            text = (
-                f"{get_size(f['file_size'])} ▷ "
-                f"{f['file_name'][:40]}"
-            )
-
-            btn.append([
-                InlineKeyboardButton(
-                    text,
-                    callback_data=f"file#{f['file_id']}"
-                )
-            ])
-
-        # NEXT PREV
-        if total_pages > 1:
-
-            nav = []
-
-            if page > 0:
-
-                nav.append(
-                    InlineKeyboardButton(
-                        "⬅️ Prev",
-                        callback_data=f"fs#s{season_no}e{episode_no}#{key}#{page-1}#{user}"
-                    )
-                )
-
-            nav.append(
-                InlineKeyboardButton(
-                    f"{page+1}/{total_pages}",
-                    callback_data="ident"
-                )
-            )
-
-            if page + 1 < total_pages:
-
-                nav.append(
-                    InlineKeyboardButton(
-                        "Next ➡️",
-                        callback_data=f"fs#s{season_no}e{episode_no}#{key}#{page+1}#{user}"
-                    )
-                )
-
-            btn.append(nav)
-
-        btn.append([
-            InlineKeyboardButton(
-                "↩️ Episodes",
-                callback_data=f"eps#s{season_no}#{key}#{user}"
-            ),
-            InlineKeyboardButton(
-                "🏠 Home",
-                callback_data=f"next_{user}_{key}_0"
-            )
-        ])
-
-        await query.edit_message_reply_markup(
-            InlineKeyboardMarkup(btn)
-        )
-
-    except MessageNotModified:
-        pass
-
-
-# ===============================
+# =========================================================
 # COMBINED FILES
-# ===============================
+# =========================================================
 
 @Client.on_callback_query(filters.regex(r"^combined#"))
 async def combined_files(client, query: CallbackQuery):
@@ -1141,10 +1241,10 @@ async def combined_files(client, query: CallbackQuery):
 
         search = FRESH.get(key)
 
-        chat_id = query.message.chat.id
+        selected_series = USER_SELECTED_SERIES.get(user)
 
         files, _, _ = await get_search_results(
-            chat_id,
+            query.message.chat.id,
             search,
             max_results=50000
         )
@@ -1157,10 +1257,15 @@ async def combined_files(client, query: CallbackQuery):
 
                 name = f["file_name"]
 
-                if (
-                    extract_season(name) == season_no and
-                    is_combined_file(name)
-                ):
+                clean_name = clean_series_name(name)
+
+                if clean_name.lower() != selected_series.lower():
+                    continue
+
+                if extract_season(name) != season_no:
+                    continue
+
+                if is_combined_file(name):
                     combined.append(f)
 
             except:
@@ -1185,9 +1290,9 @@ async def combined_files(client, query: CallbackQuery):
 
         btn = []
 
-        btn.insert(0, [
+        btn.append([
             InlineKeyboardButton(
-                f"📦 Season {season_no} Combined",
+                f"📦 {selected_series[:35]} Combined",
                 callback_data="ident"
             )
         ])
@@ -1206,7 +1311,6 @@ async def combined_files(client, query: CallbackQuery):
                 )
             ])
 
-        # NEXT PREV
         if total_pages > 1:
 
             nav = []
@@ -1251,7 +1355,7 @@ async def combined_files(client, query: CallbackQuery):
 
     except Exception as e:
 
-        print("COMBINED ERROR:", e)   
+        print("COMBINED ERROR:", e)  
 
 # SESSON End Here ##############
 
