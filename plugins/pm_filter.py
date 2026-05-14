@@ -657,6 +657,9 @@ SERIES_STORE = {}
 USER_SELECTED_SERIES = {}
 
 
+# ===============================
+# EXTRACT SEASON
+# ===============================
 def extract_season(filename: str):
 
     m = SEASON_RE.search(filename)
@@ -672,6 +675,9 @@ def extract_season(filename: str):
     return season
 
 
+# ===============================
+# EXTRACT EPISODE
+# ===============================
 def extract_episode(filename: str):
 
     m = EPISODE_RE.search(filename)
@@ -679,6 +685,9 @@ def extract_episode(filename: str):
     return int(m.group(1)) if m else None
 
 
+# ===============================
+# CHECK COMBINED FILE
+# ===============================
 def is_combined_file(name: str):
 
     name = name.lower()
@@ -706,13 +715,13 @@ def is_combined_file(name: str):
 # ===============================
 def clean_series_name(name: str):
 
-    original = name
+    name = name.lower()
 
-    # REMOVE EXTENSION
+    # REMOVE FILE EXTENSION
     name = re.sub(
         r'\.(mkv|mp4|avi)$',
         '',
-        original,
+        name,
         flags=re.IGNORECASE
     )
 
@@ -723,36 +732,88 @@ def clean_series_name(name: str):
         name
     )
 
-    # SPLIT BEFORE SEASON/EPISODE
-    name = re.split(
-        r's\d{1,2}e\d{1,3}|season\s*\d{1,2}',
+    # REMOVE SEASON / EPISODE
+    name = re.sub(
+        r's\d{1,2}e\d{1,3}',
+        '',
         name,
         flags=re.IGNORECASE
-    )[0]
+    )
 
-    # REMOVE QUALITY WORDS
-    bad_words = [
-        "480p",
-        "720p",
-        "1080p",
-        "2160p",
-        "x264",
-        "x265",
+    # REMOVE SEASON ONLY
+    name = re.sub(
+        r'season\s*\d{1,2}',
+        '',
+        name,
+        flags=re.IGNORECASE
+    )
+
+    # REMOVE YEARS
+    name = re.sub(
+        r'\b(19|20)\d{2}\b',
+        '',
+        name
+    )
+
+    # REMOVE USELESS WORDS
+    remove_words = [
+        "complete",
+        "combined",
+        "batch",
+        "pack",
+        "hevc",
         "hdrip",
         "webrip",
         "webdl",
         "bluray",
+        "x264",
+        "x265",
         "aac",
         "10bit",
-        "hq"
+        "hq",
+        "dual",
+        "multi",
+        "audio",
+        "eng",
+        "english",
+        "hindi",
+        "tam",
+        "tel",
+        "mal",
+        "kan",
+        "ddp5",
+        "esub",
+        "proper",
+        "uncut",
+        "extended",
+        "480p",
+        "720p",
+        "1080p",
+        "2160p",
+        "hdt",
+        "mm",
+        "mzm",
+        "series"
     ]
 
     words = []
 
-    for w in name.split():
+    for word in name.split():
 
-        if w.lower() not in bad_words:
-            words.append(w)
+        skip = False
+
+        for bad in remove_words:
+
+            if word == bad:
+                skip = True
+                break
+
+        # REMOVE E01 / E02
+        if re.match(r'e\d+', word):
+            skip = True
+
+        if not skip:
+            words.append(word)
 
     name = " ".join(words)
 
@@ -763,7 +824,7 @@ def clean_series_name(name: str):
 
 
 # ===============================
-# SERIES LIST
+# AVAILABLE SERIES LIST
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client, query: CallbackQuery):
@@ -915,7 +976,7 @@ async def show_series_page(query, key, page):
 
 
 # ===============================
-# SERIES PAGE
+# SERIES PAGE HANDLER
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seriespage#"))
 async def series_page_handler(client, query: CallbackQuery):
@@ -1052,7 +1113,7 @@ async def series_season_selector(client, query: CallbackQuery):
 
 
 # ===============================
-# EPISODES
+# EPISODE LIST
 # ===============================
 @Client.on_callback_query(filters.regex(r"^eps#"))
 async def episode_selector(client, query: CallbackQuery):
@@ -1109,7 +1170,7 @@ async def episode_selector(client, query: CallbackQuery):
 
     btn.append([
         InlineKeyboardButton(
-            f"🎬 {selected_series[:30]} S{season_no}",
+            f"🎬 {selected_series[:25]} S{season_no}",
             callback_data="ident"
         )
     ])
