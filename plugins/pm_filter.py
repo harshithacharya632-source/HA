@@ -1134,10 +1134,6 @@ async def series_page_system(client, query: CallbackQuery):
 # SERIES -> SEASONS
 # FIXED BUTTON RESPONSE
 # ===============================
-# =========================================================
-# SERIES -> SEASONS
-# FULL FIXED
-# =========================================================
 
 @Client.on_callback_query(filters.regex(r"^series#"))
 async def series_selector(client, query: CallbackQuery):
@@ -1265,7 +1261,201 @@ async def series_selector(client, query: CallbackQuery):
     except Exception as e:
 
         print("SERIES SELECT ERROR:", e)
-    
+        
+# =========================================================
+# EPISODE SELECTOR WITH PAGINATION
+# =========================================================
+
+@Client.on_callback_query(filters.regex(r"^eps#"))
+async def episode_selector(client, query: CallbackQuery):
+
+    try:
+
+        await query.answer()
+
+        data = query.data.split("#")
+
+        # eps#season#key#user#page
+        if len(data) == 5:
+
+            _, season_no, key, user, page = data
+
+            page = int(page)
+
+        else:
+
+            _, season_no, key, user = data
+
+            page = 0
+
+        # OWNER CHECK
+        if int(user) != query.from_user.id:
+
+            return await query.answer(
+                "⚠️ This is not your search\nSearch your own in Goflix 🍿",
+                show_alert=True
+            )
+
+        season_no = int(season_no)
+
+        search = FRESH.get(key)
+
+        selected_series = USER_SELECTED_SERIES.get(user)
+
+        if not selected_series:
+
+            return await query.answer(
+                "🚫 Search expired",
+                show_alert=True
+            )
+
+        files, _, _ = await get_search_results(
+            query.message.chat.id,
+            search,
+            max_results=50000
+        )
+
+        episode_set = set()
+
+        combined_exist = False
+
+        for f in files:
+
+            try:
+
+                name = f["file_name"]
+
+                clean_name = clean_series_name(name)
+
+                # SAME SERIES ONLY
+                if clean_name.lower() != selected_series.lower():
+                    continue
+
+                # SAME SEASON ONLY
+                if extract_season(name) != season_no:
+                    continue
+
+                ep = extract_episode(name)
+
+                if ep:
+                    episode_set.add(ep)
+
+                if is_combined_file(name):
+                    combined_exist = True
+
+            except:
+                pass
+
+        episodes = sorted(episode_set)
+
+        if not episodes and not combined_exist:
+
+            return await query.answer(
+                "🚫 No episodes found",
+                show_alert=True
+            )
+
+        # =================================================
+        # PAGINATION
+        # =================================================
+
+        PAGE_SIZE = 8
+
+        total_pages = (
+            (len(episodes) - 1) // PAGE_SIZE
+        ) + 1
+
+        start = page * PAGE_SIZE
+
+        end = start + PAGE_SIZE
+
+        current_eps = episodes[start:end]
+
+        btn = []
+
+        btn.append([
+            InlineKeyboardButton(
+                f"🎬 {selected_series[:35]} • S{season_no}",
+                callback_data="ident"
+            )
+        ])
+
+        # COMBINED BUTTON
+        if combined_exist:
+
+            btn.append([
+                InlineKeyboardButton(
+                    "📦 Combined Files",
+                    callback_data=f"combined#{season_no}#{key}#0#{user}"
+                )
+            ])
+
+        # EPISODE BUTTONS
+        for i in range(0, len(current_eps), 4):
+
+            row = []
+
+            for ep in current_eps[i:i+4]:
+
+                row.append(
+                    InlineKeyboardButton(
+                        f"E{str(ep).zfill(2)}",
+                        callback_data=f"fs#{season_no}#{ep}#{key}#0#{user}"
+                    )
+                )
+
+            btn.append(row)
+
+        # =================================================
+        # NEXT / PREV
+        # =================================================
+
+        if total_pages > 1:
+
+            nav = []
+
+            if page > 0:
+
+                nav.append(
+                    InlineKeyboardButton(
+                        "⬅️ Prev",
+                        callback_data=f"eps#{season_no}#{key}#{user}#{page-1}"
+                    )
+                )
+
+            nav.append(
+                InlineKeyboardButton(
+                    f"{page+1}/{total_pages}",
+                    callback_data="ident"
+                )
+            )
+
+            if page + 1 < total_pages:
+
+                nav.append(
+                    InlineKeyboardButton(
+                        "Next ➡️",
+                        callback_data=f"eps#{season_no}#{key}#{user}#{page+1}"
+                    )
+                )
+
+            btn.append(nav)
+
+        # BACK BUTTON
+        btn.append([
+            InlineKeyboardButton(
+                "↩️ Back",
+                callback_data=f"series#{key}#0#{user}"
+            )
+        ])
+
+        await query.edit_message_reply_markup(
+            InlineKeyboardMarkup(btn)
+        )
+
+    except Exception as e:
+
+        print("EPISODE ERROR:", e)    
 
 # SESSON End Here ##############
 
