@@ -745,6 +745,8 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 
         _, key = query.data.split("#")
 
+        page = 0
+
         search = FRESH.get(key)
 
         chat_id = query.message.chat.id
@@ -794,48 +796,114 @@ async def seasons_cb_handler(client, query: CallbackQuery):
                 show_alert=True
             )
 
-        btn = []
+        SERIES_STORE[key] = sorted(series_dict.keys())
 
-        btn.append([
-            InlineKeyboardButton(
-                "📺 AVAILABLE SERIES",
-                callback_data="ident"
-            )
-        ])
-
-        # SHORT IDS FOR CALLBACK
-        SERIES_STORE[key] = {}
-
-        count = 0
-
-        for sname in sorted(series_dict.keys()):
-
-            sid = str(count)
-
-            SERIES_STORE[key][sid] = sname
-
-            btn.append([
-                InlineKeyboardButton(
-                    sname[:50],
-                    callback_data=f"series#{key}#{sid}#{query.from_user.id}"
-                )
-            ])
-
-            count += 1
-
-        btn.append([
-            InlineKeyboardButton(
-                "🏠 Back to Home",
-                callback_data=f"next_{query.from_user.id}_{key}_0"
-            )
-        ])
-
-        await query.edit_message_reply_markup(
-            InlineKeyboardMarkup(btn)
-        )
+        await show_series_page(query, key, page)
 
     except MessageNotModified:
         pass
+
+
+# ===============================
+# SERIES PAGE FUNCTION
+# ===============================
+async def show_series_page(query, key, page):
+
+    series_list = SERIES_STORE.get(key, [])
+
+    PER_PAGE = 15
+
+    total_pages = (
+        (len(series_list) - 1) // PER_PAGE
+    ) + 1
+
+    start = page * PER_PAGE
+
+    end = start + PER_PAGE
+
+    btn = []
+
+    btn.append([
+        InlineKeyboardButton(
+            "📺 AVAILABLE SERIES",
+            callback_data="ident"
+        )
+    ])
+
+    current = series_list[start:end]
+
+    for idx, sname in enumerate(current):
+
+        real_index = start + idx
+
+        btn.append([
+            InlineKeyboardButton(
+                sname[:50],
+                callback_data=f"series#{key}#{real_index}#{query.from_user.id}"
+            )
+        ])
+
+    nav = []
+
+    if page > 0:
+
+        nav.append(
+            InlineKeyboardButton(
+                "⬅️ Prev",
+                callback_data=f"seriespage#{key}#{page-1}#{query.from_user.id}"
+            )
+        )
+
+    nav.append(
+        InlineKeyboardButton(
+            f"{page+1}/{total_pages}",
+            callback_data="ident"
+        )
+    )
+
+    if page + 1 < total_pages:
+
+        nav.append(
+            InlineKeyboardButton(
+                "Next ➡️",
+                callback_data=f"seriespage#{key}#{page+1}#{query.from_user.id}"
+            )
+        )
+
+    btn.append(nav)
+
+    btn.append([
+        InlineKeyboardButton(
+            "🏠 Back to Home",
+            callback_data=f"next_{query.from_user.id}_{key}_0"
+        )
+    ])
+
+    await query.edit_message_reply_markup(
+        InlineKeyboardMarkup(btn)
+    )
+
+
+# ===============================
+# SERIES PAGINATION
+# ===============================
+@Client.on_callback_query(filters.regex(r"^seriespage#"))
+async def series_page_handler(client, query: CallbackQuery):
+
+    _, key, page, user = query.data.split("#")
+
+    if int(user) != query.from_user.id:
+
+        return await query.answer(
+            "⚠️ Not your search",
+            show_alert=True
+        )
+
+    await show_series_page(
+        query,
+        key,
+        int(page)
+    )
 
 
 # ===============================
@@ -856,18 +924,20 @@ async def series_season_selector(client, query: CallbackQuery):
     if key not in SERIES_STORE:
 
         return await query.answer(
-            "🚫 Search expired. Search again.",
+            "🚫 Search expired.",
             show_alert=True
         )
 
-    if sid not in SERIES_STORE[key]:
+    try:
+
+        series_name = SERIES_STORE[key][int(sid)]
+
+    except:
 
         return await query.answer(
             "🚫 Series not found.",
             show_alert=True
         )
-
-    series_name = SERIES_STORE[key][sid]
 
     search = FRESH.get(key)
 
@@ -937,8 +1007,8 @@ async def series_season_selector(client, query: CallbackQuery):
 
     btn.append([
         InlineKeyboardButton(
-            "🏠 Back",
-            callback_data=f"seasons#{key}"
+            "↩️ Back",
+            callback_data=f"seriespage#{key}#0#{user}"
         )
     ])
 
@@ -958,7 +1028,7 @@ async def episode_selector(client, query: CallbackQuery):
     if int(user) != query.from_user.id:
 
         return await query.answer(
-            "⚠️ This is not your search. Please search your own.",
+            "⚠️ This is not your search.",
             show_alert=True
         )
 
@@ -998,7 +1068,7 @@ async def episode_selector(client, query: CallbackQuery):
 
     btn.append([
         InlineKeyboardButton(
-            f"🎬 {search} Season {season_no}",
+            f"🎬 Season {season_no}",
             callback_data="ident"
         )
     ])
@@ -1029,8 +1099,8 @@ async def episode_selector(client, query: CallbackQuery):
 
     btn.append([
         InlineKeyboardButton(
-            "↩️ Back to Seasons",
-            callback_data=f"seasons#{key}"
+            "↩️ Back",
+            callback_data=f"seriespage#{key}#0#{user}"
         )
     ])
 
@@ -1052,7 +1122,7 @@ async def filter_files(client, query: CallbackQuery):
         if int(user) != query.from_user.id:
 
             return await query.answer(
-                "⚠️ This is not your search. Please search your own.",
+                "⚠️ This is not your search.",
                 show_alert=True
             )
 
@@ -1157,10 +1227,6 @@ async def filter_files(client, query: CallbackQuery):
             InlineKeyboardButton(
                 "↩️ Episodes",
                 callback_data=f"eps#s{season_no}#{key}#{user}"
-            ),
-            InlineKeyboardButton(
-                "🏠 Home",
-                callback_data=f"next_{user}_{key}_0"
             )
         ])
 
@@ -1183,7 +1249,7 @@ async def combined_files(client, query: CallbackQuery):
     if int(user) != query.from_user.id:
 
         return await query.answer(
-            "⚠️ This is not your search. Please search your own.",
+            "⚠️ This is not your search.",
             show_alert=True
         )
 
