@@ -655,7 +655,6 @@ SERIES_BLACKLIST = [
 SERIES_STORE = {}
 USER_SELECTED_SERIES = {}
 
-
 # ===============================
 # EXTRACT SEASON
 # ===============================
@@ -716,7 +715,7 @@ def clean_series_name(name: str):
 
     name = name.lower()
 
-    # REMOVE EXTENSION
+    # REMOVE FILE EXTENSION
     name = re.sub(
         r'\.(mkv|mp4|avi|mov)$',
         '',
@@ -748,10 +747,9 @@ def clean_series_name(name: str):
     if split_data:
         name = split_data[0]
 
-    # REMOVE BAD WORDS
-    remove_words = [
+    # STOP WORDS
+    stop_words = [
 
-        # VIDEO
         "480p",
         "540p",
         "720p",
@@ -759,20 +757,18 @@ def clean_series_name(name: str):
         "2160p",
         "4k",
 
-        # CODEC
         "x264",
         "x265",
         "h264",
         "hevc",
+        "10bit",
 
-        # AUDIO
         "aac",
         "ddp5",
         "dd",
         "2ch",
         "6ch",
 
-        # SOURCE
         "hdrip",
         "webrip",
         "webdl",
@@ -780,23 +776,6 @@ def clean_series_name(name: str):
         "brrip",
         "dvdrip",
 
-        # FILE
-        "mkv",
-        "mp4",
-        "avi",
-
-        # COMBINED
-        "complete",
-        "combined",
-        "batch",
-        "pack",
-
-        # EXTRA
-        "proper",
-        "uncut",
-        "extended",
-
-        # LANG
         "english",
         "hindi",
         "tamil",
@@ -807,7 +786,6 @@ def clean_series_name(name: str):
         "multi",
         "audio",
 
-        # RANDOM
         "psa",
         "rarbg",
         "yts",
@@ -818,9 +796,16 @@ def clean_series_name(name: str):
         "www",
         "rip",
         "nf",
+        "proper",
 
-        # EP WORDS
-        "episode",
+        "mkv",
+        "mp4",
+        "avi",
+
+        "complete",
+        "combined",
+        "batch",
+        "pack",
         "chapter",
         "part",
         "vol"
@@ -830,55 +815,25 @@ def clean_series_name(name: str):
 
     for word in name.split():
 
-        # REMOVE NUMBER ONLY
         if word.isdigit():
             continue
 
-        # REMOVE S01
         if re.match(r's\d+', word):
             continue
 
-        # REMOVE E01
         if re.match(r'e\d+', word):
             continue
 
-        # REMOVE BAD WORDS
-        if word in remove_words:
-            continue
+        if word in stop_words:
+            break
 
-        # REMOVE VERY SMALL RANDOM WORDS
         if len(word) <= 1:
             continue
 
         words.append(word)
 
-    # ===============================
-    # SMART TITLE DETECTION
-    # ===============================
+    title = " ".join(words)
 
-    final_title = []
-
-    stop_words = [
-        "season",
-        "episode",
-        "complete",
-        "combined"
-    ]
-
-    for word in words:
-
-        if word in stop_words:
-            break
-
-        final_title.append(word)
-
-        # LIMIT TITLE LENGTH
-        if len(final_title) >= 6:
-            break
-
-    title = " ".join(final_title)
-
-    # CLEAN SPACE
     title = re.sub(
         r'\s+',
         ' ',
@@ -942,7 +897,6 @@ async def seasons_cb_handler(client, query: CallbackQuery):
                 show_alert=True
             )
 
-        # SORT
         series_list = sorted(series_set)
 
         SERIES_STORE[key] = series_list
@@ -956,7 +910,7 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             )
         ])
 
-        for i, name in enumerate(series_list[:40]):
+        for i, name in enumerate(series_list[:80]):
 
             btn.append([
                 InlineKeyboardButton(
@@ -1177,6 +1131,191 @@ async def episode_selector(client, query: CallbackQuery):
     await query.edit_message_reply_markup(
         InlineKeyboardMarkup(btn)
     )
+
+
+# ===============================
+# FILE LIST
+# ===============================
+@Client.on_callback_query(filters.regex(r"^fs#"))
+async def filter_files(client, query: CallbackQuery):
+
+    try:
+
+        _, tag, key, page, user = query.data.split("#")
+
+        if int(user) != query.from_user.id:
+
+            return await query.answer(
+                "⚠️ Not your search",
+                show_alert=True
+            )
+
+        season_no = int(tag.split("e")[0][1:])
+        episode_no = int(tag.split("e")[1])
+
+        selected_series = USER_SELECTED_SERIES.get(user)
+
+        search = FRESH.get(key)
+
+        chat_id = query.message.chat.id
+
+        files, _, _ = await get_search_results(
+            chat_id,
+            search,
+            max_results=50000
+        )
+
+        filtered = []
+
+        for f in files:
+
+            fname = f["file_name"]
+
+            clean_name = clean_series_name(fname)
+
+            if clean_name.lower() != selected_series.lower():
+                continue
+
+            if extract_season(fname) != season_no:
+                continue
+
+            if extract_episode(fname) != episode_no:
+                continue
+
+            filtered.append(f)
+
+        if not filtered:
+
+            return await query.answer(
+                "🚫 No files found",
+                show_alert=True
+            )
+
+        btn = []
+
+        btn.append([
+            InlineKeyboardButton(
+                f"🎬 S{season_no}E{str(episode_no).zfill(2)}",
+                callback_data="ident"
+            )
+        ])
+
+        for file in filtered[:30]:
+
+            text = file["file_name"][:45]
+
+            btn.append([
+                InlineKeyboardButton(
+                    text,
+                    callback_data=f"file#{file['file_id']}"
+                )
+            ])
+
+        btn.append([
+            InlineKeyboardButton(
+                "↩️ Back",
+                callback_data=f"eps#s{season_no}#{key}#{user}"
+            )
+        ])
+
+        await query.edit_message_reply_markup(
+            InlineKeyboardMarkup(btn)
+        )
+
+    except Exception as e:
+
+        print(e)
+
+
+# ===============================
+# COMBINED FILES
+# ===============================
+@Client.on_callback_query(filters.regex(r"^combined#"))
+async def combined_files(client, query: CallbackQuery):
+
+    try:
+
+        _, season_tag, key, page, user = query.data.split("#")
+
+        if int(user) != query.from_user.id:
+
+            return await query.answer(
+                "⚠️ Not your search",
+                show_alert=True
+            )
+
+        season_no = int(season_tag[1:])
+
+        selected_series = USER_SELECTED_SERIES.get(user)
+
+        search = FRESH.get(key)
+
+        chat_id = query.message.chat.id
+
+        files, _, _ = await get_search_results(
+            chat_id,
+            search,
+            max_results=50000
+        )
+
+        combined = []
+
+        for f in files:
+
+            fname = f["file_name"]
+
+            clean_name = clean_series_name(fname)
+
+            if clean_name.lower() != selected_series.lower():
+                continue
+
+            if extract_season(fname) != season_no:
+                continue
+
+            if is_combined_file(fname):
+                combined.append(f)
+
+        if not combined:
+
+            return await query.answer(
+                "🚫 No combined files",
+                show_alert=True
+            )
+
+        btn = []
+
+        btn.append([
+            InlineKeyboardButton(
+                f"📦 {selected_series[:25]} S{season_no}",
+                callback_data="ident"
+            )
+        ])
+
+        for file in combined[:30]:
+
+            text = file["file_name"][:45]
+
+            btn.append([
+                InlineKeyboardButton(
+                    text,
+                    callback_data=f"file#{file['file_id']}"
+                )
+            ])
+
+        btn.append([
+            InlineKeyboardButton(
+                "↩️ Back",
+                callback_data=f"eps#s{season_no}#{key}#{user}"
+            )
+        ])
+
+        await query.edit_message_reply_markup(
+            InlineKeyboardMarkup(btn)
+        )
+
+    except Exception as e:
+
+        print(e)
     
 
 # SESSON End Here ##############
