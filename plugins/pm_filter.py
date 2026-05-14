@@ -701,35 +701,65 @@ def is_combined_file(name: str):
     return False
 
 
+# ===============================
+# CLEAN SERIES NAME
+# ===============================
 def clean_series_name(name: str):
 
+    name = name.lower()
+
+    # REMOVE EXTENSIONS
+    name = re.sub(r'\.(mkv|mp4|avi)$', '', name)
+
+    # REPLACE SYMBOLS
+    name = re.sub(r'[\.\_\-]+', ' ', name)
+
+    # REMOVE QUALITY
     name = re.sub(
-        r'[\.\_\-]+',
-        ' ',
+        r'\b(480p|720p|1080p|2160p|x264|x265|hdrip|webrip|webdl|bluray|aac|10bit|hq)\b',
+        '',
+        name,
+        flags=re.IGNORECASE
+    )
+
+    # REMOVE EPISODE
+    name = re.sub(
+        r's\d{1,2}e\d{1,3}',
+        '',
+        name,
+        flags=re.IGNORECASE
+    )
+
+    # REMOVE SEASON
+    name = re.sub(
+        r'season\s*\d{1,2}',
+        '',
+        name,
+        flags=re.IGNORECASE
+    )
+
+    # REMOVE YEAR
+    name = re.sub(
+        r'\b(19|20)\d{2}\b',
+        '',
         name
     )
 
-    name = re.sub(
-        r'(s\d{1,2}e\d{1,3})',
-        '',
-        name,
-        flags=re.IGNORECASE
-    )
+    # REMOVE EXTRA WORDS
+    split_words = [
+        "multi",
+        "proper",
+        "extended",
+        "uncut",
+        "dubbed"
+    ]
 
-    name = re.sub(
-        r'(season\s*\d{1,2})',
-        '',
-        name,
-        flags=re.IGNORECASE
-    )
+    for word in split_words:
 
-    name = re.sub(
-        r'\b(480p|720p|1080p|2160p|x264|x265|hdrip|webrip|webdl|bluray|mkv|mp4)\b',
-        '',
-        name,
-        flags=re.IGNORECASE
-    )
+        if word in name:
+            name = name.split(word)[0]
 
+    # CLEAN SPACES
     name = re.sub(r'\s+', ' ', name).strip()
 
     return name.title()
@@ -784,6 +814,9 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             if bad:
                 continue
 
+            if len(series_name) < 2:
+                continue
+
             if series_name not in series_dict:
                 series_dict[series_name] = set()
 
@@ -805,13 +838,13 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 
 
 # ===============================
-# SERIES PAGE FUNCTION
+# SHOW SERIES PAGE
 # ===============================
 async def show_series_page(query, key, page):
 
     series_list = SERIES_STORE.get(key, [])
 
-    PER_PAGE = 15
+    PER_PAGE = 10
 
     total_pages = (
         (len(series_list) - 1) // PER_PAGE
@@ -838,7 +871,7 @@ async def show_series_page(query, key, page):
 
         btn.append([
             InlineKeyboardButton(
-                sname[:50],
+                sname[:40],
                 callback_data=f"series#{key}#{real_index}#{query.from_user.id}"
             )
         ])
@@ -874,7 +907,7 @@ async def show_series_page(query, key, page):
 
     btn.append([
         InlineKeyboardButton(
-            "🏠 Back to Home",
+            "🏠 Home",
             callback_data=f"next_{query.from_user.id}_{key}_0"
         )
     ])
@@ -885,7 +918,7 @@ async def show_series_page(query, key, page):
 
 
 # ===============================
-# SERIES PAGINATION
+# SERIES PAGE HANDLER
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seriespage#"))
 async def series_page_handler(client, query: CallbackQuery):
@@ -955,7 +988,9 @@ async def series_season_selector(client, query: CallbackQuery):
 
         fname = f["file_name"]
 
-        if series_name.lower() not in clean_series_name(fname).lower():
+        clean_name = clean_series_name(fname)
+
+        if clean_name != series_name:
             continue
 
         s = extract_season(fname)
