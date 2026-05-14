@@ -654,6 +654,7 @@ SERIES_BLACKLIST = [
 ]
 
 SERIES_STORE = {}
+USER_SELECTED_SERIES = {}
 
 
 def extract_season(filename: str):
@@ -665,7 +666,6 @@ def extract_season(filename: str):
 
     season = int(m.group(1))
 
-    # REMOVE FAKE SEASONS
     if season < 1 or season > 30:
         return None
 
@@ -706,58 +706,55 @@ def is_combined_file(name: str):
 # ===============================
 def clean_series_name(name: str):
 
-    name = name.lower()
+    original = name
 
-    # REMOVE EXTENSIONS
-    name = re.sub(r'\.(mkv|mp4|avi)$', '', name)
+    # REMOVE EXTENSION
+    name = re.sub(
+        r'\.(mkv|mp4|avi)$',
+        '',
+        original,
+        flags=re.IGNORECASE
+    )
 
     # REPLACE SYMBOLS
-    name = re.sub(r'[\.\_\-]+', ' ', name)
-
-    # REMOVE QUALITY
     name = re.sub(
-        r'\b(480p|720p|1080p|2160p|x264|x265|hdrip|webrip|webdl|bluray|aac|10bit|hq)\b',
-        '',
-        name,
-        flags=re.IGNORECASE
-    )
-
-    # REMOVE EPISODE
-    name = re.sub(
-        r's\d{1,2}e\d{1,3}',
-        '',
-        name,
-        flags=re.IGNORECASE
-    )
-
-    # REMOVE SEASON
-    name = re.sub(
-        r'season\s*\d{1,2}',
-        '',
-        name,
-        flags=re.IGNORECASE
-    )
-
-    # REMOVE YEAR
-    name = re.sub(
-        r'\b(19|20)\d{2}\b',
-        '',
+        r'[\.\_\-]+',
+        ' ',
         name
     )
 
-    # REMOVE EXTRA WORDS
-    split_words = [
-        "multi",
-        "proper",
-        "extended",
-        "uncut",
-        "dubbed"
+    # SPLIT BEFORE SEASON/EPISODE
+    name = re.split(
+        r's\d{1,2}e\d{1,3}|season\s*\d{1,2}',
+        name,
+        flags=re.IGNORECASE
+    )[0]
+
+    # REMOVE QUALITY WORDS
+    bad_words = [
+        "480p",
+        "720p",
+        "1080p",
+        "2160p",
+        "x264",
+        "x265",
+        "hdrip",
+        "webrip",
+        "webdl",
+        "bluray",
+        "aac",
+        "10bit",
+        "hq"
     ]
 
-    for word in split_words:
+    words = []
 
-        if word in name:
-            name = name.split(word)[0]
+    for w in name.split():
+
+        if w.lower() not in bad_words:
+            words.append(w)
+
+    name = " ".join(words)
 
     # CLEAN SPACES
     name = re.sub(r'\s+', ' ', name).strip()
@@ -766,7 +763,7 @@ def clean_series_name(name: str):
 
 
 # ===============================
-# AVAILABLE SERIES LIST
+# SERIES LIST
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client, query: CallbackQuery):
@@ -918,7 +915,7 @@ async def show_series_page(query, key, page):
 
 
 # ===============================
-# SERIES PAGE HANDLER
+# SERIES PAGE
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seriespage#"))
 async def series_page_handler(client, query: CallbackQuery):
@@ -972,6 +969,8 @@ async def series_season_selector(client, query: CallbackQuery):
             show_alert=True
         )
 
+    USER_SELECTED_SERIES[user] = series_name
+
     search = FRESH.get(key)
 
     chat_id = query.message.chat.id
@@ -990,7 +989,7 @@ async def series_season_selector(client, query: CallbackQuery):
 
         clean_name = clean_series_name(fname)
 
-        if clean_name != series_name:
+        if clean_name.lower().strip() != series_name.lower().strip():
             continue
 
         s = extract_season(fname)
@@ -1053,7 +1052,7 @@ async def series_season_selector(client, query: CallbackQuery):
 
 
 # ===============================
-# EPISODE LIST
+# EPISODES
 # ===============================
 @Client.on_callback_query(filters.regex(r"^eps#"))
 async def episode_selector(client, query: CallbackQuery):
@@ -1073,6 +1072,8 @@ async def episode_selector(client, query: CallbackQuery):
 
     chat_id = query.message.chat.id
 
+    selected_series = USER_SELECTED_SERIES.get(user)
+
     files, _, _ = await get_search_results(
         chat_id,
         search,
@@ -1087,7 +1088,12 @@ async def episode_selector(client, query: CallbackQuery):
 
         name = f["file_name"]
 
-        if extract_season(name) == season_no:
+        clean_name = clean_series_name(name)
+
+        if (
+            extract_season(name) == season_no and
+            clean_name.lower().strip() == selected_series.lower().strip()
+        ):
 
             ep = extract_episode(name)
 
@@ -1103,7 +1109,7 @@ async def episode_selector(client, query: CallbackQuery):
 
     btn.append([
         InlineKeyboardButton(
-            f"🎬 Season {season_no}",
+            f"🎬 {selected_series[:30]} S{season_no}",
             callback_data="ident"
         )
     ])
@@ -1171,6 +1177,8 @@ async def filter_files(client, query: CallbackQuery):
 
         chat_id = query.message.chat.id
 
+        selected_series = USER_SELECTED_SERIES.get(user)
+
         files, _, _ = await get_search_results(
             chat_id,
             search,
@@ -1181,9 +1189,12 @@ async def filter_files(client, query: CallbackQuery):
 
         for f in files:
 
+            clean_name = clean_series_name(f["file_name"])
+
             if (
                 extract_season(f["file_name"]) == season_no and
-                extract_episode(f["file_name"]) == episode_no
+                extract_episode(f["file_name"]) == episode_no and
+                clean_name.lower().strip() == selected_series.lower().strip()
             ):
                 filtered.append(f)
 
@@ -1296,6 +1307,8 @@ async def combined_files(client, query: CallbackQuery):
 
     chat_id = query.message.chat.id
 
+    selected_series = USER_SELECTED_SERIES.get(user)
+
     files, _, _ = await get_search_results(
         chat_id,
         search,
@@ -1308,9 +1321,12 @@ async def combined_files(client, query: CallbackQuery):
 
         name = f["file_name"]
 
+        clean_name = clean_series_name(name)
+
         if (
             extract_season(name) == season_no and
-            is_combined_file(name)
+            is_combined_file(name) and
+            clean_name.lower().strip() == selected_series.lower().strip()
         ):
             combined.append(f)
 
@@ -1349,7 +1365,7 @@ async def combined_files(client, query: CallbackQuery):
 
     btn.insert(0, [
         InlineKeyboardButton(
-            f"📦 Season {season_no} Combined",
+            f"📦 {selected_series[:20]} S{season_no}",
             callback_data="ident"
         )
     ])
