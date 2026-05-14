@@ -622,6 +622,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
 #start here
 
 import re
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from pyrogram.errors import MessageNotModified
@@ -655,8 +656,8 @@ SERIES_BLACKLIST = [
 # GLOBAL STORES
 SERIES_STORE = {}
 USER_SELECTED_SERIES = {}
-FRESH = {}  # Store search queries with keys
-SEARCH_RESULTS_CACHE = {}  # Cache search results
+FRESH = {}
+SEARCH_RESULTS_CACHE = {}
 
 # ===============================
 # EXTRACT SEASON
@@ -670,6 +671,7 @@ def extract_season(filename: str):
         return None
     return season
 
+
 # ===============================
 # EXTRACT EPISODE
 # ===============================
@@ -677,12 +679,18 @@ def extract_episode(filename: str):
     m = EPISODE_RE.search(filename)
     return int(m.group(1)) if m else None
 
+
 # ===============================
 # CHECK COMBINED FILE
 # ===============================
 def is_combined_file(name: str):
     name = name.lower()
-    keywords = ["combined", "complete", "batch", "pack"]
+    keywords = [
+        "combined",
+        "complete",
+        "batch",
+        "pack"
+    ]
     for k in keywords:
         if k in name:
             return True
@@ -690,62 +698,100 @@ def is_combined_file(name: str):
         return True
     return False
 
+
 # ===============================
 # CLEAN SERIES NAME
 # ===============================
 def clean_series_name(name: str):
     name = name.lower()
-    
+
     # REMOVE EXTENSION
-    name = re.sub(r'\.(mkv|mp4|avi|mov)$', '', name, flags=re.IGNORECASE)
-    
+    name = re.sub(
+        r'\.(mkv|mp4|avi|mov)$',
+        '',
+        name,
+        flags=re.IGNORECASE
+    )
+
     # REPLACE SYMBOLS
-    name = re.sub(r'[\.\_\-]+', ' ', name)
-    
+    name = re.sub(
+        r'[\.\_\-]+',
+        ' ',
+        name
+    )
+
     # REMOVE YEAR
-    name = re.sub(r'\b(19|20)\d{2}\b', '', name)
-    
+    name = re.sub(
+        r'\b(19|20)\d{2}\b',
+        '',
+        name
+    )
+
     # REMOVE RANDOM PREFIX WORDS
     prefix_words = [
-        "hdt", "hdhub", "mm", "mzm", "ss", "tv", "show", "series",
-        "10bit", "hevc", "x264", "x265", "h264",
-        "480p", "540p", "720p", "1080p", "2160p",
-        "psa", "rarbg", "yts", "etrg", "tgx",
-        "web", "webdl", "webrip", "bluray", "brrip",
-        "nf", "goflix"
+        "hdt",
+        "hdhub",
+        "mm",
+        "mzm",
+        "ss",
+        "tv",
+        "show",
+        "series",
+        "10bit",
+        "hevc",
+        "x264",
+        "x265",
+        "h264",
+        "480p",
+        "540p",
+        "720p",
+        "1080p",
+        "2160p",
+        "psa",
+        "rarbg",
+        "yts",
+        "etrg",
+        "tgx",
+        "web",
+        "webdl",
+        "webrip",
+        "bluray",
+        "brrip",
+        "nf",
+        "goflix"
     ]
-    
+
     words = name.split()
     while words and words[0] in prefix_words:
         words.pop(0)
-    
+
     name = " ".join(words)
-    
+
     # SPLIT BEFORE SEASON / EPISODE
     split_data = re.split(
         r's\d{1,2}e\d{1,3}|season\s*\d{1,2}|ep\s*\d{1,3}|episode\s*\d{1,3}',
         name,
         flags=re.IGNORECASE
     )
-    
+
     if split_data:
         name = split_data[0]
-    
+
     # STOP WORDS
     stop_words = [
         "480p", "540p", "720p", "1080p", "2160p", "4k",
         "x264", "x265", "h264", "hevc", "10bit",
         "aac", "ddp5", "dd", "2ch", "6ch",
         "hdrip", "webrip", "webdl", "bluray", "brrip", "dvdrip",
-        "english", "hindi", "tamil", "telugu", "malayalam", "kannada",
-        "dual", "multi", "audio",
+        "english", "hindi", "tamil", "telugu", "malayalam",
+        "kannada", "dual", "multi", "audio",
         "psa", "rarbg", "yts", "etrg", "tgx", "mkvcage", "goflix",
         "www", "rip", "nf", "proper",
         "mkv", "mp4", "avi",
         "complete", "combined", "batch", "pack",
         "chapter", "part", "vol", "v01", "v02", "v03"
     ]
-    
+
     final_words = []
     for word in name.split():
         if word.isdigit():
@@ -759,49 +805,85 @@ def clean_series_name(name: str):
         if len(word) <= 1:
             continue
         final_words.append(word)
-    
+
     # REMOVE EPISODE TITLE GARBAGE
     if len(final_words) > 3:
         last = final_words[-1]
-        garbage_words = ["papa", "piggyback", "dear", "chapter", "inside", "finale"]
+        garbage_words = [
+            "papa",
+            "piggyback",
+            "dear",
+            "chapter",
+            "inside",
+            "finale"
+        ]
         if last in garbage_words:
             final_words.pop()
-    
+
     # KEEP SHORT
     final_words = final_words[:4]
-    
+
     title = " ".join(final_words)
-    title = re.sub(r'\s+', ' ', title).strip()
-    
+    title = re.sub(
+        r'\s+',
+        ' ',
+        title
+    ).strip()
+
     return title.title()
+
 
 # ===============================
 # GET SEARCH RESULTS FUNCTION
-# (MODIFY THIS TO MATCH YOUR ACTUAL SEARCH IMPLEMENTATION)
 # ===============================
-async def get_search_results(chat_id, query, max_results=50000):
+async def get_search_results(chat_id, query, max_results=50000, offset=0, filter=True):
     """
-    Replace this with your actual search implementation.
-    This should return (files_list, next_offset, total_results)
+    Search files in channel with optional offset for pagination.
+    Returns (files_list, next_offset, total_results)
     """
-    # Example - search files in channel
-    files = []
-    async for message in Client.search_messages(
-        chat_id=chat_id,
-        query=query,
-        limit=max_results,
-        filter="document"  # or "video"
-    ):
-        if message.document or message.video:
-            file_name = message.document.file_name if message.document else message.video.file_name
-            if file_name:
-                files.append({
-                    "file_name": file_name,
-                    "message_id": message.id,
-                    "file_id": message.document.file_id if message.document else message.video.file_id
-                })
-    
-    return files, None, len(files)
+    try:
+        files = []
+        next_offset = None
+        
+        # Search messages in the channel
+        async for message in Client.search_messages(
+            chat_id=chat_id,
+            query=query,
+            limit=max_results,
+            offset=offset,
+            filter="document" if filter else None
+        ):
+            if message.document or message.video:
+                file_name = None
+                file_id = None
+                
+                if message.document:
+                    file_name = message.document.file_name
+                    file_id = message.document.file_id
+                elif message.video:
+                    file_name = message.video.file_name
+                    file_id = message.video.file_id
+                
+                if file_name:
+                    files.append({
+                        "file_name": file_name,
+                        "message_id": message.id,
+                        "file_id": file_id,
+                        "file_size": message.document.file_size if message.document else message.video.file_size if message.video else 0,
+                        "caption": message.caption
+                    })
+        
+        # Calculate next offset for pagination
+        total_results = len(files)
+        if total_results >= max_results:
+            next_offset = offset + max_results
+        
+        return files, next_offset, total_results
+        
+    except Exception as e:
+        print(f"Error in get_search_results: {e}")
+        return [], None, 0
+
 
 # ===============================
 # AVAILABLE SERIES LIST
@@ -821,7 +903,13 @@ async def seasons_cb_handler(client, query: CallbackQuery):
         if key in SEARCH_RESULTS_CACHE:
             files = SEARCH_RESULTS_CACHE[key]
         else:
-            files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+            files, offset, total = await get_search_results(
+                chat_id, 
+                search, 
+                max_results=50000, 
+                offset=0, 
+                filter=True
+            )
             SEARCH_RESULTS_CACHE[key] = files
         
         if not files:
@@ -911,6 +999,7 @@ async def seasons_cb_handler(client, query: CallbackQuery):
         print(f"Error in seasons_cb_handler: {e}")
         await query.answer("❌ An error occurred", show_alert=True)
 
+
 # ===============================
 # SERIES PAGE SYSTEM
 # ===============================
@@ -978,6 +1067,7 @@ async def series_page_system(client, query: CallbackQuery):
         print(f"Error in series_page_system: {e}")
         await query.answer("❌ An error occurred", show_alert=True)
 
+
 # ===============================
 # SERIES -> SEASONS
 # ===============================
@@ -1006,7 +1096,13 @@ async def series_season_selector(client, query: CallbackQuery):
         if key in SEARCH_RESULTS_CACHE:
             files = SEARCH_RESULTS_CACHE[key]
         else:
-            files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+            files, offset, total = await get_search_results(
+                chat_id, 
+                search, 
+                max_results=50000, 
+                offset=0, 
+                filter=True
+            )
             SEARCH_RESULTS_CACHE[key] = files
         
         seasons = set()
@@ -1065,6 +1161,7 @@ async def series_season_selector(client, query: CallbackQuery):
         print(f"Error in series_season_selector: {e}")
         await query.answer("❌ An error occurred", show_alert=True)
 
+
 # ===============================
 # EPISODE SELECTION HANDLER
 # ===============================
@@ -1091,7 +1188,14 @@ async def episode_selector(client, query: CallbackQuery):
         if key in SEARCH_RESULTS_CACHE:
             files = SEARCH_RESULTS_CACHE[key]
         else:
-            files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+            files, offset, total = await get_search_results(
+                chat_id, 
+                search, 
+                max_results=50000, 
+                offset=0, 
+                filter=True
+            )
+            SEARCH_RESULTS_CACHE[key] = files
         
         episodes = []
         for f in files:
@@ -1122,7 +1226,7 @@ async def episode_selector(client, query: CallbackQuery):
         # Sort episodes
         episodes.sort(key=lambda x: x["episode"])
         
-        # Create buttons (max 10 per row to avoid flood)
+        # Create buttons
         btn = []
         btn.append([
             InlineKeyboardButton(f"📺 {series_name[:30]} - S{season_num}", callback_data="ident")
@@ -1137,15 +1241,23 @@ async def episode_selector(client, query: CallbackQuery):
                 )
             )
             
-            if len(row) >= 5:  # 5 episodes per row
+            if len(row) >= 5:
                 btn.append(row)
                 row = []
         
-        if row:  # Add remaining
+        if row:
             btn.append(row)
         
+        # Find series index for back button
+        series_list = SERIES_STORE.get(key, [])
+        series_index = 0
+        for i, s in enumerate(series_list):
+            if s == series_name:
+                series_index = i
+                break
+        
         btn.append([
-            InlineKeyboardButton("↩️ Back to Seasons", callback_data=f"series#{key}#{USER_SELECTED_SERIES.get(str(user))}#{user}")
+            InlineKeyboardButton("↩️ Back to Seasons", callback_data=f"series#{key}#{series_index}#{user}")
         ])
         
         try:
@@ -1156,6 +1268,7 @@ async def episode_selector(client, query: CallbackQuery):
     except Exception as e:
         print(f"Error in episode_selector: {e}")
         await query.answer("❌ An error occurred", show_alert=True)
+
 
 # ===============================
 # PLAY HANDLER
@@ -1180,6 +1293,14 @@ async def play_episode(client, query: CallbackQuery):
     except Exception as e:
         print(f"Error in play_episode: {e}")
         await query.answer("❌ Failed to send file", show_alert=True)
+
+
+# ===============================
+# IDENT BUTTON HANDLER
+# ===============================
+@Client.on_callback_query(filters.regex(r"^ident$"))
+async def ident_handler(client, query: CallbackQuery):
+    await query.answer()
     
 
 # SESSON End Here ##############
