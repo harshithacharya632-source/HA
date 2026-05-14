@@ -1006,10 +1006,12 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 
         for i, name in enumerate(current_series):
 
+            actual_index = start + i
+
             btn.append([
                 InlineKeyboardButton(
                     name[:50],
-                    callback_data=f"series#{key}#{i}#{query.from_user.id}"
+                    callback_data=f"series#{key}#{actual_index}#{query.from_user.id}"
                 )
             ])
 
@@ -1126,12 +1128,12 @@ async def series_page_system(client, query: CallbackQuery):
 
 
 # ===============================
-# EPISODE LIST
+# SERIES -> SEASONS
 # ===============================
-@Client.on_callback_query(filters.regex(r"^eps#"))
-async def episode_selector(client, query: CallbackQuery):
+@Client.on_callback_query(filters.regex(r"^series#"))
+async def series_season_selector(client, query: CallbackQuery):
 
-    _, season_tag, key, user = query.data.split("#")
+    _, key, sid, user = query.data.split("#")
 
     if int(user) != query.from_user.id:
 
@@ -1140,9 +1142,18 @@ async def episode_selector(client, query: CallbackQuery):
             show_alert=True
         )
 
-    season_no = int(season_tag[1:])
+    try:
 
-    selected_series = USER_SELECTED_SERIES.get(user)
+        series_name = SERIES_STORE[key][int(sid)]
+
+    except:
+
+        return await query.answer(
+            "🚫 Series not found",
+            show_alert=True
+        )
+
+    USER_SELECTED_SERIES[user] = series_name
 
     search = FRESH.get(key)
 
@@ -1154,9 +1165,7 @@ async def episode_selector(client, query: CallbackQuery):
         max_results=50000
     )
 
-    episode_set = set()
-
-    combined_exist = False
+    seasons = set()
 
     for f in files:
 
@@ -1164,87 +1173,53 @@ async def episode_selector(client, query: CallbackQuery):
 
         clean_name = clean_series_name(fname)
 
-        if clean_name.lower() != selected_series.lower():
+        if clean_name.lower() != series_name.lower():
             continue
 
-        if extract_season(fname) != season_no:
-            continue
+        season = extract_season(fname)
 
-        ep = extract_episode(fname)
+        if season:
+            seasons.add(season)
 
-        if ep:
-            episode_set.add(ep)
+    if not seasons:
 
-        if is_combined_file(fname):
-            combined_exist = True
-
-    episodes = sorted(episode_set)
-
-    PAGE_SIZE = 8
-
-    page = 0
-
-    start = page * PAGE_SIZE
-    end = start + PAGE_SIZE
-
-    current_eps = episodes[start:end]
-
-    total_pages = (
-        (len(episodes) - 1) // PAGE_SIZE
-    ) + 1
+        return await query.answer(
+            "🚫 No seasons found",
+            show_alert=True
+        )
 
     btn = []
 
     btn.append([
         InlineKeyboardButton(
-            f"🎬 {selected_series[:25]} S{season_no}",
+            f"📺 {series_name[:40]}",
             callback_data="ident"
         )
     ])
 
-    if combined_exist:
+    seasons = sorted(seasons)
 
-        btn.append([
-            InlineKeyboardButton(
-                "📦 Combined Files",
-                callback_data=f"combined#s{season_no}#{key}#0#{user}"
-            )
-        ])
-
-    for i in range(0, len(current_eps), 4):
+    for i in range(0, len(seasons), 2):
 
         row = []
 
-        for ep in current_eps[i:i+4]:
+        row.append(
+            InlineKeyboardButton(
+                f"Season {seasons[i]}",
+                callback_data=f"eps#s{seasons[i]}#{key}#{user}"
+            )
+        )
+
+        if i + 1 < len(seasons):
 
             row.append(
                 InlineKeyboardButton(
-                    f"E{str(ep).zfill(2)}",
-                    callback_data=f"fs#s{season_no}e{ep}#{key}#0#{user}"
+                    f"Season {seasons[i+1]}",
+                    callback_data=f"eps#s{seasons[i+1]}#{key}#{user}"
                 )
             )
 
         btn.append(row)
-
-    nav = []
-
-    nav.append(
-        InlineKeyboardButton(
-            f"1/{total_pages}",
-            callback_data="ident"
-        )
-    )
-
-    if total_pages > 1:
-
-        nav.append(
-            InlineKeyboardButton(
-                "Next ➡️",
-                callback_data=f"epspage#s{season_no}#{key}#1#{user}"
-            )
-        )
-
-    btn.append(nav)
 
     btn.append([
         InlineKeyboardButton(
