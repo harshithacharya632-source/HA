@@ -653,6 +653,8 @@ SERIES_BLACKLIST = [
     "camrip"
 ]
 
+SERIES_STORE = {}
+
 
 def extract_season(filename: str):
 
@@ -801,14 +803,25 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             )
         ])
 
+        # SHORT IDS FOR CALLBACK
+        SERIES_STORE[key] = {}
+
+        count = 0
+
         for sname in sorted(series_dict.keys()):
+
+            sid = str(count)
+
+            SERIES_STORE[key][sid] = sname
 
             btn.append([
                 InlineKeyboardButton(
                     sname[:50],
-                    callback_data=f"series#{key}#{sname[:50]}#{query.from_user.id}"
+                    callback_data=f"series#{key}#{sid}#{query.from_user.id}"
                 )
             ])
+
+            count += 1
 
         btn.append([
             InlineKeyboardButton(
@@ -831,7 +844,7 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex(r"^series#"))
 async def series_season_selector(client, query: CallbackQuery):
 
-    _, key, series_name, user = query.data.split("#")
+    _, key, sid, user = query.data.split("#")
 
     if int(user) != query.from_user.id:
 
@@ -839,6 +852,22 @@ async def series_season_selector(client, query: CallbackQuery):
             "⚠️ This is not your search.",
             show_alert=True
         )
+
+    if key not in SERIES_STORE:
+
+        return await query.answer(
+            "🚫 Search expired. Search again.",
+            show_alert=True
+        )
+
+    if sid not in SERIES_STORE[key]:
+
+        return await query.answer(
+            "🚫 Series not found.",
+            show_alert=True
+        )
+
+    series_name = SERIES_STORE[key][sid]
 
     search = FRESH.get(key)
 
@@ -879,7 +908,7 @@ async def series_season_selector(client, query: CallbackQuery):
 
     btn.append([
         InlineKeyboardButton(
-            f"📺 {series_name}",
+            f"📺 {series_name[:30]}",
             callback_data="ident"
         )
     ])
