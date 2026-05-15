@@ -174,70 +174,90 @@ async def start(client, message):
     # ================================
 # SEARCH DEEP LINK SUPPORT
 # ================================
-
+    #
     if data.startswith("search_"):
-    
+
         from database.ia_filterdb import get_search_results
         from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        import re
-        import math
+        from plugins.pm_filter import FRESH
         import secrets
-    
+        import math
+
         search = data.replace("search_", "").replace("_", " ").strip()
-    
+
         files, offset, total_results = await get_search_results(
             chat_id=message.chat.id,
             query=search,
             offset=0,
             filter=True
         )
-    
+
         if not files:
             return await message.reply_text(
                 f"❌ No files found for:\n\n{search}"
             )
-    
+
         key = secrets.token_hex(5)
-    
-        from plugins.pm_filter import FRESH
-        FRESH[key] = search
-    
+
+        FRESH[key] = {
+            "query": search,
+            "total": total_results
+        }
+
         settings = await get_settings(message.chat.id)
-    
+
         pre = 'filep' if settings['file_secure'] else 'file'
-    
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {file['file_name'][:45]}",
-                    callback_data=f"{pre}#{file['file_id']}"
-                )
-            ]
-            for file in files[:10]
-        ]
-    
-        btn.insert(0, [
+
+        btn = []
+
+        # Season Button
+        btn.append([
             InlineKeyboardButton(
                 "ᯓ 𝐒𝐄𝐀𝐒𝐎𝐍𝐒 ᯓ",
                 callback_data=f"seasons#{key}"
             )
         ])
-    
-        if offset:
+
+        # File Buttons
+        for file in files[:10]:
             btn.append([
+                InlineKeyboardButton(
+                    text=f"[{get_size(file['file_size'])}] {file['file_name'][:45]}",
+                    callback_data=f"{pre}#{file['file_id']}"
+                )
+            ])
+
+        # Pagination
+        current_page = 1
+        total_pages = math.ceil(total_results / 10)
+
+        pagination = []
+
+        pagination.append(
+            InlineKeyboardButton(
+                f"📄 {current_page}/{total_pages}",
+                callback_data="pages"
+            )
+        )
+
+        if offset:
+            pagination.append(
                 InlineKeyboardButton(
                     "𝐍𝐄𝐗𝐓 ➪",
                     callback_data=f"next_{message.from_user.id}_{key}_{offset}"
                 )
-            ])
-    
+            )
+
+        btn.append(pagination)
+
         await message.reply_text(
-            f"🔍 Results for:\n<b>{search}</b>\n\nFound: {total_results}",
+            f"🔍 Results for:\n<b>{search}</b>\n\n📂 Total Files: {total_results}",
             reply_markup=InlineKeyboardMarkup(btn),
             parse_mode=enums.ParseMode.HTML
         )
-    
+
         return
+
     #end here
     if data.split("-", 1)[0] == "VJ":
         user_id = int(data.split("-", 1)[1])
