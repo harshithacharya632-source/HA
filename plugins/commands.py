@@ -170,6 +170,75 @@ async def start(client, message):
         )
         return
     data = message.command[1]
+    #start here
+    # ================================
+# SEARCH DEEP LINK SUPPORT
+# ================================
+
+    if data.startswith("search_"):
+    
+        from database.ia_filterdb import get_search_results
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        import re
+        import math
+        import secrets
+    
+        search = data.replace("search_", "").replace("_", " ").strip()
+    
+        files, offset, total_results = await get_search_results(
+            chat_id=message.chat.id,
+            query=search,
+            offset=0,
+            filter=True
+        )
+    
+        if not files:
+            return await message.reply_text(
+                f"❌ No files found for:\n\n{search}"
+            )
+    
+        key = secrets.token_hex(5)
+    
+        from plugins.pm_filter import FRESH
+        FRESH[key] = search
+    
+        settings = await get_settings(message.chat.id)
+    
+        pre = 'filep' if settings['file_secure'] else 'file'
+    
+        btn = [
+            [
+                InlineKeyboardButton(
+                    text=f"[{get_size(file['file_size'])}] {file['file_name'][:45]}",
+                    callback_data=f"{pre}#{file['file_id']}"
+                )
+            ]
+            for file in files[:10]
+        ]
+    
+        btn.insert(0, [
+            InlineKeyboardButton(
+                "ᯓ 𝐒𝐄𝐀𝐒𝐎𝐍𝐒 ᯓ",
+                callback_data=f"seasons#{key}"
+            )
+        ])
+    
+        if offset:
+            btn.append([
+                InlineKeyboardButton(
+                    "𝐍𝐄𝐗𝐓 ➪",
+                    callback_data=f"next_{message.from_user.id}_{key}_{offset}"
+                )
+            ])
+    
+        await message.reply_text(
+            f"🔍 Results for:\n<b>{search}</b>\n\nFound: {total_results}",
+            reply_markup=InlineKeyboardMarkup(btn),
+            parse_mode=enums.ParseMode.HTML
+        )
+    
+        return
+    #end here
     if data.split("-", 1)[0] == "VJ":
         user_id = int(data.split("-", 1)[1])
         vj = await referal_add_user(user_id, message.from_user.id)
