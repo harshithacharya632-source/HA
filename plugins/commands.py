@@ -227,28 +227,33 @@ async def start(client, message):
                 )
             ])
 
-        # Pagination
+        # Pagination 
         current_page = 1
-        total_pages = math.ceil(total_results / 10)
-
+        total_pages = math.ceil(total_results / 10) if total_results else 1
+        
         pagination = []
-
+        
+        # page count
         pagination.append(
             InlineKeyboardButton(
                 f"📄 {current_page}/{total_pages}",
                 callback_data="pages"
             )
         )
-
-        if offset:
+        
+        # next button
+        if offset not in ["", None, 0]:
+        
             pagination.append(
                 InlineKeyboardButton(
-                    "𝐍𝐄𝐗𝐓 ➪",
+                    "NEXT ➡️",
                     callback_data=f"next_{message.from_user.id}_{key}_{offset}"
                 )
             )
-
+        
         btn.append(pagination)
+
+
 
         await message.reply_text(
             f"🔍 Results for:\n<b>{search}</b>\n\n📂 Total Files: {total_results}",
