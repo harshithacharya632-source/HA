@@ -79,7 +79,8 @@ def is_file_already_saved(file_id, file_name):
 
 async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False):
     """For given query return (results, next_offset)"""
-    
+    if not query:
+        return [], "", 0
     query = query.strip()
     if not query:
         raw_pattern = '.'
