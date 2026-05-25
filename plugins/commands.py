@@ -681,7 +681,6 @@ async def delete(bot, message):
     else:
         await message.reply('Send Me Video, File Or Document.', quote=True)
         return
-
     for file_type in ("document", "video", "audio"):
         media = getattr(reply, file_type, None)
         if media is not None:
@@ -690,8 +689,7 @@ async def delete(bot, message):
         await msg.edit('This is not supported file format')
         return
     
-    file_id, file_ref = unpack_new_file_id(media.file_id)
-
+    file_id, file_ref, *_ = unpack_new_file_id(media.file_id)  # <-- FIXED
     result = col.delete_one({
         'file_id': file_id,
     })
@@ -720,8 +718,6 @@ async def delete(bot, message):
         if result.deleted_count:
             await msg.edit('File is successfully deleted from database')
         else:
-            # files indexed before https://github.com/EvamariaTG/EvaMaria/commit/f3d2a1bcb155faf44178e5d7a685a1b533e714bf#diff-86b613edf1748372103e94cacff3b578b36b698ef9c16817bb98fe9ef22fb669R39 
-            # have original file name.
             result = col.delete_many({
                 'file_name': media.file_name,
                 'file_size': media.file_size
