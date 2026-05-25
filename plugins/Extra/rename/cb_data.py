@@ -29,8 +29,14 @@ async def doc(bot, update):
     try:
         type = update.data.split("_")[1]
         new_name = update.message.text
-        new_filename = new_name.split(":-")[1]
+        if ":-" not in new_name:
+            await update.message.edit("❌ **Invalid file name format. Please try again.**")
+            return
+        new_filename = new_name.split(":-")[1].strip()
         file = update.message.reply_to_message
+        if not file:
+            await update.message.edit("❌ **Original file not found. Please try again.**")
+            return
         file_path = f"downloads/{new_filename}"
         ms = await update.message.edit("⚠️__**Please wait...**__\n\n__Downloading file to my server...__")
         c_time = time.time()
