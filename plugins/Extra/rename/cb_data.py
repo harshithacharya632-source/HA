@@ -27,7 +27,11 @@ async def cancel(bot,update):
 @Client.on_callback_query(filters.regex("upload"))
 async def doc(bot, update):
     try:
-        type = update.data.split("_")[1]
+        parts = update.data.split("_")
+        if len(parts) < 2:
+            await update.answer("❌ Invalid callback data.", show_alert=True)
+            return
+        type = parts[1]
         new_name = update.message.text
         if ":-" not in new_name:
             await update.message.edit("❌ **Invalid file name format. Please try again.**")
