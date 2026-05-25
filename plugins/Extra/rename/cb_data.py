@@ -27,9 +27,10 @@ async def cancel(bot,update):
 @Client.on_callback_query(filters.regex("upload"))
 async def doc(bot, update):
     try:
+        logger.info(f"callback data: {update.data}")
         parts = update.data.split("_")
         if len(parts) < 2:
-            await update.answer("❌ Invalid callback data.", show_alert=True)
+            await update.answer(f"❌ Invalid: {update.data}", show_alert=True)
             return
         type = parts[1]
         new_name = update.message.text
