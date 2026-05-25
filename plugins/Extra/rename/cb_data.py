@@ -24,16 +24,10 @@ async def cancel(bot,update):
     except:
         return
 
-@Client.on_callback_query(filters.regex("upload"))
+@Client.on_callback_query(filters.regex("upload"), group=0)
 async def doc(bot, update):
     try:
         logger.info(f"callback data: {update.data}")
-        # DATA FORMAT IS: uploaded#userid - NOT upload_type
-        # "upload" regex also catches "uploaded#..." callbacks from pm_filter.py
-        # So we need to ignore those
-        if update.data.startswith("uploaded#"):
-            return  # This is handled by pm_filter.py cb_handler
-        
         parts = update.data.split("_")
         if len(parts) < 2:
             await update.answer(f"❌ Invalid: {update.data}", show_alert=True)
