@@ -232,6 +232,13 @@ async def start(client, message):
     except:
         file_id = data
         pre = ""
+    if data.startswith("getfile-"):
+        query = data.replace("getfile-", "").replace("-", " ")
+        files_ = await col.find({"file_name": {"$regex": query, "$options": "i"}}).to_list(length=1)
+        if not files_:
+            return await message.reply_text("<b>❌ File not found in database.</b>")
+        file_id = files_[0]["file_id"]
+        pre = "file"
     if data.split("-", 1)[0] == "BATCH":
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
         file_id = data.split("-", 1)[1]
