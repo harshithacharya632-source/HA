@@ -338,8 +338,6 @@ async def start(client, message):
             await x.delete()
         await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")  
         return
-#START HERE NEXT BUTTON HANDLER
-
  @Client.on_callback_query(filters.regex(r"^gfnext#"))
  async def getfile_next(client, callback_query):
      _, query, grpid, offset = callback_query.data.split("#")
@@ -368,8 +366,6 @@ async def start(client, message):
          btn.append(nav)
      await callback_query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
      await callback_query.answer()
-
-    #END HERE NEXT HANDLER
     
     elif data.split("-", 1)[0] == "DSTORE":
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
