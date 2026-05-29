@@ -237,11 +237,9 @@ async def start(client, message):
     if data.startswith("getfile-"):
         query = data.replace("getfile-", "").replace("-", " ").strip()
         from plugins.pm_filter import auto_filter
-        # get user's active connected group
         grpid = await active_connection(str(message.from_user.id))
         if not grpid:
-            return await message.reply_text("<b>❌ Please connect to a group first using /connect command.</b>")
-        # temporarily set chat id to group so auto_filter works correctly
+            grpid = -1001785738964
         message.chat.id = grpid
         reply_msg = await message.reply_text(f"<b><i>Searching For {query} 🔍</i></b>")
         await auto_filter(client, query, message, reply_msg, True)
