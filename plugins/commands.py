@@ -236,21 +236,28 @@ async def start(client, message):
         pre = ""
     if data.startswith("getfile-"):
         query = data.replace("getfile-", "").replace("-", " ").strip()
-        from plugins.pm_filter import auto_filter
         grpid = await active_connection(str(message.from_user.id))
         if not grpid:
             grpid = -1001785738964
-        # Create a fake message with correct chat id
-        message._chat = message.chat
-        message.chat = type('obj', (object,), {
-            'id': grpid,
-            'type': message.chat.type
-        })()
-        message.text = query
-        reply_msg = await client.send_message(message.from_user.id, f"<b><i>Searching For {query} 🔍</i></b>")
-        await auto_filter(client, query, message, reply_msg, True)
-        # Restore original chat
-        message.chat = message._chat
+        reply_msg = await message.reply_text(f"<b><i>Searching For {query} 🔍</i></b>")
+        search = query.lower()
+        files, offset, total_results = await get_search_results(grpid, search, offset=0, filter=True)
+        if not files:
+            return await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {query}**")
+        settings = await get_settings(grpid)
+        pre = 'filep' if settings['file_secure'] else 'file'
+        btn = []
+        for file in files:
+            btn.append([
+                InlineKeyboardButton(
+                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}",
+                    callback_data=f'{pre}#{file["file_id"]}'
+                )
+            ])
+        await reply_msg.edit_text(
+            f"<b>Here are the results for <i>{query}</i> :\n\nTotal: {total_results} files found</b>",
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
         return
     if data.split("-", 1)[0] == "BATCH":
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
