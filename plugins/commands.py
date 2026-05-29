@@ -236,7 +236,7 @@ async def start(client, message):
         pre = ""
     if data.startswith("getfile-"):
         query = data.replace("getfile-", "").replace("-", " ")
-        files_, next_offset, total = await get_search_results(query, max_results=1)
+        files_, next_offset, total = await get_search_results(message.from_user.id, query, max_results=1)
         if not files_:
             return await message.reply_text("<b>❌ File not found in database.</b>")
         file_id = files_[0]["file_id"]
