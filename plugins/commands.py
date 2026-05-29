@@ -15,6 +15,8 @@ from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
+from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
+from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results
 logger = logging.getLogger(__name__)
 
 BATCH_FILES = {}
@@ -234,7 +236,7 @@ async def start(client, message):
         pre = ""
     if data.startswith("getfile-"):
         query = data.replace("getfile-", "").replace("-", " ")
-        files_ = list(col.find({"file_name": {"$regex": query, "$options": "i"}}).limit(1))
+        files_, next_offset, total = await get_search_results(query, max_results=1)
         if not files_:
             return await message.reply_text("<b>❌ File not found in database.</b>")
         file_id = files_[0]["file_id"]
