@@ -680,7 +680,7 @@ async def start(client, message):
     return   
 
 @Client.on_callback_query(filters.regex(r"^gfnext#"))
- async def getfile_next(client, callback_query):
+async def getfile_next(client, callback_query):
      _, query, grpid, offset = callback_query.data.split("#")
      grpid = int(grpid)
      offset = int(offset)
