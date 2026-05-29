@@ -235,12 +235,11 @@ async def start(client, message):
         file_id = data
         pre = ""
     if data.startswith("getfile-"):
-        query = data.replace("getfile-", "").replace("-", " ")
-        files_, next_offset, total = await get_search_results(message.from_user.id, query, max_results=1)
-        if not files_:
-            return await message.reply_text("<b>❌ File not found in database.</b>")
-        file_id = files_[0]["file_id"]
-        pre = "file"
+        query = data.replace("getfile-", "").replace("-", " ").strip()
+        from plugins.pm_filter import auto_filter
+        reply_msg = await message.reply_text(f"<b><i>Searching For {query} 🔍</i></b>")
+        await auto_filter(client, query, message, reply_msg, True)
+        return
     if data.split("-", 1)[0] == "BATCH":
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
         file_id = data.split("-", 1)[1]
