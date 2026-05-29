@@ -240,9 +240,17 @@ async def start(client, message):
         grpid = await active_connection(str(message.from_user.id))
         if not grpid:
             grpid = -1001785738964
-        message.chat.id = grpid
-        reply_msg = await message.reply_text(f"<b><i>Searching For {query} 🔍</i></b>")
+        # Create a fake message with correct chat id
+        message._chat = message.chat
+        message.chat = type('obj', (object,), {
+            'id': grpid,
+            'type': message.chat.type
+        })()
+        message.text = query
+        reply_msg = await client.send_message(message.from_user.id, f"<b><i>Searching For {query} 🔍</i></b>")
         await auto_filter(client, query, message, reply_msg, True)
+        # Restore original chat
+        message.chat = message._chat
         return
     if data.split("-", 1)[0] == "BATCH":
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
