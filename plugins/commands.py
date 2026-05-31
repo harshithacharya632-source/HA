@@ -259,10 +259,12 @@ async def start(client, message):
             nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"gfnext#{query}#{grpid}#{next_offset}"))
         if nav:
             btn.append(nav)
-        await reply_msg.edit_text(
+        k = await reply_msg.edit_text(
             f"<b>Here are the results for <i>{query}</i> :\n\nTotal: {total_results} files found</b>",
             reply_markup=InlineKeyboardMarkup(btn)
         )
+        await asyncio.sleep(300)
+        await k.delete()
         return
     if data.split("-", 1)[0] == "BATCH":
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
