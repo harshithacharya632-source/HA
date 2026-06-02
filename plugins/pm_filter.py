@@ -2704,7 +2704,27 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             search = search.replace("-", " ")
             search = search.replace(":", "")
             search = search.replace(".", "")
-            files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
+
+            # ✅ Season + Episode
+            search = re.sub(
+                r'(?:season|seas?|s)[.\s_-]*(\d+)[.\s_-]*(?:episode|ep?|e)[.\s_-]*(\d+)',
+                lambda m: f"S{int(m.group(1)):02d}E{int(m.group(2)):02d}",
+                search, flags=re.IGNORECASE
+            )
+            # ✅ Season only
+            search = re.sub(
+                r'(?:season|seas?)\s*(\d+)',
+                lambda m: f"S{int(m.group(1)):02d}",
+                search, flags=re.IGNORECASE
+            )
+            # ✅ Episode only (E3 → E03)
+            search = re.sub(
+                r'\bE(\d{1,2})\b',
+                lambda m: f"E{int(m.group(1)):02d}",
+                search, flags=re.IGNORECASE
+            )
+
+            files, offset, total_results = await get_search_results(message.chat.id, search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
                 if settings["spell_check"]:
