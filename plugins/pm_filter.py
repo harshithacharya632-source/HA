@@ -636,13 +636,14 @@ RANGE_EP_RE = re.compile(r"[ex]\d{1,3}\s*-\s*[ex]\d{1,3}", re.IGNORECASE)
 MAX_SEASON  = 30
 MAX_EPISODE = 300
 
-# Quality/tag words to strip when matching show names
+# Strip quality/language tags for clean name comparison
 STRIP_RE = re.compile(
     r'[\[\(].*?[\]\)]'
     r'|\b(720p|1080p|480p|2160p|4k|hdrip|webrip|bluray|hdtv|mkv|mp4|avi'
     r'|hindi|tamil|english|telugu|malayalam|kannada|dubbed|multi|esub'
     r'|x264|x265|hevc|avc|aac|dd5|dolby|atmos|hdr|sdr|web|dl|rip'
-    r'|season|episode|complete|batch|pack|combined)\b',
+    r'|season|episode|complete|batch|pack|combined'
+    r'|s\d{1,2}e\d{1,3}|s\d{1,2})\b',
     re.IGNORECASE
 )
 
@@ -669,56 +670,38 @@ def is_combined_file(name: str):
 
 
 def clean_name(filename: str) -> str:
-    """Strip quality tags and brackets for clean name comparison"""
+    """Strip quality tags, season/episode codes, brackets for clean comparison"""
     name = STRIP_RE.sub(' ', filename)
     name = re.sub(r'\s+', ' ', name).strip().lower()
     return name
 
 
-def is_show_match(filename: str, search: str) -> bool:
-    """
-    Returns True only if ALL words in search appear in the cleaned filename.
-    This prevents files from other shows polluting the season/episode list.
-    """
-    cleaned = clean_name(filename)
-    search_words = search.lower().strip().split()
-    return all(word in cleaned for word in search_words)
-
-
-def rank_files(files: list, search: str) -> list:
-    """Rank files so best matches appear first"""
-    search_lower = search.lower().strip()
-
-    def score(f):
-        name = f["file_name"].lower()
-        if name.startswith(search_lower):
-            return 0
-        if search_lower in name:
-            return 1
-        return 2
-
-    return sorted(files, key=score)
-
-
 def filter_and_rank(files: list, search: str) -> list:
-    """Combined filter + rank in one pass for speed"""
+    """
+    ✅ Only keep files whose cleaned name STARTS WITH the search term.
+    This prevents middle/end matches from polluting season & episode lists.
+    """
+    # Clean the search term too
+    search_clean = STRIP_RE.sub(' ', search.lower().strip())
+    search_clean = re.sub(r'\s+', ' ', search_clean).strip()
     search_lower = search.lower().strip()
-    search_words = search_lower.split()
 
     scored = []
     for f in files:
         name = f["file_name"]
         cleaned = clean_name(name)
-        # Must match all search words
-        if not all(word in cleaned for word in search_words):
+
+        # ✅ PREFIX MATCH ONLY — must start with search name
+        if not cleaned.startswith(search_clean):
             continue
+
+        # Rank: exact prefix > contains
         name_lower = name.lower()
         if name_lower.startswith(search_lower):
             score = 0
-        elif search_lower in name_lower:
-            score = 1
         else:
-            score = 2
+            score = 1
+
         scored.append((score, f))
 
     scored.sort(key=lambda x: x[0])
@@ -730,8 +713,7 @@ def filter_and_rank(files: list, search: str) -> list:
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client, query: CallbackQuery):
-    # Instant answer = no spinner/blink
-    await query.answer()
+    await query.answer()  # ✅ FIRST — kills button blink instantly
 
     try:
         _, key = query.data.split("#")
@@ -739,18 +721,18 @@ async def seasons_cb_handler(client, query: CallbackQuery):
         chat_id = query.message.chat.id
 
         if not search:
-            return await query.answer("⚠️ Session expired. Search again.", show_alert=True)
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        # Fetch all files at once
+        # Fetch all files
         files, _, _ = await get_search_results(chat_id, search, max_results=50000)
 
-        # Filter to only matching show + rank
+        # ✅ Only files that START WITH the show name
         files = filter_and_rank(files, search)
 
         if not files:
-            return await query.answer("🚫 No matching files found", show_alert=True)
+            return await query.answer("🚫 No matching files found.", show_alert=True)
 
-        # Extract unique seasons
+        # Collect unique seasons
         season_set = set()
         for f in files:
             s = extract_season(f["file_name"])
@@ -758,7 +740,7 @@ async def seasons_cb_handler(client, query: CallbackQuery):
                 season_set.add(s)
 
         if not season_set:
-            return await query.answer("🚫 No seasons detected in filenames", show_alert=True)
+            return await query.answer("🚫 No seasons found in filenames.", show_alert=True)
 
         seasons = sorted(season_set)
         uid = query.from_user.id
@@ -800,7 +782,7 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 # ===============================
 @Client.on_callback_query(filters.regex(r"^eps#"))
 async def episode_selector(client, query: CallbackQuery):
-    await query.answer()
+    await query.answer()  # ✅ FIRST — kills button blink instantly
 
     try:
         _, season_tag, key, user = query.data.split("#")
@@ -814,11 +796,14 @@ async def episode_selector(client, query: CallbackQuery):
         season_no = int(season_tag[1:])
         search    = FRESH.get(key)
         chat_id   = query.message.chat.id
+        uid       = query.from_user.id
 
         if not search:
-            return await query.answer("⚠️ Session expired. Search again.", show_alert=True)
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
         files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+
+        # ✅ PREFIX ONLY — correct show files only
         files = filter_and_rank(files, search)
 
         episode_set    = set()
@@ -834,7 +819,6 @@ async def episode_selector(client, query: CallbackQuery):
                     combined_exist = True
 
         episodes = sorted(episode_set)
-        uid = query.from_user.id
 
         btn = [
             [InlineKeyboardButton(f"📺 {search} — Season {season_no:02d}", callback_data="ident")]
@@ -880,7 +864,7 @@ async def episode_selector(client, query: CallbackQuery):
 # ===============================
 @Client.on_callback_query(filters.regex(r"^fs#"))
 async def filter_files(client, query: CallbackQuery):
-    await query.answer()
+    await query.answer()  # ✅ FIRST — kills button blink instantly
 
     try:
         _, tag, key, page, user = query.data.split("#")
@@ -899,12 +883,14 @@ async def filter_files(client, query: CallbackQuery):
         uid        = query.from_user.id
 
         if not search:
-            return await query.answer("⚠️ Session expired. Search again.", show_alert=True)
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
         files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+
+        # ✅ PREFIX ONLY
         files = filter_and_rank(files, search)
 
-        # Filter to exact season + episode
+        # Filter exact season + episode
         filtered = [
             f for f in files
             if extract_season(f["file_name"]) == season_no
@@ -912,7 +898,7 @@ async def filter_files(client, query: CallbackQuery):
         ]
 
         if not filtered:
-            return await query.answer("🚫 No files found for this episode", show_alert=True)
+            return await query.answer("🚫 No files found for this episode.", show_alert=True)
 
         FILES_PER_PAGE = 8
         total_pages    = max(1, (len(filtered) - 1) // FILES_PER_PAGE + 1)
@@ -927,16 +913,15 @@ async def filter_files(client, query: CallbackQuery):
         ]
 
         for f in filtered[start:end]:
-            name = f["file_name"]
-            size = get_size(f["file_size"])
-            # Trim long names
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
             display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
                 f"[{size}] {display}",
                 callback_data=f"file#{f['file_id']}"
             )])
 
-        # Pagination
+        # Pagination nav
         if total_pages > 1:
             nav = []
             if page > 0:
@@ -971,7 +956,7 @@ async def filter_files(client, query: CallbackQuery):
 # ===============================
 @Client.on_callback_query(filters.regex(r"^combined#"))
 async def combined_files(client, query: CallbackQuery):
-    await query.answer()
+    await query.answer()  # ✅ FIRST — kills button blink instantly
 
     try:
         _, season_tag, key, page, user = query.data.split("#")
@@ -989,9 +974,11 @@ async def combined_files(client, query: CallbackQuery):
         uid       = query.from_user.id
 
         if not search:
-            return await query.answer("⚠️ Session expired. Search again.", show_alert=True)
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
         files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+
+        # ✅ PREFIX ONLY
         files = filter_and_rank(files, search)
 
         combined = [
@@ -1001,7 +988,7 @@ async def combined_files(client, query: CallbackQuery):
         ]
 
         if not combined:
-            return await query.answer("🚫 No combined/batch files found", show_alert=True)
+            return await query.answer("🚫 No combined/batch files found.", show_alert=True)
 
         FILES_PER_PAGE = 8
         total_pages    = max(1, (len(combined) - 1) // FILES_PER_PAGE + 1)
@@ -1016,8 +1003,8 @@ async def combined_files(client, query: CallbackQuery):
         ]
 
         for f in combined[start:end]:
-            name = f["file_name"]
-            size = get_size(f["file_size"])
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
             display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
                 f"[{size}] {display}",
