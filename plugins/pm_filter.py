@@ -812,11 +812,13 @@ async def episode_selector(client, query: CallbackQuery):
         for f in files:
             name = f["file_name"]
             if extract_season(name) == season_no:
+                # ✅ Combined files skip episode detection
+                if is_combined_file(name):
+                    combined_exist = True
+                    continue  # ← skip, don't add to episodes
                 ep = extract_episode(name)
                 if ep:
                     episode_set.add(ep)
-                if is_combined_file(name):
-                    combined_exist = True
 
         episodes = sorted(episode_set)
 
@@ -895,8 +897,8 @@ async def filter_files(client, query: CallbackQuery):
             f for f in files
             if extract_season(f["file_name"]) == season_no
             and extract_episode(f["file_name"]) == episode_no
+            and not is_combined_file(f["file_name"])  # ✅ exclude combined files
         ]
-
         if not filtered:
             return await query.answer("🚫 No files found for this episode.", show_alert=True)
 
