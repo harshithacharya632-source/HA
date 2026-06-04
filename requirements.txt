@@ -1,4 +1,4 @@
-git+https://github.com/KurimuzonAkuma/kurigram.git@dev
+kurigram
 tgcrypto
 cinemagoer
 requests
