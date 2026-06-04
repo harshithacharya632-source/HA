@@ -1,4 +1,4 @@
-pyrofork==2.3.45
+kurigram
 tgcrypto 
 requests 
 bs4 
