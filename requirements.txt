@@ -43,5 +43,6 @@ pymediainfo
 aiofiles
 requests
 emoji
-git+https://github.com/Joelkb/cinemagoer
+git+https://github.com/KurimuzonAkuma/kurigram.git@dev
+#git+https://github.com/Joelkb/cinemagoer
 
