@@ -42,5 +42,6 @@ telegraph
 pymediainfo
 aiofiles
 requests
+emoji
 git+https://github.com/Joelkb/cinemagoer
 
