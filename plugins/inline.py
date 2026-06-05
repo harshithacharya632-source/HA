@@ -3,8 +3,7 @@
 # Ask Doubt on telegram @KingVJ01
 
 import logging
-from pyrogram import Client, filters
-import emoji
+from pyrogram import Client, emoji, filters
 from pyrogram.errors.exceptions.bad_request_400 import QueryIdInvalid
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultCachedDocument, InlineQuery
 from database.ia_filterdb import get_search_results
