@@ -1,6 +1,7 @@
 pyrofork==2.3.45
 tgcrypto 
 requests 
+telegraph
 bs4 
 shortzy 
 pytz 
