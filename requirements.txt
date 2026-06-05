@@ -42,4 +42,5 @@ telegraph
 pymediainfo
 aiofiles
 requests
+pyromod
 git+https://github.com/Joelkb/cinemagoer
