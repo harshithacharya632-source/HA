@@ -9,6 +9,7 @@ import requests
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from telegraph import Telegraph
+from telegraph.exceptions import TelegraphException
 from pymediainfo import MediaInfo
 
 from database.ia_filterdb import get_file_details
@@ -88,10 +89,9 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
             file_id=file_id
         )
 
-
         media = getattr(log_msg, log_msg.media.value) if log_msg.media else None
         file_name = media.file_name if media and media.file_name else "Media File"
-        
+
         safe_title = (
             file_name.replace(".", " ")
             .replace("_", " ")
@@ -103,7 +103,7 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
             .replace("mkv", "")
             .replace("mp4", "")
         )
-
+        safe_title = safe_title.strip() or "Media Info"  # fallback if title becomes empty
 
         media = getattr(log_msg, log_msg.media.value) if log_msg.media else None
         file_size = getattr(media, "file_size", 0) or 0
@@ -193,8 +193,9 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
         else:
             page_parts.append("<b>Subtitle Tracks:</b> None<br>")
 
+        # Fixed footer — removed nested <i><code> which caused PAGE_SAVE_FAILED
         page_parts.append(
-            '<i><code>Join <a href="https://t.me/trendi_Backup">GOFLIX</a></code></i>'
+            '<p>Join <a href="https://t.me/trendi_Backup">GOFLIX</a></p>'
         )
 
         page_content = "".join(page_parts)
@@ -208,6 +209,10 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
             )
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):
             await query.message.reply_text("⚠️ Telegraph is busy. Try again later.", quote=True)
+            return
+        except TelegraphException as e:
+            logger.error(f"Telegraph error: {e}")
+            await query.message.reply_text("⚠️ Failed to create Telegraph page. Try again later.", quote=True)
             return
 
         telegraph_url = response["url"]
