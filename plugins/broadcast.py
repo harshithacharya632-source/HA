@@ -1,6 +1,3 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
 import datetime, time, asyncio
 from pyrogram import Client, filters
 from database.users_chats_db import db
@@ -26,7 +23,7 @@ async def handle_broadcast_input(bot, message):
     if user_id not in _waiting_broadcast:
         return
     if message.text and message.text.startswith("/"):
-        return  # ignore commands
+        return
 
     mode = _waiting_broadcast.pop(user_id)
     b_msg = message
@@ -69,24 +66,24 @@ async def handle_broadcast_input(bot, message):
             print(f"error: {e}")
 
     elif mode == "group":
-        groups = await db.get_all_chats()
-        sts = await message.reply_text('Broadcasting your messages To Groups...')
-        start_time = time.time()
-        total_groups = await db.total_chat_count()
-        done = 0
-        failed = 0
-        success = 0
-        async for group in groups:
-            pti, sh = await broadcast_messages_group(int(group['id']), b_msg)
-            if pti:
-                success += 1
-            elif sh == "Error":
-                failed += 1
-            done += 1
-            if not done % 20:
-                await sts.edit(f"Broadcast in progress:\n\nTotal Groups {total_groups}\nCompleted: {done} / {total_groups}\nSuccess: {success}")
-        time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
-        await sts.edit(f"Broadcast Completed:\nCompleted in {time_taken} seconds.\n\nTotal Groups {total_groups}\nCompleted: {done} / {total_groups}\nSuccess: {success}")
-# Don't Remove Credit Tg - @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+        try:
+            groups = await db.get_all_chats()
+            sts = await message.reply_text('Broadcasting your messages To Groups...')
+            start_time = time.time()
+            total_groups = await db.total_chat_count()
+            done = 0
+            failed = 0
+            success = 0
+            async for group in groups:
+                pti, sh = await broadcast_messages_group(int(group['id']), b_msg)
+                if pti:
+                    success += 1
+                elif sh == "Error":
+                    failed += 1
+                done += 1
+                if not done % 20:
+                    await sts.edit(f"Broadcast in progress:\n\nTotal Groups {total_groups}\nCompleted: {done} / {total_groups}\nSuccess: {success}")
+            time_taken = datetime.timedelta(seconds=int(time.time() - start_time))
+            await sts.edit(f"Broadcast Completed:\nCompleted in {time_taken} seconds.\n\nTotal Groups {total_groups}\nCompleted: {done} / {total_groups}\nSuccess: {success}")
+        except Exception as e:
+            print(f"error: {e}")
