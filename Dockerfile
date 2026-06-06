@@ -4,6 +4,8 @@ FROM python:3.10.8-slim-bullseye
 # Install system dependencies
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends git libmediainfo0v5 \
+    && ln -sf $(find /usr/lib -name "libmediainfo.so*" | head -1) /usr/local/lib/libmediainfo.so.0 \
+    && ldconfig \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python deps
