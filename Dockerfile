@@ -3,7 +3,7 @@ FROM python:3.10.8-slim-bullseye
 
 # Install system dependencies
 RUN apt-get update && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends git libmediainfo0v5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python deps
