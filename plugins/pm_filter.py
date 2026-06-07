@@ -15,6 +15,7 @@ from database.connections_mdb import mydb, active_connection, all_connections, d
 from database.gfilters_mdb import find_gfilter, get_gfilters, del_allg
 from urllib.parse import quote_plus
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
@@ -3083,7 +3084,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         movies = await get_poster(mv_rqst, bulk=True)
     except Exception as e:
         logger.exception(e)
-        reqst_gle = mv_rqst.replace(" ", "+")
+        reqst_gle = urllib.parse.quote_plus(mv_rqst)
         button = [[
             InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
         ]]
@@ -3095,7 +3096,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         return
     movielist = []
     if not movies:
-        reqst_gle = mv_rqst.replace(" ", "+")
+        reqst_gle = urllib.parse.quote_plus(mv_rqst)
         button = [[
             InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
         ]]
@@ -3121,7 +3122,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             if mv_rqst.startswith(techvj[0]):
                 await auto_filter(client, techvj, msg, reply_msg, vj_search_new)
                 break
-        reqst_gle = mv_rqst.replace(" ", "+")
+        reqst_gle = urllib.parse.quote_plus(mv_rqst)
         button = [[
             InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
         ]]
@@ -3151,12 +3152,13 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
                 await asyncio.sleep(600)
                 await spell_check_del.delete()
         except KeyError:
-            grpid = await active_connection(str(msg.from_user.id))
-            await save_group_settings(grpid, 'auto_delete', True)
-            settings = await get_settings(msg.chat.id)
-            if settings['auto_delete']:
-                await asyncio.sleep(600)
-                await spell_check_del.delete()
+            if msg.from_user:
+                grpid = await active_connection(str(msg.from_user.id))
+                await save_group_settings(grpid, 'auto_delete', True)
+                settings = await get_settings(msg.chat.id)
+                if settings['auto_delete']:
+                    await asyncio.sleep(600)
+                    await spell_check_del.delete()
 
 
 async def manual_filters(client, message, text=False):
