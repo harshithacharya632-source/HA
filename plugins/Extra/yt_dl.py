@@ -1,8 +1,3 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
-
 from __future__ import unicode_literals
 
 import os, requests, asyncio, math, time, wget
@@ -24,7 +19,11 @@ async def song(client, message):
         query += ' ' + str(i)
     print(query)
     m = await message.reply(f"**ѕєαrchíng чσur ѕσng...!\n {query}**")
-    ydl_opts = {"format": "bestaudio[ext=m4a]"}
+    ydl_opts = {
+        "format": "bestaudio[ext=m4a]",
+        "noplaylist": True,
+        "cookiefile": "cookies.txt",
+    }
     try:
         results = YoutubeSearch(query, max_results=1).to_dict()
         link = f"https://youtube.com{results[0]['url_suffix']}"
@@ -108,6 +107,8 @@ async def vsong(client, message: Message):
         "prefer_ffmpeg": True,
         "geo_bypass": True,
         "nocheckcertificate": True,
+        "noplaylist": True,
+        "cookiefile": "cookies.txt",
         "postprocessors": [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
         "outtmpl": "%(id)s.mp4",
         "logtostderr": False,
