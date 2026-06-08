@@ -306,6 +306,24 @@ class Database:
     async def get_save(self, id):
         user = await self.col.find_one({'id': int(id)})
         return user.get('save', False) 
-    
+
+    async def get_bot_setting(self, bot_id, setting_key, default_value):
+        bot = await self.col.find_one({'id': int(bot_id)}, {setting_key: 1, '_id': 0})
+        return bot[setting_key] if bot and setting_key in bot else default_value
+
+    async def update_bot_setting(self, bot_id, setting_key, value):
+        await self.col.update_one(
+            {'id': int(bot_id)},
+            {'$set': {setting_key: value}},
+            upsert=True
+        )
+
+    async def movie_update_status(self, bot_id):
+        from info import MOVIE_UPDATE_NOTIFICATION
+        return await self.get_bot_setting(bot_id, 'MOVIE_UPDATE_NOTIFICATION', MOVIE_UPDATE_NOTIFICATION)
+
+    async def update_movie_update_status(self, bot_id, enable):
+        await self.update_bot_setting(bot_id, 'MOVIE_UPDATE_NOTIFICATION', enable)
+
 
 db = Database(USER_DB_URI, DATABASE_NAME)
