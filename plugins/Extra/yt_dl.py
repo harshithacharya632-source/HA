@@ -1,3 +1,4 @@
+
 from __future__ import unicode_literals
 
 import os, requests, asyncio, math, time, wget
@@ -22,7 +23,10 @@ async def song(client, message):
     ydl_opts = {
         "format": "bestaudio[ext=m4a]",
         "noplaylist": True,
-        "cookiefile": "cookies.txt",
+        "nocheckcertificate": True,
+        "geo_bypass": True,
+        "source_address": "0.0.0.0",
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
     }
     try:
         results = YoutubeSearch(query, max_results=1).to_dict()
@@ -108,7 +112,8 @@ async def vsong(client, message: Message):
         "geo_bypass": True,
         "nocheckcertificate": True,
         "noplaylist": True,
-        "cookiefile": "cookies.txt",
+        "source_address": "0.0.0.0",
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
         "postprocessors": [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
         "outtmpl": "%(id)s.mp4",
         "logtostderr": False,
