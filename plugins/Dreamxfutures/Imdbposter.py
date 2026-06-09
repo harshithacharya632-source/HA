@@ -161,7 +161,9 @@ async def get_movie_detailsx(query, id=False, file=None):
             search_url = "https://api.themoviedb.org/3/search/multi"
             params = {"api_key": TMDB_API_KEY, "query": q, "language": "en-US"}
             async with session.get(search_url, params=params) as resp:
+                logger.info(f"TMDB status: {resp.status} for query: {q}")
                 if resp.status != 200:
+                    logger.error(f"TMDB failed: {resp.status} - {await resp.text()}")
                     return None
                 data = await resp.json()
                 results = data.get("results", [])
