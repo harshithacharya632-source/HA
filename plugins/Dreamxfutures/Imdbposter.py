@@ -181,9 +181,9 @@ async def get_movie_detailsx(query, id=False, file=None):
             if not results:
                 logger.warning(f"No TMDB results for: {q}")
                 return None
-                result = results[0]
-                tmdb_id = result.get("id")
-                media_type = result.get("media_type", "movie")
+            result = results[0]
+            tmdb_id = result.get("id")
+            media_type = result.get("media_type") or "movie"
 
             detail_url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}"
             params = {"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "credits"}
