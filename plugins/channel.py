@@ -312,13 +312,13 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         else:
             details = await get_movie_details(base_name) or {}
 
-        raw_genres = details.get("genres", "N/A")
-        if isinstance(raw_genres, str):
-            genre_list = [g.strip() for g in raw_genres.split(",")]
-            genres = ", ".join(g for g in genre_list if g.strip()) or "N/A"
+        raw_genres = details.get("genres", [])
+        if isinstance(raw_genres, list):
+            genres = ", ".join(str(g) for g in raw_genres if g) or "N/A"
+        elif isinstance(raw_genres, str):
+            genres = raw_genres.strip() or "N/A"
         else:
-            genres = ", ".join(g for g in raw_genres if g in STANDARD_GENRES) or "N/A"
-
+            genres = "N/A"
         movie_doc = {
             "_id": base_name,
             "files": [file_data],
