@@ -167,7 +167,9 @@ async def get_movie_detailsx(query, id=False, file=None):
                     return None
                 data = await resp.json()
                 results = data.get("results", [])
+                logger.info(f"TMDB results count: {len(results)}, first: {results[0].get('title') or results[0].get('name') if results else 'none'}")
                 if not results:
+                    logger.warning(f"No TMDB results for: {q}")
                     return None
                 result = results[0]
                 tmdb_id = result.get("id")
