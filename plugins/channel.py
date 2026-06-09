@@ -315,7 +315,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         raw_genres = details.get("genres", "N/A")
         if isinstance(raw_genres, str):
             genre_list = [g.strip() for g in raw_genres.split(",")]
-            genres = ", ".join(g for g in genre_list if g in STANDARD_GENRES) or "N/A"
+            genres = ", ".join(g for g in genre_list if g.strip()) or "N/A"
         else:
             genres = ", ".join(g for g in raw_genres if g in STANDARD_GENRES) or "N/A"
 
