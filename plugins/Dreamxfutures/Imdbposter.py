@@ -159,18 +159,28 @@ async def get_movie_detailsx(query, id=False, file=None):
     try:
         async with aiohttp.ClientSession() as session:
             search_url = "https://api.themoviedb.org/3/search/multi"
+            # Try with full query first
             params = {"api_key": TMDB_API_KEY, "query": q, "language": "en-US"}
             async with session.get(search_url, params=params) as resp:
-                logger.info(f"TMDB status: {resp.status} for query: {q}")
                 if resp.status != 200:
-                    logger.error(f"TMDB failed: {resp.status} - {await resp.text()}")
                     return None
                 data = await resp.json()
                 results = data.get("results", [])
-                logger.info(f"TMDB results count: {len(results)}, first: {results[0].get('title') or results[0].get('name') if results else 'none'}")
-                if not results:
-                    logger.warning(f"No TMDB results for: {q}")
-                    return None
+
+            # If no results, try without year
+            if not results:
+                q_no_year = re.sub(r'\b(19|20)\d{2}\b', '', q).strip()
+                if q_no_year != q:
+                    params = {"api_key": TMDB_API_KEY, "query": q_no_year, "language": "en-US"}
+                    async with session.get(search_url, params=params) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            results = data.get("results", [])
+                            logger.info(f"TMDB retry without year '{q_no_year}': {len(results)} results")
+
+            if not results:
+                logger.warning(f"No TMDB results for: {q}")
+                return None
                 result = results[0]
                 tmdb_id = result.get("id")
                 media_type = result.get("media_type", "movie")
