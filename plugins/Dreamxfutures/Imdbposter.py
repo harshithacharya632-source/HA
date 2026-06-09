@@ -155,20 +155,51 @@ async def get_movie_details(query, id=False, file=None):
         return None
 
 async def get_movie_detailsx(query, id=False, file=None):
-    base_url = "https://bharath-boy-api.vercel.app/api/movie-posters"
     q = str(query).strip()
     try:
         async with aiohttp.ClientSession() as session:
-            params = {"query": q, "api_key": TMDB_API_KEY}
-            async with session.get(base_url, params=params) as resp:
+            search_url = "https://api.themoviedb.org/3/search/multi"
+            params = {"api_key": TMDB_API_KEY, "query": q, "language": "en-US"}
+            async with session.get(search_url, params=params) as resp:
                 if resp.status != 200:
-                    text = await resp.text()
-                    logger.error(f"API request failed [{resp.status}] for query={q}\n {text}")
-                    return await resp.json()
-                
+                    return None
                 data = await resp.json()
+                results = data.get("results", [])
+                if not results:
+                    return None
+                result = results[0]
+                tmdb_id = result.get("id")
+                media_type = result.get("media_type", "movie")
+
+            detail_url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}"
+            params = {"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "credits"}
+            async with session.get(detail_url, params=params) as resp:
+                if resp.status != 200:
+                    return None
+                detail = await resp.json()
+
+            poster = detail.get("poster_path")
+            backdrop = detail.get("backdrop_path")
+            genres = [g["name"] for g in detail.get("genres", [])]
+            rating = round(detail.get("vote_average", 0), 1)
+            year = (detail.get("release_date") or detail.get("first_air_date") or "")[:4]
+            title = detail.get("title") or detail.get("name", q)
+            plot = detail.get("overview", "")
+            tmdb_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}"
+
+            return {
+                "title": title,
+                "year": int(year) if year else None,
+                "rating": rating,
+                "genres": genres,
+                "plot": plot,
+                "poster_url": f"https://image.tmdb.org/t/p/w1280{poster}" if poster else None,
+                "backdrop_url": f"https://image.tmdb.org/t/p/w1280{backdrop}" if backdrop else None,
+                "tmdb_url": tmdb_url,
+                "tmdb_id": tmdb_id,
+            }
     except Exception as e:
-        logger.error(f"An error occurred in get_movie_detailsx: {e}")
+        logger.error(f"Direct TMDB error: {e}")
         return None
 
     # Normalize fields
