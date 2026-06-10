@@ -309,7 +309,20 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
                 logger.info(f"TMDB no result for '{base_name}', falling back to IMDB poster")
 
         # Step 2: Fetch all metadata from IMDB (no API key needed)
+        # Step 2: Fetch metadata from IMDB first, fallback to TMDB
         imdb_data = await get_movie_details(base_name) or {}
+        
+        # If IMDB returned nothing useful, use TMDB metadata as fallback
+        if not imdb_data.get("rating") and tmdb_data:
+            logger.info(f"IMDB empty for '{base_name}', using TMDB metadata")
+            raw_genres = tmdb_data.get("genres", [])
+            imdb_data = {
+                "genres": ", ".join(raw_genres) if isinstance(raw_genres, list) else raw_genres,
+                "rating": str(tmdb_data.get("rating", "N/A")),
+                "plot": tmdb_data.get("plot", ""),
+                "year": tmdb_data.get("year", ""),
+                "url": tmdb_data.get("tmdb_url", "")
+            }
 
         # Fallback to IMDB poster if TMDB gave nothing
         if not poster_url:
