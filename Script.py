@@ -762,7 +762,6 @@ Example:- /set_caption 📕 File Name: {filename}
 🎭 ɢᴇɴʀᴇs  : <b>{genres}</b>
 📺 ᴏᴛᴛ        : <b>{ott}</b>
 📅 ʏᴇᴀʀ       : <b>{year}</b>
-
 {plot}</blockquote>
 
 🎧 <b>ᴀᴜᴅɪᴏ ᴀᴠᴀɪʟᴀʙʟᴇ :</b> {language}
