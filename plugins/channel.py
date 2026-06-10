@@ -23,7 +23,6 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Bad words set (safe default if not in info.py)
 try:
     from info import BAD_WORDS
 except ImportError:
@@ -70,12 +69,6 @@ OTT_PLATFORMS = {
     "jio": "JioHotstar", "jhs": "JioHotstar",
     "aha": "Aha", "hbo": "HBO Max", "paramount": "Paramount+",
     "apple": "Apple TV+", "hoichoi": "Hoichoi", "sunnxt": "Sun NXT", "viki": "Viki"
-}
-
-STANDARD_GENRES = {
-    'Action', 'Adventure', 'Animation', 'Biography', 'Comedy', 'Crime', 'Documentary',
-    'Drama', 'Family', 'Fantasy', 'Film-Noir', 'History', 'Horror', 'Music',
-    'Musical', 'Mystery', 'Romance', 'Sci-Fi', 'Sport', 'Thriller', 'War', 'Western'
 }
 
 CLEAN_PATTERN = re.compile(r'@[^ \n\r\t\.,:;!?()\[\]{}<>\\/"\'=_%]+|\bwww\.[^\s\]\)]+|\([\@^]+\)|\[[\@^]+\]')
@@ -313,19 +306,19 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
                 is_backdrop = bool(backdrop_url)
                 logger.info(f"TMDB poster fetched for '{base_name}'")
             else:
-                logger.info(f"TMDB returned no result for '{base_name}', will use IMDB poster")
+                logger.info(f"TMDB no result for '{base_name}', falling back to IMDB poster")
 
-        # Step 2: Fetch metadata (genres, rating, title, url) from IMDB always
+        # Step 2: Fetch all metadata from IMDB (no API key needed)
         imdb_data = await get_movie_details(base_name) or {}
 
-        # If TMDB_POSTER is off or TMDB had no poster, fall back to IMDB poster
+        # Fallback to IMDB poster if TMDB gave nothing
         if not poster_url:
             poster_url = imdb_data.get("poster_url")
             is_backdrop = False
 
-        # Use landscape (backdrop) only if TMDB gave one
         final_poster = backdrop_url if (LANDSCAPE_POSTER and TMDB_POSTER and is_backdrop) else poster_url
 
+        # Genres
         raw_genres = imdb_data.get("genres", "N/A")
         if isinstance(raw_genres, list):
             genres = ", ".join(str(g) for g in raw_genres if g) or "N/A"
@@ -333,6 +326,10 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             genres = raw_genres.strip() or "N/A"
         else:
             genres = "N/A"
+
+        # Plot
+        plot = imdb_data.get("plot", "")
+        plot_text = f"📖 <i>{plot}</i>" if plot else ""
 
         rating = imdb_data.get("rating", "N/A")
         imdb_url = imdb_data.get("url", "")
@@ -345,6 +342,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             "genres": genres,
             "rating": rating,
             "imdb_url": imdb_url,
+            "plot": plot_text,
             "year": year,
             "tag": media_info["tag"],
             "ott_platform": media_info["ott_platform"],
@@ -488,15 +486,11 @@ async def update_movie_message(bot, base_name):
 
 
 def generate_movie_message(movie_doc, base_name):
-    all_qualities = set()
     all_languages = set()
     all_ott_platforms = set()
     all_tags = set()
-    episodes_by_season = defaultdict(set)
 
     for file in movie_doc["files"]:
-        if file["quality"] != "N/A":
-            all_qualities.update(q.strip() for q in file["quality"].split(",") if q.strip())
         if file["language"] != "N/A":
             all_languages.update(l.strip() for l in file["language"].split(",") if l.strip())
         if file["ott_platform"] != "N/A":
@@ -504,46 +498,9 @@ def generate_movie_message(movie_doc, base_name):
             all_ott_platforms.update(platforms)
         if file["tag"]:
             all_tags.add(file["tag"])
-        if file.get("season") and file.get("episode"):
-            episodes_by_season[file["season"]].add(file["episode"])
 
-    primary_tag = "#SERIES" if "#SERIES" in all_tags else "#MOVIE"
-    epi_block = ""
-    if episodes_by_season:
-        episode_lines = []
-        for season, episodes in sorted(episodes_by_season.items(), key=lambda x: int(x[0])):
-            singles = []
-            ranges = []
-            for ep in episodes:
-                if "-" in ep:
-                    ranges.append(ep)
-                else:
-                    try:
-                        singles.append(int(ep))
-                    except ValueError:
-                        ranges.append(ep)
-            singles.sort()
-            collapsed = []
-            start = end = None
-            for num in singles:
-                if start is None:
-                    start = end = num
-                elif num == end + 1:
-                    end = num
-                else:
-                    collapsed.append(str(start) if start == end else f"{start}-{end}")
-                    start = end = num
-            if start is not None:
-                collapsed.append(str(start) if start == end else f"{start}-{end}")
-            all_ep_parts = collapsed + sorted(ranges, key=lambda s: int(s.split("-")[0]))
-            episode_lines.append(f"S{int(season)}: {', '.join(all_ep_parts)}")
-        epi_str = "\n".join(episode_lines)
-        if epi_str:
-            epi_block = f"📺 ᴇᴘɪsᴏᴅᴇs : <b>\n{epi_str}</b>"
-
-    genres = movie_doc.get("genres", "N/A")
-    quality_str = ", ".join(sorted(all_qualities)) if all_qualities else "N/A"
-    language_str = ", ".join(sorted(all_languages)) if all_languages else "N/A"
+    primary_tag = "🎬 New #SERIES Added" if "#SERIES" in all_tags else "🎬 New #MOVIE Added"
+    language_str = " | ".join(sorted(all_languages)) if all_languages else "N/A"
     ott_str = ", ".join(sorted(all_ott_platforms)) if all_ott_platforms else "N/A"
 
     return script.MOVIE_UPDATE_NOTIFY_TXT.format(
@@ -551,11 +508,11 @@ def generate_movie_message(movie_doc, base_name):
         imdb_url=movie_doc.get("imdb_url", ""),
         filename=base_name,
         tag=primary_tag,
-        genres=genres,
+        genres=movie_doc.get("genres", "N/A"),
         ott=ott_str,
-        quality=quality_str,
         language=language_str,
-        episodes=epi_block,
+        plot=movie_doc.get("plot", ""),
         rating=movie_doc.get("rating", "N/A"),
+        year=movie_doc.get("year", "N/A"),
         search_link=temp.U_NAME
     )
