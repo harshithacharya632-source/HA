@@ -4,6 +4,7 @@
 
 import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64
 from Script import script
+from pyrogram.errors import MediaEmpty
 from pyrogram import Client, filters, enums
 from pyrogram.errors import ChatAdminRequired, FloodWait
 from pyrogram.types import *
