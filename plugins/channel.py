@@ -297,6 +297,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         poster_url = None
         backdrop_url = None
         is_backdrop = False
+        tmdb_data = None
 
         if TMDB_POSTER:
             tmdb_data = await get_movie_detailsx(base_name)
