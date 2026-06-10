@@ -752,9 +752,22 @@ Example:- /set_caption 📕 File Name: {filename}
 /stream - ɢᴇᴛ sᴛʀᴇᴀᴍᴀʙʟᴇ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅᴀʙʟᴇ ʟɪɴᴋ ᴏғ ᴀɴʏ ғɪʟᴇ</b>"""
 
 
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+    MOVIE_UPDATE_NOTIFY_TXT = """
+<b><a href={poster_url}>📥</a><a href={imdb_url}>New {tag} Added</a></b>
+
+<blockquote>✨ ᴛɪᴛʟᴇ : <code>{filename}</code>
+
+🎭 ɢᴇɴʀᴇs : <b>{genres}</b>
+📺 ᴏᴛᴛ        : <b>{ott}</b>
+🎞️ ǫᴜᴀʟɪᴛʏ : <b>{quality}</b>
+🎧 ᴀᴜᴅɪᴏ    : <b>{language}</b>
+🔥 ʀᴀᴛɪɴɢ   : <b>{rating}</b>
+✮⋆˙ɢᴏꜰʟɪx   : Teligram 
+{episodes}
+</blockquote>
+
+🔍 <b>Sᴇᴀʀᴄʜ →</b> {search_link}
+"""
 
 
     

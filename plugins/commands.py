@@ -14,6 +14,7 @@ from info import CLONE_MODE, OWNER_LNK, REACTIONS, CHANNELS, REQUEST_TO_JOIN_MOD
 from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
+from database.users_chats_db import db
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results
@@ -730,6 +731,30 @@ async def channel_info(bot, message):
             f.write(text)
         await message.reply_document(file)
         os.remove(file)
+
+# movie update on off start
+
+@Client.on_message(filters.private & filters.command("movie_update") & filters.user(ADMINS))
+async def set_movie_update_notification(client, message):
+    bot_id = client.me.id
+    try:
+        option = message.text.split(" ", 1)[1].strip().lower()
+        enable_status = option in ['on', 'true']
+    except (IndexError, ValueError):
+        await message.reply_text("<b>💔 Invalid option. Please send 'on' or 'off' after the command.</b>")
+        return
+    try:
+        await db.update_movie_update_status(bot_id, enable_status)
+        response_text = (
+            "<b>ᴍᴏᴠɪᴇ ᴜᴘᴅᴀᴛᴇ ɴᴏᴛɪꜰɪᴄᴀᴛɪᴏɴ ᴇɴᴀʙʟᴇᴅ ✅</b>" if enable_status
+            else "<b>ᴍᴏᴠɪᴇ ᴜᴘᴅᴀᴛᴇ ɴᴏᴛɪꜰɪᴄᴀᴛɪᴏɴ ᴅɪꜱᴀʙʟᴇᴅ ❌</b>"
+        )
+        await message.reply_text(response_text)
+    except Exception as e:
+        logger.error(f"Error in set_movie_update_notification: {e}")
+        await message.reply_text(f"<b>❗ An error occurred: {e}</b>")
+
+#end here 
 
 
 @Client.on_message(filters.command('logs') & filters.user(ADMINS))
