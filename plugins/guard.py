@@ -1,4 +1,5 @@
 import re
+import asyncio
 from datetime import datetime, timedelta
 from pyrogram import Client, filters
 from pyrogram.types import (
@@ -147,16 +148,26 @@ async def guard_cmd(client, message):
             # Reply in group briefly
             m = await message.reply(
                 f"🛡 **Guard is now {status}**\n"
-                f"_Settings sent to your PM._"
+                f"_For more settings check your PM._",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⚙️ Open Settings", url=f"https://t.me/{(await client.get_me()).username}")
+                ]])
             )
             # Send full panel to PM
             s = await get_settings(chat_id)
             try:
-                await client.send_message(
+                pm_msg = await client.send_message(
                     admin_id,
                     settings_text(s, chat_title),
                     reply_markup=settings_keyboard(s, chat_id)
                 )
+                async def _del_on_off(gm=m, pm=pm_msg):
+                    await asyncio.sleep(180)
+                    try: await gm.delete()
+                    except: pass
+                    try: await pm.delete()
+                    except: pass
+                asyncio.create_task(_del_on_off())
             except:
                 await m.edit(
                     f"🛡 **Guard is now {status}**\n\n"
@@ -172,18 +183,25 @@ async def guard_cmd(client, message):
 
     s = await get_settings(chat_id)
     try:
-        await client.send_message(
+        pm_msg = await client.send_message(
             admin_id,
             settings_text(s, chat_title),
             reply_markup=settings_keyboard(s, chat_id)
         )
-        await message.reply(
+        grp_msg = await message.reply(
             f"⚙️ **Guard settings sent to your PM!**\n"
             f"👆 Check your messages from bot.",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("📲 Open PM", url=f"https://t.me/{(await client.get_me()).username}")
             ]])
         )
+        async def _del_settings(pm=pm_msg, gm=grp_msg):
+            await asyncio.sleep(180)
+            try: await pm.delete()
+            except: pass
+            try: await gm.delete()
+            except: pass
+        asyncio.create_task(_del_settings())
     except Exception as e:
         await message.reply(
             f"❌ Couldn't send PM.\n"
