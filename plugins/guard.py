@@ -370,10 +370,13 @@ async def gs_toggle(client, callback):
     except:
         chat_title = "Group"
 
-    await callback.message.edit_text(
-        settings_text(s, chat_title),
-        reply_markup=settings_keyboard(s, chat_id)
-    )
+    try:
+        await callback.message.edit_text(
+            settings_text(s, chat_title),
+            reply_markup=settings_keyboard(s, chat_id)
+        )
+    except:
+        pass
     await callback.answer(f"{'Enabled ✅' if new_val else 'Disabled ❌'}")
 
 
@@ -418,10 +421,13 @@ async def gs_refresh(client, callback):
     except:
         chat_title = "Group"
 
-    await callback.message.edit_text(
-        settings_text(s, chat_title),
-        reply_markup=settings_keyboard(s, chat_id)
-    )
+    try:
+        await callback.message.edit_text(
+            settings_text(s, chat_title),
+            reply_markup=settings_keyboard(s, chat_id)
+        )
+    except:
+        pass
     await callback.answer("Refreshed! 🔄")
 
 
