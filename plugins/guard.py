@@ -510,7 +510,7 @@ async def cb_resetwarns(client, callback):
 
     await reset_warns(chat_id, user_id)
     await callback.message.edit_text(
-        callback.message.text + f"\n\n✅ **Warns reset by** {callback.from_user.mention}"
+        callback.message.text + f"\n\n✅ **Warns reset by Admin**"
     )
     await callback.answer("Warns cleared!")
 
