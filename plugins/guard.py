@@ -677,7 +677,10 @@ async def guard_handler(client: Client, message: Message):
 
     else:
         try:
-            await client.ban_chat_member(chat_id, user_id)
+            await client.restrict_chat_member(
+                chat_id, user_id,
+                ChatPermissions()
+            )
             await log_ban(chat_id, user_id)
         except:
             pass
