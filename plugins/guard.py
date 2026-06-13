@@ -62,7 +62,6 @@ async def do_unmute(client, chat_id, user_id):
         ChatPermissions(
             can_send_messages=True,
             can_send_media_messages=True,
-            can_send_other_messages=True,
             can_add_web_page_previews=True,
         )
     )
@@ -351,7 +350,7 @@ async def guard_help_cmd(client, message):
 #   PM SETTINGS CALLBACKS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@Client.on_callback_query(filters.regex(r"^gs_toggle_(\w+)_(-\d+)$") & filters.private)
+@Client.on_callback_query(filters.regex(r"^gs_toggle_(\w+)_(-\d+)$"))
 async def gs_toggle(client, callback):
     key     = callback.matches[0].group(1)
     chat_id = int(callback.matches[0].group(2))
@@ -378,7 +377,7 @@ async def gs_toggle(client, callback):
     await callback.answer(f"{'Enabled ✅' if new_val else 'Disabled ❌'}")
 
 
-@Client.on_callback_query(filters.regex(r"^gs_set_(warn1|warn2|words)_(-\d+)$") & filters.private)
+@Client.on_callback_query(filters.regex(r"^gs_set_(warn1|warn2|words)_(-\d+)$"))
 async def gs_set_value(client, callback):
     sub     = callback.matches[0].group(1)
     chat_id = int(callback.matches[0].group(2))
@@ -405,7 +404,7 @@ async def gs_set_value(client, callback):
     await callback.answer()
 
 
-@Client.on_callback_query(filters.regex(r"^gs_refresh_(-\d+)$") & filters.private)
+@Client.on_callback_query(filters.regex(r"^gs_refresh_(-\d+)$"))
 async def gs_refresh(client, callback):
     chat_id = int(callback.matches[0].group(1))
 
@@ -426,7 +425,7 @@ async def gs_refresh(client, callback):
     await callback.answer("Refreshed! 🔄")
 
 
-@Client.on_callback_query(filters.regex(r"^gs_banned_(\d+)_(-\d+)$") & filters.private)
+@Client.on_callback_query(filters.regex(r"^gs_banned_(\d+)_(-\d+)$"))
 async def gs_banned_page(client, callback):
     page    = int(callback.matches[0].group(1))
     chat_id = int(callback.matches[0].group(2))
