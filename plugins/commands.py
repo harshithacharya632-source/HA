@@ -1774,7 +1774,7 @@ async def cmd_action_callback(client, callback):
         await _do_unmute(client, chat_id, user_id)
         try:
             await callback.message.edit_text(
-                callback.message.text + f"\n\n✅ **Unmuted by** {callback.from_user.mention}"
+                callback.message.text + f"\n\n✅ **Unmuted by Admin**"
             )
         except:
             pass
@@ -1786,7 +1786,7 @@ async def cmd_action_callback(client, callback):
         await remove_ban_log(chat_id, user_id)
         try:
             await callback.message.edit_text(
-                callback.message.text + f"\n\n✅ **Unbanned by** {callback.from_user.mention}"
+                callback.message.text + f"\n\n✅ **Unbanned by Admin**"
             )
         except:
             pass
