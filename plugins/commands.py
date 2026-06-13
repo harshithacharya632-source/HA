@@ -1550,14 +1550,14 @@ async def purge_requests(client, message):
         )
 
 
-# ═══════════════════════════════════════════════
-#         GOFLIX GUARD — MODERATION COMMANDS
-# ═══════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
+#   GOFLIX GUARD — MODERATION COMMANDS (add to bottom of commands.py)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 from pyrogram.types import ChatPermissions
 from pyrogram.enums import ChatMemberStatus
 from database.guard_db import (
-    reset_warns as guard_reset_warns,
+    reset_warns  as guard_reset_warns,
     remove_ban_log,
     get_all_banned,
     log_ban
@@ -1583,12 +1583,12 @@ async def _do_unmute(client, chat_id, user_id):
 
 # ── /mute ─────────────────────────────────────────────────────────────────────
 
-@Client.on_message(filters.command("mute") & filters.group)
+@Client.on_message(filters.command("mute") & filters.group, group=1)
 async def mute_cmd(client, message):
     if not await _is_admin(client, message.chat.id, message.from_user.id):
         return await message.reply("❌ Admins only!")
 
-    target = None
+    target  = None
     minutes = None
 
     if message.reply_to_message:
@@ -1597,10 +1597,7 @@ async def mute_cmd(client, message):
             try:
                 minutes = int(message.command[1])
             except:
-                return await message.reply(
-                    "❌ Invalid duration.\n"
-                    "Usage: Reply to user + `/mute <minutes>`"
-                )
+                return await message.reply("❌ Usage: reply + `/mute <minutes>`")
     elif len(message.command) > 1:
         try:
             target = await client.get_users(message.command[1].lstrip("@"))
@@ -1611,9 +1608,9 @@ async def mute_cmd(client, message):
     else:
         return await message.reply(
             "❌ **Usage:**\n"
-            "• Reply to user → `/mute <minutes>`\n"
-            "• `/mute @username <minutes>`\n"
-            "• No minutes = permanent mute"
+            "• Reply + `/mute <minutes>`\n"
+            "• `/mute @user <minutes>`\n"
+            "• No minutes = permanent"
         )
 
     if not target:
@@ -1621,20 +1618,15 @@ async def mute_cmd(client, message):
     if await _is_admin(client, message.chat.id, target.id):
         return await message.reply("❌ Cannot mute an admin.")
 
+    chat_id = message.chat.id
+
     if minutes:
         from datetime import datetime, timedelta
         until = datetime.utcnow() + timedelta(minutes=minutes)
-        await client.restrict_chat_member(
-            message.chat.id, target.id,
-            ChatPermissions(),
-            until_date=until
-        )
+        await client.restrict_chat_member(chat_id, target.id, ChatPermissions(), until_date=until)
         duration_text = f"`{minutes}` min — until `{until.strftime('%d.%m.%y %H:%M')} UTC`"
     else:
-        await client.restrict_chat_member(
-            message.chat.id, target.id,
-            ChatPermissions()
-        )
+        await client.restrict_chat_member(chat_id, target.id, ChatPermissions())
         duration_text = "Permanent"
 
     await message.reply(
@@ -1643,15 +1635,15 @@ async def mute_cmd(client, message):
         f"🆔 **ID:** `{target.id}`\n"
         f"⏱ **Duration:** {duration_text}\n"
         f"👮 **By:** {message.from_user.mention}",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔓 Unmute", callback_data=f"cmd_unmute_{target.id}")]
-        ])
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔓 Unmute", callback_data=f"cmd_unmute_{target.id}_{chat_id}")
+        ]])
     )
 
 
 # ── /unmute ───────────────────────────────────────────────────────────────────
 
-@Client.on_message(filters.command("unmute") & filters.group)
+@Client.on_message(filters.command("unmute") & filters.group, group=1)
 async def unmute_cmd(client, message):
     if not await _is_admin(client, message.chat.id, message.from_user.id):
         return await message.reply("❌ Admins only!")
@@ -1665,7 +1657,7 @@ async def unmute_cmd(client, message):
         except:
             return await message.reply("❌ User not found.")
     else:
-        return await message.reply("❌ Reply to user or `/unmute @username`")
+        return await message.reply("❌ Reply to user or `/unmute @user`")
 
     await _do_unmute(client, message.chat.id, target.id)
     await message.reply(
@@ -1678,13 +1670,14 @@ async def unmute_cmd(client, message):
 
 # ── /ban ──────────────────────────────────────────────────────────────────────
 
-@Client.on_message(filters.command("ban") & filters.group)
+@Client.on_message(filters.command("ban") & filters.group, group=1)
 async def ban_cmd(client, message):
     if not await _is_admin(client, message.chat.id, message.from_user.id):
         return await message.reply("❌ Admins only!")
 
     target = None
     reason = "No reason provided"
+    chat_id = message.chat.id
 
     if message.reply_to_message:
         target = message.reply_to_message.from_user
@@ -1700,17 +1693,17 @@ async def ban_cmd(client, message):
     else:
         return await message.reply(
             "❌ **Usage:**\n"
-            "• Reply to user + `/ban <reason>`\n"
-            "• `/ban @username <reason>`"
+            "• Reply + `/ban <reason>`\n"
+            "• `/ban @user <reason>`"
         )
 
     if not target:
         return await message.reply("❌ User not found.")
-    if await _is_admin(client, message.chat.id, target.id):
+    if await _is_admin(client, chat_id, target.id):
         return await message.reply("❌ Cannot ban an admin.")
 
-    await client.ban_chat_member(message.chat.id, target.id)
-    await log_ban(message.chat.id, target.id)
+    await client.ban_chat_member(chat_id, target.id)
+    await log_ban(chat_id, target.id)
 
     await message.reply(
         f"🚫 **Banned**\n\n"
@@ -1718,15 +1711,15 @@ async def ban_cmd(client, message):
         f"🆔 **ID:** `{target.id}`\n"
         f"📝 **Reason:** {reason}\n"
         f"👮 **By:** {message.from_user.mention}",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔓 Unban", callback_data=f"cmd_unban_{target.id}")]
-        ])
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔓 Unban", callback_data=f"cmd_unban_{target.id}_{chat_id}")
+        ]])
     )
 
 
 # ── /unban ────────────────────────────────────────────────────────────────────
 
-@Client.on_message(filters.command("unban") & filters.group)
+@Client.on_message(filters.command("unban") & filters.group, group=1)
 async def unban_cmd(client, message):
     if not await _is_admin(client, message.chat.id, message.from_user.id):
         return await message.reply("❌ Admins only!")
@@ -1740,7 +1733,7 @@ async def unban_cmd(client, message):
         except:
             return await message.reply("❌ User not found.")
     else:
-        return await message.reply("❌ Reply to user or `/unban @username`")
+        return await message.reply("❌ Reply to user or `/unban @user`")
 
     await client.unban_chat_member(message.chat.id, target.id)
     await guard_reset_warns(message.chat.id, target.id)
@@ -1754,18 +1747,23 @@ async def unban_cmd(client, message):
     )
 
 
-# ── Callbacks: Unmute / Unban buttons (from guard.py & manual commands) ───────
+# ── Callbacks: Unmute / Unban buttons ─────────────────────────────────────────
+# Handles both: cmd_unmute_USERID_CHATID and old cmd_unmute_USERID formats
 
-@Client.on_callback_query(filters.regex(r"^cmd_(unmute|unban)_(\d+)$"))
+@Client.on_callback_query(filters.regex(r"^cmd_(unmute|unban)_(\d+)(?:_(-\d+))?$"))
 async def cmd_action_callback(client, callback):
-    chat_id  = callback.message.chat.id
-    actor_id = callback.from_user.id
-
-    if not await _is_admin(client, chat_id, actor_id):
-        return await callback.answer("❌ Admins only!", show_alert=True)
-
     action  = callback.matches[0].group(1)
     user_id = int(callback.matches[0].group(2))
+    chat_id_str = callback.matches[0].group(3)
+
+    # Determine chat_id — from callback data or from message chat
+    if chat_id_str:
+        chat_id = int(chat_id_str)
+    else:
+        chat_id = callback.message.chat.id
+
+    if not await _is_admin(client, chat_id, callback.from_user.id):
+        return await callback.answer("❌ Admins only!", show_alert=True)
 
     try:
         user = await client.get_users(user_id)
@@ -1775,20 +1773,24 @@ async def cmd_action_callback(client, callback):
 
     if action == "unmute":
         await _do_unmute(client, chat_id, user_id)
-        await callback.message.edit_text(
-            callback.message.text.markdown +
-            f"\n\n✅ **Unmuted by** {callback.from_user.mention}"
-        )
+        try:
+            await callback.message.edit_text(
+                callback.message.text + f"\n\n✅ **Unmuted by** {callback.from_user.mention}"
+            )
+        except:
+            pass
         await callback.answer("✅ User unmuted!")
 
-    else:
+    else:  # unban
         await client.unban_chat_member(chat_id, user_id)
         await guard_reset_warns(chat_id, user_id)
         await remove_ban_log(chat_id, user_id)
-        await callback.message.edit_text(
-            callback.message.text.markdown +
-            f"\n\n✅ **Unbanned by** {callback.from_user.mention}"
-        )
+        try:
+            await callback.message.edit_text(
+                callback.message.text + f"\n\n✅ **Unbanned by** {callback.from_user.mention}"
+            )
+        except:
+            pass
         await callback.answer("✅ User unbanned!")
 
 
