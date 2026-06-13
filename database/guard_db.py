@@ -16,16 +16,15 @@ def banned_col():
 async def get_settings(chat_id: int) -> dict:
     doc = await guard_col().find_one({"chat_id": chat_id})
     if not doc:
-        # Default settings
         return {
-            "chat_id": chat_id,
-            "enabled": False,
-            "link_guard": True,
-            "forward_guard": True,
-            "longmsg_guard": True,
-            "word_limit": 100,
-            "warn1_mute": 30,
-            "warn2_mute": 180,
+            "chat_id":        chat_id,
+            "enabled":        False,
+            "link_guard":     True,
+            "forward_guard":  True,
+            "longmsg_guard":  True,
+            "word_limit":     100,
+            "warn1_mute":     30,
+            "warn2_mute":     180,
         }
     return doc
 
@@ -35,6 +34,14 @@ async def update_settings(chat_id: int, data: dict):
         {"$set": data},
         upsert=True
     )
+
+async def get_pending_chats(admin_id: int) -> list:
+    """Find all chats where this admin has a pending setting input."""
+    cursor = guard_col().find({
+        "_pending_admin": admin_id,
+        "_pending_field": {"$ne": None}
+    })
+    return await cursor.to_list(length=None)
 
 
 # ── Warns ─────────────────────────────────────────────────────────────────────
@@ -62,8 +69,8 @@ async def log_ban(chat_id: int, user_id: int):
     await banned_col().update_one(
         {"chat_id": chat_id, "user_id": user_id},
         {"$set": {
-            "chat_id": chat_id,
-            "user_id": user_id,
+            "chat_id":   chat_id,
+            "user_id":   user_id,
             "banned_at": datetime.utcnow()
         }},
         upsert=True
