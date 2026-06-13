@@ -1638,6 +1638,7 @@ async def mute_cmd(client, message):
             InlineKeyboardButton("🔓 Unmute", callback_data=f"cmd_unmute_{target.id}_{chat_id}")
         ]])
     )
+    message.stop_propagation()
 
 
 # ── /unmute ───────────────────────────────────────────────────────────────────
@@ -1665,6 +1666,7 @@ async def unmute_cmd(client, message):
         f"🆔 **ID:** `{target.id}`\n"
         f"👮 **By:** {message.from_user.mention}"
     )
+    message.stop_propagation()
 
 
 # ── /ban ──────────────────────────────────────────────────────────────────────
@@ -1714,6 +1716,7 @@ async def ban_cmd(client, message):
             InlineKeyboardButton("🔓 Unban", callback_data=f"cmd_unban_{target.id}_{chat_id}")
         ]])
     )
+    message.stop_propagation()
 
 
 # ── /unban ────────────────────────────────────────────────────────────────────
@@ -1744,6 +1747,7 @@ async def unban_cmd(client, message):
         f"🆔 **ID:** `{target.id}`\n"
         f"👮 **By:** {message.from_user.mention}"
     )
+    message.stop_propagation()
 
 
 # ── Callbacks: Unmute / Unban buttons ─────────────────────────────────────────
