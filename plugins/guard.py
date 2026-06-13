@@ -600,7 +600,7 @@ async def _build_banned_page(client, chat_id, banned_list, page=0):
     filters.group
     & filters.incoming
     & ~filters.command(GUARD_COMMANDS),
-    group=2
+    group=-1
 )
 async def guard_handler(client: Client, message: Message):
     if not message.from_user:
