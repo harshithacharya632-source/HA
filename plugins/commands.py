@@ -1576,7 +1576,6 @@ async def _do_unmute(client, chat_id, user_id):
         ChatPermissions(
             can_send_messages=True,
             can_send_media_messages=True,
-            can_send_other_messages=True,
             can_add_web_page_previews=True,
         )
     )
@@ -1792,7 +1791,6 @@ async def cmd_action_callback(client, callback):
         except:
             pass
         await callback.answer("✅ User unbanned!")
-
 
 
 
