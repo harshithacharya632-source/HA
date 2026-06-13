@@ -644,6 +644,7 @@ async def guard_handler(client: Client, message: Message):
         await message.delete()
     except:
         pass
+    message.stop_propagation()
 
     warns = await add_warn(chat_id, user_id)
     w1    = s.get("warn1_mute", 30)
