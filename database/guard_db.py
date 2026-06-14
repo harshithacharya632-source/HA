@@ -38,10 +38,9 @@ async def update_settings(chat_id: int, data: dict):
     )
 
 async def get_pending_chats(admin_id: int) -> list:
-    """Find all chats where this admin has a pending setting input."""
     return list(guard_settings_col.find({
         "_pending_admin": admin_id,
-        "_pending_field": {"$ne": None}
+        "_pending_field": {"$exists": True, "$ne": None}
     }))
 
 
