@@ -471,6 +471,8 @@ async def gs_banned_page(client, callback):
 async def pm_value_listener(client, message):
     if not message.from_user:
         return
+    if message.text and message.text.startswith("/"):
+        return
 
     admin_id = message.from_user.id
 
