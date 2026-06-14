@@ -467,7 +467,7 @@ async def gs_banned_page(client, callback):
 
 # ── PM value listener (for setting warn times / word limit) ───────────────────
 
-@Client.on_message(filters.private & filters.text & filters.incoming)
+@Client.on_message(filters.private & filters.text & filters.incoming, group=2)
 async def pm_value_listener(client, message):
     if not message.from_user:
         return
