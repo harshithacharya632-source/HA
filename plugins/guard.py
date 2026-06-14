@@ -625,7 +625,7 @@ async def guard_handler(client: Client, message: Message):
         reason = "📨 Forwarded message not allowed"
 
     # 2. Link
-    elif s.get("link_guard", True):
+    if not reason and s.get("link_guard", True):
         has_link = bool(URL_REGEX.search(text))
         if not has_link and message.entities:
             has_link = any(e.type.name in ("URL", "TEXT_LINK") for e in message.entities)
@@ -633,7 +633,7 @@ async def guard_handler(client: Client, message: Message):
             reason = "🔗 Links not allowed"
 
     # 3. Long message
-    elif s.get("longmsg_guard", True):
+    if not reason and s.get("longmsg_guard", True):
         if len(text.split()) >= s.get("word_limit", 100):
             reason = f"📝 Message too long ({len(text.split())} words)"
 
