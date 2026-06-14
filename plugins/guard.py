@@ -167,7 +167,7 @@ async def guard_cmd(client, message):
                     except: pass
                     try: await pm.delete()
                     except: pass
-                asyncio.create_task(_del_on_off())
+                asyncio.ensure_future(_del_on_off())
             except:
                 await m.edit(
                     f"🛡 **Guard is now {status}**\n\n"
@@ -201,7 +201,7 @@ async def guard_cmd(client, message):
             except: pass
             try: await gm.delete()
             except: pass
-        asyncio.create_task(_del_settings())
+        asyncio.ensure_future(_del_settings())
     except Exception as e:
         await message.reply(
             f"❌ Couldn't send PM.\n"
