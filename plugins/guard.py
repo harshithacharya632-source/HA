@@ -467,7 +467,7 @@ async def gs_banned_page(client, callback):
 
 # ── PM value listener (for setting warn times / word limit) ───────────────────
 
-@Client.on_message(filters.private & filters.text & filters.incoming, group=2)
+@Client.on_message(filters.private & filters.text & filters.incoming, group=-1)
 async def pm_value_listener(client, message):
     if not message.from_user:
         return
@@ -475,14 +475,13 @@ async def pm_value_listener(client, message):
         return
 
     admin_id = message.from_user.id
-
-    # Check all chats where this admin has a pending field
-    # We search guard_settings for _pending_admin == admin_id
     from database.guard_db import get_pending_chats
     pending = await get_pending_chats(admin_id)
 
     if not pending:
-        return
+        return  # No pending — let pm_text handle normally
+    
+    message.stop_propagation()  # ← Pending exists — stop movie search
 
     for doc in pending:
         chat_id = doc["chat_id"]
