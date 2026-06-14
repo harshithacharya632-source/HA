@@ -33,6 +33,11 @@ SPELL_CHECK = {}
 async def give_filter(client, message):
     if message.text and message.text.startswith("/"):
         return
+    from database.guard_db import get_settings as guard_get_settings
+    guard_s = await guard_get_settings(message.chat.id)
+    if guard_s.get("enabled", False) and guard_s.get("longmsg_guard", True):
+        if len((message.text or "").split()) >= guard_s.get("word_limit", 100):
+            return
     if message.chat.id != SUPPORT_CHAT_ID:
         settings = await get_settings(message.chat.id)
         chatid = message.chat.id 
