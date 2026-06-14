@@ -467,50 +467,40 @@ async def gs_banned_page(client, callback):
 
 # ── PM value listener (for setting warn times / word limit) ───────────────────
 
-@Client.on_message(filters.private & filters.text & filters.incoming, group=-1)
+@Client.on_message(filters.private & filters.text & filters.incoming, group=2)
 async def pm_value_listener(client, message):
     if not message.from_user:
         return
     if message.text and message.text.startswith("/"):
         return
-
     admin_id = message.from_user.id
     from database.guard_db import get_pending_chats
     pending = await get_pending_chats(admin_id)
-
     if not pending:
-        return  # No pending — let pm_text handle normally
-    
-    message.stop_propagation()  # ← Pending exists — stop movie search
+        return
 
     for doc in pending:
         chat_id = doc["chat_id"]
         field   = doc.get("_pending_field")
         if not field:
             continue
-
         try:
             value = int(message.text.strip())
             assert value > 0
         except:
             return await message.reply("⚠️ Please send a **positive number** only.")
-
         await update_settings(chat_id, {
             field: value,
             "_pending_field": None,
             "_pending_admin": None
         })
-
         s = await get_settings(chat_id)
         try:
             chat       = await client.get_chat(chat_id)
             chat_title = chat.title
         except:
             chat_title = "Group"
-
-        await message.reply(
-            f"✅ Updated `{field}` → `{value}`\n\n",
-        )
+        await message.reply(f"✅ Updated `{field}` → `{value}`")
         await message.reply(
             settings_text(s, chat_title),
             reply_markup=settings_keyboard(s, chat_id)
