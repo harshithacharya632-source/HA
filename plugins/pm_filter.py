@@ -83,6 +83,13 @@ async def give_filter(client, message):
 
 @Client.on_message(filters.private & filters.text & filters.incoming)
 async def pm_text(bot, message):
+    try:
+        from database.guard_db import get_pending_chats
+        pending = await get_pending_chats(message.from_user.id)
+        if pending:
+            return
+    except:
+        pass
     content = message.text
     user = message.from_user.first_name
     user_id = message.from_user.id
