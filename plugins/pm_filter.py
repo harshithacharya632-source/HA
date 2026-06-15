@@ -1060,38 +1060,7 @@ async def combined_files(client, query: CallbackQuery):
     except Exception as e:
         await query.answer(f"❌ Error: {e}", show_alert=True)
 
-
-# SESSON End Here ##############
-
-# Fix for advantage_spell_chok in pm_filter.py
-async def advantage_spell_chok(client, name, msg, reply_msg, ai_search):
-    try:
-        # Your existing code up to the edit_text call
-        # ...
-        # Before editing, check if message exists
-        try:
-            await reply_msg.edit_text(
-                text=script.I_CUDNT.format(name),
-                reply_markup=InlineKeyboardMarkup(button)
-            )
-        except MessageIdInvalid:
-            logging.error(f"Message ID invalid for reply_msg: {reply_msg.id}")
-            await msg.reply("⚠️ The original message was deleted. Please start a new search.")
-            return
-        except Exception as e:
-            logging.error(f"Error editing message in advantage_spell_chok: {e}")
-            await msg.reply("❌ An error occurred while updating the message.")
-            return
-        # Rest of your code
-        # ...
-    except Exception as e:
-        logging.error(f"Error in advantage_spell_chok: {e}")
-        import traceback
-        logging.error(traceback.format_exc())
-        await msg.reply("❌ An error occurred. Check logs.")
-
-
-# END SEASON EDIT HERE
+#SEASON BUTTON END HERE
 
 
 @Client.on_callback_query(filters.regex(r"^episodes#"))
