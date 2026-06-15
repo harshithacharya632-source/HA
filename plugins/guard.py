@@ -12,7 +12,7 @@ from database.guard_db import (
     log_ban, remove_ban_log, get_all_banned
 )
 
-URL_REGEX = re.compile(r"(https?://|www\.|t\.me/)", re.IGNORECASE)
+URL_REGEX = re.compile(r"(https?://|www\.|t\.me/|@\w+)", re.IGNORECASE)
 
 # ── All guard commands list ───────────────────────────────────────────────────
 GUARD_COMMANDS = [
@@ -167,7 +167,7 @@ async def guard_cmd(client, message):
                     except: pass
                     try: await pm.delete()
                     except: pass
-                asyncio.create_task(_del_on_off())
+                asyncio.ensure_future(_del_on_off())
             except:
                 await m.edit(
                     f"🛡 **Guard is now {status}**\n\n"
@@ -201,7 +201,7 @@ async def guard_cmd(client, message):
             except: pass
             try: await gm.delete()
             except: pass
-        asyncio.create_task(_del_settings())
+        asyncio.ensure_future(_del_settings())
     except Exception as e:
         await message.reply(
             f"❌ Couldn't send PM.\n"
@@ -467,18 +467,15 @@ async def gs_banned_page(client, callback):
 
 # ── PM value listener (for setting warn times / word limit) ───────────────────
 
-@Client.on_message(filters.private & filters.text & filters.incoming)
+@Client.on_message(filters.private & filters.text & filters.incoming, group=2)
 async def pm_value_listener(client, message):
     if not message.from_user:
         return
-
+    if message.text and message.text.startswith("/"):
+        return
     admin_id = message.from_user.id
-
-    # Check all chats where this admin has a pending field
-    # We search guard_settings for _pending_admin == admin_id
     from database.guard_db import get_pending_chats
     pending = await get_pending_chats(admin_id)
-
     if not pending:
         return
 
@@ -487,33 +484,34 @@ async def pm_value_listener(client, message):
         field   = doc.get("_pending_field")
         if not field:
             continue
-
         try:
             value = int(message.text.strip())
             assert value > 0
         except:
             return await message.reply("⚠️ Please send a **positive number** only.")
-
         await update_settings(chat_id, {
             field: value,
             "_pending_field": None,
             "_pending_admin": None
         })
-
         s = await get_settings(chat_id)
         try:
             chat       = await client.get_chat(chat_id)
             chat_title = chat.title
         except:
             chat_title = "Group"
-
-        await message.reply(
-            f"✅ Updated `{field}` → `{value}`\n\n",
-        )
-        await message.reply(
+        confirm_msg = await message.reply(f"✅ Updated `{field}` → `{value}`")
+        settings_msg = await message.reply(
             settings_text(s, chat_title),
             reply_markup=settings_keyboard(s, chat_id)
         )
+        async def _del(c=confirm_msg, sm=settings_msg):
+            await asyncio.sleep(180)
+            try: await c.delete()
+            except: pass
+            try: await sm.delete()
+            except: pass
+        asyncio.ensure_future(_del())
 
 
 # ── Callback: reset warns from PM ─────────────────────────────────────────────

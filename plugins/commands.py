@@ -248,7 +248,7 @@ async def start(client, message):
         if not files:
             return await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {query}**")
         settings = await get_settings(grpid)
-        pre = 'filep' if settings['file_secure'] else 'file'
+        pre = 'filep' if settings.get('file_secure', False) else 'file'
         btn = []
         for file in files:
             btn.append([

@@ -33,11 +33,15 @@ SPELL_CHECK = {}
 async def give_filter(client, message):
     if message.text and message.text.startswith("/"):
         return
-    from database.guard_db import get_settings as guard_get_settings
-    guard_s = await guard_get_settings(message.chat.id)
-    if guard_s.get("enabled", False) and guard_s.get("longmsg_guard", True):
-        if len((message.text or "").split()) >= guard_s.get("word_limit", 100):
-            return
+    try:
+        from database.guard_db import get_settings as guard_get_settings
+        guard_s = await guard_get_settings(message.chat.id)
+        if guard_s.get("enabled", False) and guard_s.get("longmsg_guard", True):
+            word_limit = guard_s.get("word_limit", 100)
+            if word_limit > 0 and len((message.text or "").split()) >= word_limit:
+                return
+    except:
+        pass
     if message.chat.id != SUPPORT_CHAT_ID:
         settings = await get_settings(message.chat.id)
         chatid = message.chat.id 
@@ -79,6 +83,13 @@ async def give_filter(client, message):
 
 @Client.on_message(filters.private & filters.text & filters.incoming)
 async def pm_text(bot, message):
+    try:
+        from database.guard_db import get_pending_chats
+        pending = await get_pending_chats(message.from_user.id)
+        if pending:
+            return
+    except:
+        pass
     content = message.text
     user = message.from_user.first_name
     user_id = message.from_user.id

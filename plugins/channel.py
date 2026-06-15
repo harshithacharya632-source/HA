@@ -23,7 +23,6 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Bad words set (safe default if not in info.py)
 try:
     from info import BAD_WORDS
 except ImportError:
@@ -70,12 +69,6 @@ OTT_PLATFORMS = {
     "jio": "JioHotstar", "jhs": "JioHotstar",
     "aha": "Aha", "hbo": "HBO Max", "paramount": "Paramount+",
     "apple": "Apple TV+", "hoichoi": "Hoichoi", "sunnxt": "Sun NXT", "viki": "Viki"
-}
-
-STANDARD_GENRES = {
-    'Action', 'Adventure', 'Animation', 'Biography', 'Comedy', 'Crime', 'Documentary',
-    'Drama', 'Family', 'Fantasy', 'Film-Noir', 'History', 'Horror', 'Music',
-    'Musical', 'Mystery', 'Romance', 'Sci-Fi', 'Sport', 'Thriller', 'War', 'Western'
 }
 
 CLEAN_PATTERN = re.compile(r'@[^ \n\r\t\.,:;!?()\[\]{}<>\\/"\'=_%]+|\bwww\.[^\s\]\)]+|\([\@^]+\)|\[[\@^]+\]')
@@ -258,10 +251,8 @@ async def media_handler(bot, message):
     media.file_type = next(ft for ft in ("document", "video", "audio") if hasattr(message, ft))
     media.caption = message.caption or ""
 
-    # Save file to database (your original logic)
     await save_file(media)
 
-    # Auto-post to update channel
     try:
         if await db.movie_update_status(bot.me.id):
             await process_and_send_update(bot, media.file_name, media.caption)
@@ -289,7 +280,6 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         db.movie_updates = db.db.movie_updates
 
     movie_doc = await db.movie_updates.find_one({"_id": base_name})
-    error_tmdb = False
     file_data = {
         "filename": filename,
         "processed": processed,
@@ -303,36 +293,76 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
     }
 
     if not movie_doc:
-        if TMDB_POSTER:
-            details = await get_movie_detailsx(base_name)
-            if not details or details.get("error") or (not details.get("poster_url") and not details.get("backdrop_url")):
-                error_tmdb = True
-                logger.info("TMDB error, switching to IMDB")
-                details = await get_movie_details(base_name) or {}
-        else:
-            details = await get_movie_details(base_name) or {}
+        # Step 1: Fetch poster/backdrop from TMDB only
+        poster_url = None
+        backdrop_url = None
+        is_backdrop = False
+        tmdb_data = None
 
-        raw_genres = details.get("genres", [])
+        if TMDB_POSTER:
+            tmdb_data = await get_movie_detailsx(base_name)
+            if tmdb_data:
+                poster_url = tmdb_data.get("poster_url")
+                backdrop_url = tmdb_data.get("backdrop_url")
+                is_backdrop = bool(backdrop_url)
+                logger.info(f"TMDB poster fetched for '{base_name}'")
+            else:
+                logger.info(f"TMDB no result for '{base_name}', falling back to IMDB poster")
+
+        # Step 2: Fetch all metadata from IMDB (no API key needed)
+        # Step 2: Fetch metadata from IMDB first, fallback to TMDB
+        imdb_data = await get_movie_details(base_name) or {}
+        
+        # If IMDB returned nothing useful, use TMDB metadata as fallback
+        if not imdb_data.get("rating") and tmdb_data:
+            logger.info(f"IMDB empty for '{base_name}', using TMDB metadata")
+            raw_genres = tmdb_data.get("genres", [])
+            imdb_data = {
+                "genres": ", ".join(raw_genres) if isinstance(raw_genres, list) else raw_genres,
+                "rating": str(tmdb_data.get("rating", "N/A")),
+                "plot": tmdb_data.get("plot", ""),
+                "year": tmdb_data.get("year", ""),
+                "url": tmdb_data.get("tmdb_url", "")
+            }
+
+        # Fallback to IMDB poster if TMDB gave nothing
+        if not poster_url:
+            poster_url = imdb_data.get("poster_url")
+            is_backdrop = False
+
+        final_poster = backdrop_url if (LANDSCAPE_POSTER and TMDB_POSTER and is_backdrop) else poster_url
+
+        # Genres
+        raw_genres = imdb_data.get("genres", "N/A")
         if isinstance(raw_genres, list):
             genres = ", ".join(str(g) for g in raw_genres if g) or "N/A"
         elif isinstance(raw_genres, str):
             genres = raw_genres.strip() or "N/A"
         else:
             genres = "N/A"
+
+        # Plot
+        plot = imdb_data.get("plot", "")
+        plot_text = f"📖 <i>{plot}</i>" if plot else ""
+
+        rating = imdb_data.get("rating", "N/A")
+        imdb_url = imdb_data.get("url", "")
+        year = media_info["year"] or imdb_data.get("year")
+
         movie_doc = {
             "_id": base_name,
             "files": [file_data],
-            "poster_url": details.get("backdrop_url") if LANDSCAPE_POSTER and TMDB_POSTER and details.get("backdrop_url") and not error_tmdb else details.get("poster_url"),
+            "poster_url": final_poster,
             "genres": genres,
-            "rating": details.get("rating", "N/A"),
-            "imdb_url": details.get("url", "") if not TMDB_POSTER or error_tmdb else details.get("tmdb_url"),
-            "year": media_info["year"] or details.get("year"),
+            "rating": rating,
+            "imdb_url": imdb_url,
+            "plot": plot_text,
+            "year": year,
             "tag": media_info["tag"],
             "ott_platform": media_info["ott_platform"],
             "message_id": None,
             "is_photo": False,
-            "error_tmdb": error_tmdb,
-            "is_backdrop": bool(details.get("backdrop_url"))
+            "is_backdrop": is_backdrop
         }
         try:
             await db.movie_updates.insert_one(movie_doc)
@@ -372,7 +402,7 @@ async def send_movie_update(bot, base_name):
                     url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}"
                 )
             ]])
-            size = (2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and movie_doc.get("is_backdrop") and not movie_doc.get("error_tmdb") else (853, 1280)
+            size = (2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and movie_doc.get("is_backdrop") else (853, 1280)
 
             if movie_doc.get("poster_url") and not LINK_PREVIEW:
                 resized_poster = await fetch_image(movie_doc["poster_url"], size)
@@ -470,15 +500,11 @@ async def update_movie_message(bot, base_name):
 
 
 def generate_movie_message(movie_doc, base_name):
-    all_qualities = set()
     all_languages = set()
     all_ott_platforms = set()
     all_tags = set()
-    episodes_by_season = defaultdict(set)
 
     for file in movie_doc["files"]:
-        if file["quality"] != "N/A":
-            all_qualities.update(q.strip() for q in file["quality"].split(",") if q.strip())
         if file["language"] != "N/A":
             all_languages.update(l.strip() for l in file["language"].split(",") if l.strip())
         if file["ott_platform"] != "N/A":
@@ -486,46 +512,9 @@ def generate_movie_message(movie_doc, base_name):
             all_ott_platforms.update(platforms)
         if file["tag"]:
             all_tags.add(file["tag"])
-        if file.get("season") and file.get("episode"):
-            episodes_by_season[file["season"]].add(file["episode"])
 
-    primary_tag = "#SERIES" if "#SERIES" in all_tags else "#MOVIE"
-    epi_block = ""
-    if episodes_by_season:
-        episode_lines = []
-        for season, episodes in sorted(episodes_by_season.items(), key=lambda x: int(x[0])):
-            singles = []
-            ranges = []
-            for ep in episodes:
-                if "-" in ep:
-                    ranges.append(ep)
-                else:
-                    try:
-                        singles.append(int(ep))
-                    except ValueError:
-                        ranges.append(ep)
-            singles.sort()
-            collapsed = []
-            start = end = None
-            for num in singles:
-                if start is None:
-                    start = end = num
-                elif num == end + 1:
-                    end = num
-                else:
-                    collapsed.append(str(start) if start == end else f"{start}-{end}")
-                    start = end = num
-            if start is not None:
-                collapsed.append(str(start) if start == end else f"{start}-{end}")
-            all_ep_parts = collapsed + sorted(ranges, key=lambda s: int(s.split("-")[0]))
-            episode_lines.append(f"S{int(season)}: {', '.join(all_ep_parts)}")
-        epi_str = "\n".join(episode_lines)
-        if epi_str:
-            epi_block = f"📺 ᴇᴘɪsᴏᴅᴇs : <b>\n{epi_str}</b>"
-
-    genres = movie_doc.get("genres", "N/A")
-    quality_str = ", ".join(sorted(all_qualities)) if all_qualities else "N/A"
-    language_str = ", ".join(sorted(all_languages)) if all_languages else "N/A"
+    primary_tag = "🎬 New #SERIES Added" if "#SERIES" in all_tags else "🎬 New #MOVIE Added"
+    language_str = " | ".join(sorted(all_languages)) if all_languages else "N/A"
     ott_str = ", ".join(sorted(all_ott_platforms)) if all_ott_platforms else "N/A"
 
     return script.MOVIE_UPDATE_NOTIFY_TXT.format(
@@ -533,11 +522,11 @@ def generate_movie_message(movie_doc, base_name):
         imdb_url=movie_doc.get("imdb_url", ""),
         filename=base_name,
         tag=primary_tag,
-        genres=genres,
+        genres=movie_doc.get("genres", "N/A"),
         ott=ott_str,
-        quality=quality_str,
         language=language_str,
-        episodes=epi_block,
+        plot=movie_doc.get("plot", ""),
         rating=movie_doc.get("rating", "N/A"),
+        year=movie_doc.get("year", "N/A"),
         search_link=temp.U_NAME
     )

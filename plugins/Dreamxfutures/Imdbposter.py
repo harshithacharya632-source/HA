@@ -84,6 +84,9 @@ async def get_movie_details(query, id=False, file=None):
                 year = None
             movieid = ia.search_movie(title.lower(), results=10)
             if not movieid:
+                # retry without year
+                movieid = ia.search_movie(title.lower().replace(year or "", "").strip(), results=10) if year else []
+            if not movieid:
                 return None
             if year:
                 filtered = list(filter(lambda k: str(k.get('year')) == str(year), movieid))

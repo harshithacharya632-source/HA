@@ -751,18 +751,18 @@ Example:- /set_caption 📕 File Name: {filename}
 
 
     MOVIE_UPDATE_NOTIFY_TXT = """
-<b><a href={poster_url}>📥</a><a href={imdb_url}>New {tag} Added</a></b>
+<b><a href={poster_url}>📥</a>{tag}</b>
 
-<blockquote>✨ ᴛɪᴛʟᴇ : <code>{filename}</code>
+✨ <b>{filename}</b>
+🔗 <a href={imdb_url}>ɪᴍᴅʙ ʟɪɴᴋ</a>
 
-🎭 ɢᴇɴʀᴇs : <b>{genres}</b>
+<blockquote>🔥 ʀᴀᴛɪɴɢ   : <b>{rating}</b>
+🎭 ɢᴇɴʀᴇs  : <b>{genres}</b>
 📺 ᴏᴛᴛ        : <b>{ott}</b>
-🎞️ ǫᴜᴀʟɪᴛʏ : <b>{quality}</b>
-🎧 ᴀᴜᴅɪᴏ    : <b>{language}</b>
-🔥 ʀᴀᴛɪɴɢ   : <b>{rating}</b>
-✮⋆˙ɢᴏꜰʟɪx   : Teligram 
-{episodes}
-</blockquote>
+📅 ʏᴇᴀʀ       : <b>{year}</b>
+{plot}</blockquote>
+
+🎧 <b>ᴀᴜᴅɪᴏ ᴀᴠᴀɪʟᴀʙʟᴇ :</b> {language}
 
 🔍 <b>Sᴇᴀʀᴄʜ →</b> {search_link}
 """
