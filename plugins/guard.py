@@ -12,7 +12,7 @@ from database.guard_db import (
     log_ban, remove_ban_log, get_all_banned
 )
 
-URL_REGEX = re.compile(r"(https?://|www\.|t\.me/)", re.IGNORECASE)
+URL_REGEX = re.compile(r"(https?://|www\.|t\.me/|@\w+)", re.IGNORECASE)
 
 # ── All guard commands list ───────────────────────────────────────────────────
 GUARD_COMMANDS = [
