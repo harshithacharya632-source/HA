@@ -500,11 +500,18 @@ async def pm_value_listener(client, message):
             chat_title = chat.title
         except:
             chat_title = "Group"
-        await message.reply(f"✅ Updated `{field}` → `{value}`")
-        await message.reply(
+        confirm_msg = await message.reply(f"✅ Updated `{field}` → `{value}`")
+        settings_msg = await message.reply(
             settings_text(s, chat_title),
             reply_markup=settings_keyboard(s, chat_id)
         )
+        async def _del(c=confirm_msg, sm=settings_msg):
+            await asyncio.sleep(180)
+            try: await c.delete()
+            except: pass
+            try: await sm.delete()
+            except: pass
+        asyncio.ensure_future(_del())
 
 
 # ── Callback: reset warns from PM ─────────────────────────────────────────────
