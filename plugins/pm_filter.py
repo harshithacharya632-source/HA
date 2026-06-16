@@ -3001,6 +3001,8 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     except Exception as e:
         logger.exception(e)
         movies = []
+    if not movies:
+        movies = []
     movielist = []
     movielist += [movie.get('title') for movie in movies]
     movielist += [f"{movie.get('title')} {movie.get('year')}" for movie in movies]
