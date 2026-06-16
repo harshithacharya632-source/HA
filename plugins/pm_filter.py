@@ -3000,16 +3000,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         movies = await get_poster(mv_rqst, bulk=True)
     except Exception as e:
         logger.exception(e)
-        reqst_gle = urllib.parse.quote_plus(mv_rqst)
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
+        movies = []
     movielist = []
     if not movies:
         reqst_gle = urllib.parse.quote_plus(mv_rqst)
