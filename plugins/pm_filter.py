@@ -3015,6 +3015,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         async with aiohttp.ClientSession() as session:
             async with session.get(tmdb_url) as resp:
                 tmdb_data = await resp.json()
+        logger.info(f"SPELL DEBUG RAW: tmdb_data={tmdb_data}")
         tmdb_titles = []
         for r in tmdb_data.get('results', []):
             title = r.get('title') or r.get('name')
