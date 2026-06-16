@@ -3039,6 +3039,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             if title:
                 tmdb_titles.append(title)
         corrected = find_best_match(mv_rqst, tmdb_titles)
+        logger.info(f"SPELL DEBUG: query={mv_rqst} tmdb_titles={tmdb_titles} corrected={corrected}")
         if corrected:
             await auto_filter(client, corrected, msg, reply_msg, vj_search_new)
             return
