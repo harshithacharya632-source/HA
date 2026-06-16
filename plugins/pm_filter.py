@@ -3028,10 +3028,17 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     if AI_SPELL_CHECK == True and vj_search == True:
         vj_search_new = False
         vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
-        prefix = mv_rqst[:3].lower()
-        all_files, _, _ = await get_search_results(msg.chat.id, prefix, offset=0, filter=True)
-        movienamelist = list({f['file_name'].split('(')[0].strip() for f in all_files}) if all_files else []
-        corrected = find_best_match(mv_rqst, movienamelist)
+        import aiohttp
+        tmdb_url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={mv_rqst}&page=1"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(tmdb_url) as resp:
+                tmdb_data = await resp.json()
+        tmdb_titles = []
+        for r in tmdb_data.get('results', []):
+            title = r.get('title') or r.get('name')
+            if title:
+                tmdb_titles.append(title)
+        corrected = find_best_match(mv_rqst, tmdb_titles)
         if corrected:
             await auto_filter(client, corrected, msg, reply_msg, vj_search_new)
             return
