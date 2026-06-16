@@ -3029,7 +3029,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         vj_search_new = False
         vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
         prefix = mv_rqst[:3].lower()
-        all_files, _, _ await get_search_results(msg.chat.id, prefix, offset=0, filter=True)
+        all_files, _, _ = await get_search_results(msg.chat.id, prefix, offset=0, filter=True)
         movienamelist = list({f['file_name'].split('(')[0].strip() for f in all_files}) if all_files else []
         corrected = find_best_match(mv_rqst, movienamelist)
         if corrected:
