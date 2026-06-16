@@ -3033,6 +3033,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         corrected = find_best_match(mv_rqst, movienamelist)
         if corrected:
             await auto_filter(client, corrected, msg, reply_msg, vj_search_new)
+            return
         reqst_gle = urllib.parse.quote_plus(mv_rqst)
         button = [[
             InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
