@@ -1,6 +1,6 @@
 pyrofork==2.3.45
 tgcrypto 
-openai>=1.0.0
+openai==1.3.5
 requests 
 telegraph
 bs4 
@@ -39,5 +39,4 @@ Pillow==9.4.0
 psutil==5.9.4 
 dnspython==2.3.0
 ffmpeg-python>=0.2.0
-openai==0.25.0
 git+https://github.com/cinemagoer/cinemagoer
