@@ -5,7 +5,7 @@ from pyrogram import Client, filters
 from pyrogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
 )
-from pyrogram.enums import ChatMemberStatus
+from pyrogram.enums import ChatMemberStatus, ChatMembersFilter
 from database.guard_db import (
     get_settings, update_settings,
     get_warns, add_warn, reset_warns,
@@ -13,6 +13,14 @@ from database.guard_db import (
 )
 
 URL_REGEX = re.compile(r"(https?://|www\.|t\.me/|@\w+)", re.IGNORECASE)
+
+# Matches "@admin" / "@admins" / "#admin" / "#admins" (word-bounded, case-insensitive).
+# NOTE: this is intentionally separate from URL_REGEX. URL_REGEX's @\w+ pattern
+# was also matching "@admin" and causing it to be deleted/warned as a "link"
+# violation — that's likely why admin-call messages were being removed before
+# anyone saw them. ADMIN_CALL_REGEX is checked first and is exempted from the
+# link guard so users can call for an admin without being punished for it.
+ADMIN_CALL_REGEX = re.compile(r"[@#]admins?\b", re.IGNORECASE)
 
 # ── All guard commands list ───────────────────────────────────────────────────
 GUARD_COMMANDS = [
@@ -45,6 +53,20 @@ async def is_admin(client, chat_id, user_id):
         return m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
     except:
         return False
+
+
+async def get_group_admins(client, chat_id):
+    """Returns a list of admin/owner User objects for the group (bots excluded)."""
+    admins = []
+    try:
+        async for m in client.get_chat_members(
+            chat_id, filter=ChatMembersFilter.ADMINISTRATORS
+        ):
+            if m.user and not m.user.is_bot:
+                admins.append(m.user)
+    except:
+        pass
+    return admins
 
 
 async def do_mute(client, chat_id, user_id, minutes):
@@ -591,16 +613,71 @@ async def _build_banned_page(client, chat_id, banned_list, page=0):
     return text, InlineKeyboardMarkup(keyboard)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#   MAIN GUARD HANDLER — works silently in group
+#   ADMIN CALL — user types @admin / #admin to flag something for admins
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @Client.on_message(
     filters.group
     & filters.incoming
-    & ~filters.command(GUARD_COMMANDS),
-    group=-1
+    & filters.text
+    & filters.regex(ADMIN_CALL_REGEX),
+    group=-2  # runs before guard_handler (group=-1) so it isn't deleted as a "link"
 )
-async def guard_handler(client: Client, message: Message):
+async def admin_call_handler(client: Client, message: Message):
+    if not message.from_user:
+        return
+
+    chat_id = message.chat.id
+    s       = await get_settings(chat_id)
+    if not s.get("enabled", False):
+        return
+
+    # Don't trigger when an admin themselves writes @admin (e.g. replying to someone)
+    if await is_admin(client, chat_id, message.from_user.id):
+        return
+
+    admins   = await get_group_admins(client, chat_id)
+    reporter = message.from_user.mention
+    preview  = (message.text or "")[:300]
+
+    try:
+        chat_title = message.chat.title or "Group"
+    except:
+        chat_title = "Group"
+
+    # 1. Reply in group, tagging admins
+    if admins:
+        tags = " ".join(f"[{a.first_name}](tg://user?id={a.id})" for a in admins[:8])
+    else:
+        tags = "Admins"
+    await message.reply(
+        f"🔔 {tags}\n👤 {reporter} needs admin attention here."
+    )
+
+    # 2. PM each admin with the message details
+    pm_text = (
+        f"🔔 **Admin Call**\n\n"
+        f"📌 **Group:** {chat_title}\n"
+        f"👤 **From:** {reporter}\n"
+        f"💬 **Message:** {preview}\n\n"
+        f"👉 Check the group to see the full context."
+    )
+    for a in admins:
+        try:
+            await client.send_message(a.id, pm_text)
+        except:
+            pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   MAIN GUARD HANDLER — works silently in group
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _check_and_act(client: Client, message: Message):
+    """Runs the guard checks (link/forward/long-msg) against a message and
+    takes action (delete + warn/mute/ban) if it violates a rule.
+    Shared by both the new-message handler and the edited-message handler,
+    so that a link added via editing an otherwise-clean message is still caught."""
     if not message.from_user:
         return
 
@@ -624,7 +701,9 @@ async def guard_handler(client: Client, message: Message):
 
     # 2. Link
     if not reason and s.get("link_guard", True):
-        has_link = bool(URL_REGEX.search(text))
+        # Strip @admin/#admin call-outs first so they're never mistaken for a link
+        text_for_link_check = ADMIN_CALL_REGEX.sub("", text)
+        has_link = bool(URL_REGEX.search(text_for_link_check))
         if not has_link and message.entities:
             has_link = any(e.type.name in ("URL", "TEXT_LINK") for e in message.entities)
         if has_link:
@@ -696,8 +775,45 @@ async def guard_handler(client: Client, message: Message):
         except:
             pass
 
-    await message.reply(
+    warn_msg = await message.reply(
         text_out,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
+
+    # Auto-delete the warning message from the group once the mute period ends.
+    # (Ban notices are left in the group since the ban is permanent.)
+    if warns in (1, 2):
+        delay = (w1 if warns == 1 else w2) * 60
+
+        async def _del_warning(wm=warn_msg, delay=delay):
+            await asyncio.sleep(delay)
+            try:
+                await wm.delete()
+            except:
+                pass
+        asyncio.ensure_future(_del_warning())
+
     message.stop_propagation()
+
+
+@Client.on_message(
+    filters.group
+    & filters.incoming
+    & ~filters.command(GUARD_COMMANDS),
+    group=-1
+)
+async def guard_handler(client: Client, message: Message):
+    await _check_and_act(client, message)
+
+
+# Catches the case where a user sends a clean message, then EDITS it to add
+# a link (or other violating content). Without this handler, edited messages
+# were never re-checked, so a link slipped past the guard.
+@Client.on_edited_message(
+    filters.group
+    & filters.incoming
+    & ~filters.command(GUARD_COMMANDS),
+    group=-1
+)
+async def guard_edit_handler(client: Client, message: Message):
+    await _check_and_act(client, message)
