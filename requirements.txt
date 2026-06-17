@@ -1,6 +1,7 @@
 pyrofork==2.3.45
 tgcrypto 
-openai==1.3.5
+openai==1.6.1
+httpx==0.25.2
 requests 
 telegraph
 bs4 
