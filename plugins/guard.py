@@ -5,7 +5,7 @@ from pyrogram import Client, filters
 from pyrogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
 )
-from pyrogram.enums import ChatMemberStatus
+from pyrogram.enums import ChatMemberStatus, ChatMembersFilter
 from database.guard_db import (
     get_settings, update_settings,
     get_warns, add_warn, reset_warns,
@@ -13,6 +13,14 @@ from database.guard_db import (
 )
 
 URL_REGEX = re.compile(r"(https?://|www\.|t\.me/|@\w+)", re.IGNORECASE)
+
+# Matches "@admin" / "@admins" / "#admin" / "#admins" (word-bounded, case-insensitive).
+# NOTE: this is intentionally separate from URL_REGEX. URL_REGEX's @\w+ pattern
+# was also matching "@admin" and causing it to be deleted/warned as a "link"
+# violation — that's likely why admin-call messages were being removed before
+# anyone saw them. ADMIN_CALL_REGEX is checked first and is exempted from the
+# link guard so users can call for an admin without being punished for it.
+ADMIN_CALL_REGEX = re.compile(r"[@#]admins?\b", re.IGNORECASE)
 
 # ── All guard commands list ───────────────────────────────────────────────────
 GUARD_COMMANDS = [
@@ -45,6 +53,20 @@ async def is_admin(client, chat_id, user_id):
         return m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
     except:
         return False
+
+
+async def get_group_admins(client, chat_id):
+    """Returns a list of admin/owner User objects for the group (bots excluded)."""
+    admins = []
+    try:
+        async for m in client.get_chat_members(
+            chat_id, filter=ChatMembersFilter.ADMINISTRATORS
+        ):
+            if m.user and not m.user.is_bot:
+                admins.append(m.user)
+    except Exception as e:
+        print(f"[guard] get_group_admins failed for chat {chat_id}: {e}")
+    return admins
 
 
 async def do_mute(client, chat_id, user_id, minutes):
@@ -531,6 +553,95 @@ async def cb_resetwarns(client, callback):
     await callback.answer("Warns cleared!")
 
 
+# ── Callbacks: unmute / unban from the warning/ban notice buttons ────────────
+# These buttons are attached to the warn/ban notices in _check_and_act.
+# Clicking Unmute/Unban performs the action, swaps the button for a disabled
+# "✅ Unmuted/Unbanned by Admin" label (no admin name, not clickable — just
+# the word "Admin"), and the original notice is auto-deleted from the group
+# 2 minutes later.
+
+@Client.on_callback_query(filters.regex(r"^noop$"))
+async def cb_noop(client, callback):
+    await callback.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^cmd_unmute_(\d+)_(-\d+)$"))
+async def cb_cmd_unmute(client, callback):
+    user_id = int(callback.matches[0].group(1))
+    chat_id = int(callback.matches[0].group(2))
+
+    if not await is_admin(client, chat_id, callback.from_user.id):
+        return await callback.answer("❌ Admins only!", show_alert=True)
+
+    try:
+        await do_unmute(client, chat_id, user_id)
+    except Exception as e:
+        return await callback.answer(f"❌ Failed to unmute: {e}", show_alert=True)
+
+    await reset_warns(chat_id, user_id)
+
+    # Keep the original warning message as-is (don't replace its text) —
+    # just disable the Unmute button so it can't be clicked again, and
+    # let the user know via a toast popup instead of editing the message.
+    try:
+        await callback.message.edit_reply_markup(
+            InlineKeyboardMarkup([[InlineKeyboardButton("✅ Unmuted by Admin", callback_data="noop")]])
+        )
+    except:
+        pass
+    await callback.answer("User unmuted! 🔓 This message will be removed in 2 minutes.", show_alert=True)
+
+    # Delete the original warning message itself 2 minutes after unmute,
+    # rather than replacing it with a new confirmation message first.
+    target_msg = callback.message
+
+    async def _del_unmute_confirm(m=target_msg):
+        await asyncio.sleep(120)  # 2 minutes
+        try:
+            await m.delete()
+        except Exception as e:
+            print(f"[guard] failed to auto-delete unmute confirmation: {e}")
+    asyncio.ensure_future(_del_unmute_confirm())
+
+
+@Client.on_callback_query(filters.regex(r"^cmd_unban_(\d+)_(-\d+)$"))
+async def cb_cmd_unban(client, callback):
+    user_id = int(callback.matches[0].group(1))
+    chat_id = int(callback.matches[0].group(2))
+
+    if not await is_admin(client, chat_id, callback.from_user.id):
+        return await callback.answer("❌ Admins only!", show_alert=True)
+
+    try:
+        await client.unban_chat_member(chat_id, user_id)
+    except Exception as e:
+        return await callback.answer(f"❌ Failed to unban: {e}", show_alert=True)
+
+    await remove_ban_log(chat_id, user_id)
+    await reset_warns(chat_id, user_id)
+
+    # Keep the original ban notice as-is — just disable the Unban button
+    # so it can't be clicked again, and confirm via toast popup.
+    try:
+        await callback.message.edit_reply_markup(
+            InlineKeyboardMarkup([[InlineKeyboardButton("✅ Unbanned by Admin", callback_data="noop")]])
+        )
+    except:
+        pass
+    await callback.answer("User unbanned! 🔓 This message will be removed in 2 minutes.", show_alert=True)
+
+    # Delete the original ban notice itself 2 minutes after unban.
+    target_msg = callback.message
+
+    async def _del_unban_confirm(m=target_msg):
+        await asyncio.sleep(120)  # 2 minutes
+        try:
+            await m.delete()
+        except Exception as e:
+            print(f"[guard] failed to auto-delete unban confirmation: {e}")
+    asyncio.ensure_future(_del_unban_confirm())
+
+
 # ── Banned users page helpers ─────────────────────────────────────────────────
 
 async def _send_banned_page(client, send_to, chat_id, banned_list, page=0):
@@ -591,57 +702,174 @@ async def _build_banned_page(client, chat_id, banned_list, page=0):
     return text, InlineKeyboardMarkup(keyboard)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#   MAIN GUARD HANDLER — works silently in group
+#   ADMIN CALL — user types @admin / #admin to flag something for admins
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @Client.on_message(
     filters.group
     & filters.incoming
-    & ~filters.command(GUARD_COMMANDS),
-    group=-1
+    & filters.text
+    & filters.regex(ADMIN_CALL_REGEX),
+    group=-2  # runs before guard_handler (group=-1) so it isn't deleted as a "link"
 )
-async def guard_handler(client: Client, message: Message):
+async def admin_call_handler(client: Client, message: Message):
     if not message.from_user:
+        message.stop_propagation()
+
+    chat_id = message.chat.id
+    s       = await get_settings(chat_id)
+
+    # @admin / #admin should NEVER trigger a movie search, regardless of
+    # whether guard is on/off — so we stop propagation unconditionally
+    # before any early-return below. Only the alert-sending logic past
+    # this point is conditional on guard being enabled / sender not admin.
+    if not s.get("enabled", False):
+        message.stop_propagation()
+
+    # Don't trigger when an admin themselves writes @admin (e.g. replying to someone)
+    if await is_admin(client, chat_id, message.from_user.id):
+        message.stop_propagation()
+
+    # ── Check if this @admin call also violates guard rules ──────────────────
+    # If the message contains a link, is forwarded, or exceeds the word limit,
+    # treat it as a guard violation AND notify admins — same warn/mute/ban flow.
+    guard_violation_reason = None
+    if s.get("enabled", False):
+        text_body = message.text or ""
+
+        # Check forwarded
+        if s.get("forward_guard", True) and message.forward_date:
+            guard_violation_reason = "📨 Forwarded message not allowed"
+
+        # Check link (strip @admin/#admin tokens before checking)
+        if not guard_violation_reason and s.get("link_guard", True):
+            text_for_link_check = ADMIN_CALL_REGEX.sub("", text_body)
+            has_link = bool(URL_REGEX.search(text_for_link_check))
+            if not has_link and message.entities:
+                has_link = any(e.type.name in ("URL", "TEXT_LINK") for e in message.entities)
+            if has_link:
+                guard_violation_reason = "🔗 Links not allowed"
+
+        # Check long message
+        if not guard_violation_reason and s.get("longmsg_guard", True):
+            word_count = len(text_body.split())
+            if word_count >= s.get("word_limit", 100):
+                guard_violation_reason = f"📝 Message too long ({word_count} words)"
+
+    if guard_violation_reason:
+        # The @admin call also broke a guard rule — apply warn/mute/ban.
+        # _check_and_act_with_reason handles delete + warn and stops propagation.
+        await _check_and_act_with_reason(client, message, guard_violation_reason)
+        # Note: _check_and_act_with_reason calls message.stop_propagation() at the end.
         return
 
+    # ── Normal @admin call (no guard violation) — notify admins ─────────────
+    admins   = await get_group_admins(client, chat_id)
+    reporter = message.from_user.mention
+    preview  = (message.text or "")[:300]
+
+    try:
+        chat_title = message.chat.title or "Group"
+    except:
+        chat_title = "Group"
+
+    # Build a clickable "jump to message" link.
+    # Public groups: https://t.me/<username>/<msg_id>
+    # Private supergroups: https://t.me/c/<internal_id>/<msg_id>
+    #   (internal_id = chat_id with the leading -100 stripped)
+    msg_link = None
+    if message.chat.username:
+        msg_link = f"https://t.me/{message.chat.username}/{message.id}"
+    elif str(chat_id).startswith("-100"):
+        internal_id = str(chat_id)[4:]
+        msg_link = f"https://t.me/c/{internal_id}/{message.id}"
+
+    # 1. Reply in group, tagging admins as PLAIN TEXT (not clickable).
+    # Previously used tg://user?id= markdown links, which render clickable
+    # when the named user is resolvable. Plain names are used here instead
+    # so the tag is never a clickable link.
+    if admins:
+        tags = ", ".join(a.first_name for a in admins[:8])
+    else:
+        tags = "Admins"
+    await message.reply(
+        f"🔔 {tags}\n👤 {reporter} needs admin attention here.",
+        disable_web_page_preview=True
+    )
+
+    # 2. PM each admin with the message details + a jump-to-message link
+    pm_text = (
+        f"🔔 **Admin Call**\n\n"
+        f"📌 **Group:** {chat_title}\n"
+        f"👤 **From:** {reporter}\n"
+        f"💬 **Message:** {preview}\n"
+    )
+    buttons = None
+    if msg_link:
+        pm_text += f"\n🔗 [Jump to message]({msg_link})"
+        buttons = InlineKeyboardMarkup([[InlineKeyboardButton("👉 Open in Group", url=msg_link)]])
+    else:
+        pm_text += "\n👉 Check the group to see the full context."
+
+    for a in admins:
+        try:
+            await client.send_message(a.id, pm_text, reply_markup=buttons, disable_web_page_preview=True)
+        except:
+            pass
+
+    # Stop here so this message never reaches the movie-search plugin
+    # (which runs at a later group). @admin / #admin should only ever
+    # trigger this admin-call alert — never a movie search.
+    message.stop_propagation()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   REPLY GUARD — any reply message should never trigger movie search.
+#   Guard checks (link/forward/long-msg) still run normally for replies via
+#   _check_and_act below; this only blocks the movie-search plugin, which is
+#   why this runs at group=-2 (same priority as admin_call_handler), runs the
+#   guard checks itself, then stops propagation so the message never reaches
+#   the movie-search plugin (which lives at a later group in another file).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@Client.on_message(
+    filters.group
+    & filters.incoming
+    & filters.reply
+    & ~filters.regex(ADMIN_CALL_REGEX),  # admin_call_handler already handles & stops these
+    group=-2
+)
+async def reply_no_search_handler(client: Client, message: Message):
+    if not message.from_user:
+        message.stop_propagation()
+
+    chat_id = message.chat.id
+    s       = await get_settings(chat_id)
+
+    # A reply should never be treated as a movie-search query, regardless
+    # of whether guard is enabled — so stop_propagation always happens by
+    # the end of this handler. Guard checks (link/forward/long-msg) only
+    # run when guard is enabled, matching normal guard behavior elsewhere.
+    if s.get("enabled", False):
+        await _check_and_act(client, message)
+
+    message.stop_propagation()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   MAIN GUARD HANDLER — works silently in group
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _apply_warn_action(client: Client, message: Message, reason: str):
+    """
+    Core warn/mute/ban logic shared by _check_and_act and _check_and_act_with_reason.
+    Assumes the caller has already deleted the offending message and verified the user
+    is not an admin. Returns after posting the warning/ban notice and scheduling any
+    auto-delete.
+    """
     chat_id = message.chat.id
     user_id = message.from_user.id
     s       = await get_settings(chat_id)
-
-    if not s.get("enabled", False):
-        return
-
-    if await is_admin(client, chat_id, user_id):
-        return
-
-    text = message.text or message.caption or ""
-
-    reason = None
-
-    # 1. Forward
-    if s.get("forward_guard", True) and message.forward_date:
-        reason = "📨 Forwarded message not allowed"
-
-    # 2. Link
-    if not reason and s.get("link_guard", True):
-        has_link = bool(URL_REGEX.search(text))
-        if not has_link and message.entities:
-            has_link = any(e.type.name in ("URL", "TEXT_LINK") for e in message.entities)
-        if has_link:
-            reason = "🔗 Links not allowed"
-
-    # 3. Long message
-    if not reason and s.get("longmsg_guard", True):
-        if len(text.split()) >= s.get("word_limit", 100):
-            reason = f"📝 Message too long ({len(text.split())} words)"
-
-    if not reason:
-        return
-
-    try:
-        await message.delete()
-    except:
-        pass
 
     warns = await add_warn(chat_id, user_id)
     w1    = s.get("warn1_mute", 30)
@@ -696,8 +924,115 @@ async def guard_handler(client: Client, message: Message):
         except:
             pass
 
-    await message.reply(
+    warn_msg = await message.reply(
         text_out,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
+
+    # Auto-delete the warning message from the group once the mute period ends.
+    # (Ban notices are left in the group since the ban is permanent.)
+    if warns in (1, 2):
+        delay = (w1 if warns == 1 else w2) * 60
+
+        async def _del_warning(wm=warn_msg, delay=delay):
+            await asyncio.sleep(delay)
+            try:
+                await wm.delete()
+            except:
+                pass
+        asyncio.ensure_future(_del_warning())
+
+
+async def _check_and_act_with_reason(client: Client, message: Message, reason: str):
+    """
+    Apply guard action when the calling code has already determined the violation
+    reason (e.g. admin_call_handler detects a link inside an @admin message).
+    Deletes the offending message, runs the warn/mute/ban flow, then stops propagation.
+    """
+    if not message.from_user:
+        message.stop_propagation()
+        return
+
+    try:
+        await message.delete()
+    except:
+        pass
+
+    await _apply_warn_action(client, message, reason)
     message.stop_propagation()
+
+
+async def _check_and_act(client: Client, message: Message):
+    """Runs the guard checks (link/forward/long-msg) against a message and
+    takes action (delete + warn/mute/ban) if it violates a rule.
+    Shared by both the new-message handler and the edited-message handler,
+    so that a link added via editing an otherwise-clean message is still caught."""
+    if not message.from_user:
+        return
+
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    s       = await get_settings(chat_id)
+
+    if not s.get("enabled", False):
+        return
+
+    if await is_admin(client, chat_id, user_id):
+        return
+
+    text = message.text or message.caption or ""
+
+    reason = None
+
+    # 1. Forward
+    if s.get("forward_guard", True) and message.forward_date:
+        reason = "📨 Forwarded message not allowed"
+
+    # 2. Link
+    if not reason and s.get("link_guard", True):
+        # Strip @admin/#admin call-outs first so they're never mistaken for a link
+        text_for_link_check = ADMIN_CALL_REGEX.sub("", text)
+        has_link = bool(URL_REGEX.search(text_for_link_check))
+        if not has_link and message.entities:
+            has_link = any(e.type.name in ("URL", "TEXT_LINK") for e in message.entities)
+        if has_link:
+            reason = "🔗 Links not allowed"
+
+    # 3. Long message
+    if not reason and s.get("longmsg_guard", True):
+        if len(text.split()) >= s.get("word_limit", 100):
+            reason = f"📝 Message too long ({len(text.split())} words)"
+
+    if not reason:
+        return
+
+    try:
+        await message.delete()
+    except:
+        pass
+
+    await _apply_warn_action(client, message, reason)
+    message.stop_propagation()
+
+
+@Client.on_message(
+    filters.group
+    & filters.incoming
+    & ~filters.command(GUARD_COMMANDS),
+    group=-1
+)
+async def guard_handler(client: Client, message: Message):
+    await _check_and_act(client, message)
+
+
+# Catches the case where a user sends a clean message, then EDITS it to add
+# a link (or other violating content). Without this handler, edited messages
+# were never re-checked, so a link slipped past the guard.
+@Client.on_edited_message(
+    filters.group
+    & filters.incoming
+    & ~filters.command(GUARD_COMMANDS),
+    group=-1
+)
+async def guard_edit_handler(client: Client, message: Message):
+    await _check_and_act(client, message)
