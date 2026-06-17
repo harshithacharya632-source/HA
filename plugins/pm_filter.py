@@ -2983,8 +2983,9 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             await message.delete()
 
 async def ai_spell_check(chat_id, wrong_name):
+    import asyncio
     ia = Cinemagoer()
-    search_results = ia.search_movie(wrong_name)
+    search_results = await asyncio.to_thread(ia.search_movie, wrong_name)
     movie_list = [movie['title'] for movie in search_results]
     if not movie_list:
         return None
