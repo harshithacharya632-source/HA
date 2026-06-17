@@ -553,6 +553,89 @@ async def cb_resetwarns(client, callback):
     await callback.answer("Warns cleared!")
 
 
+# ── Callbacks: unmute / unban from the warning/ban notice buttons ────────────
+# These buttons are attached to the warn/ban notices in _check_and_act.
+# After the admin taps Unmute/Unban, the confirmation message replacing the
+# notice is auto-deleted from the group after 2 minutes, keeping the chat
+# clean once the action has been taken.
+
+@Client.on_callback_query(filters.regex(r"^cmd_unmute_(\d+)_(-\d+)$"))
+async def cb_cmd_unmute(client, callback):
+    user_id = int(callback.matches[0].group(1))
+    chat_id = int(callback.matches[0].group(2))
+
+    if not await is_admin(client, chat_id, callback.from_user.id):
+        return await callback.answer("❌ Admins only!", show_alert=True)
+
+    try:
+        await do_unmute(client, chat_id, user_id)
+    except Exception as e:
+        return await callback.answer(f"❌ Failed to unmute: {e}", show_alert=True)
+
+    await reset_warns(chat_id, user_id)
+
+    try:
+        target = await client.get_users(user_id)
+        name   = target.mention
+    except:
+        name = f"`{user_id}`"
+
+    confirm_msg = await callback.message.edit_text(
+        f"🔓 **Unmuted**\n\n"
+        f"👤 {name}\n"
+        f"👮 **By:** {callback.from_user.mention}\n\n"
+        f"_This message will be removed in 2 minutes._"
+    )
+    await callback.answer("User unmuted! 🔓")
+
+    async def _del_unmute_confirm(m=confirm_msg):
+        await asyncio.sleep(120)  # 2 minutes
+        try:
+            await m.delete()
+        except:
+            pass
+    asyncio.ensure_future(_del_unmute_confirm())
+
+
+@Client.on_callback_query(filters.regex(r"^cmd_unban_(\d+)_(-\d+)$"))
+async def cb_cmd_unban(client, callback):
+    user_id = int(callback.matches[0].group(1))
+    chat_id = int(callback.matches[0].group(2))
+
+    if not await is_admin(client, chat_id, callback.from_user.id):
+        return await callback.answer("❌ Admins only!", show_alert=True)
+
+    try:
+        await client.unban_chat_member(chat_id, user_id)
+    except Exception as e:
+        return await callback.answer(f"❌ Failed to unban: {e}", show_alert=True)
+
+    await remove_ban_log(chat_id, user_id)
+    await reset_warns(chat_id, user_id)
+
+    try:
+        target = await client.get_users(user_id)
+        name   = target.mention
+    except:
+        name = f"`{user_id}`"
+
+    confirm_msg = await callback.message.edit_text(
+        f"🔓 **Unbanned**\n\n"
+        f"👤 {name}\n"
+        f"👮 **By:** {callback.from_user.mention}\n\n"
+        f"_This message will be removed in 2 minutes._"
+    )
+    await callback.answer("User unbanned! 🔓")
+
+    async def _del_unban_confirm(m=confirm_msg):
+        await asyncio.sleep(120)  # 2 minutes
+        try:
+            await m.delete()
+        except:
+            pass
+    asyncio.ensure_future(_del_unban_confirm())
+
+
 # ── Banned users page helpers ─────────────────────────────────────────────────
 
 async def _send_banned_page(client, send_to, chat_id, banned_list, page=0):
@@ -625,16 +708,21 @@ async def _build_banned_page(client, chat_id, banned_list, page=0):
 )
 async def admin_call_handler(client: Client, message: Message):
     if not message.from_user:
-        return
+        message.stop_propagation()
 
     chat_id = message.chat.id
     s       = await get_settings(chat_id)
+
+    # @admin / #admin should NEVER trigger a movie search, regardless of
+    # whether guard is on/off — so we stop propagation unconditionally
+    # before any early-return below. Only the alert-sending logic past
+    # this point is conditional on guard being enabled / sender not admin.
     if not s.get("enabled", False):
-        return
+        message.stop_propagation()
 
     # Don't trigger when an admin themselves writes @admin (e.g. replying to someone)
     if await is_admin(client, chat_id, message.from_user.id):
-        return
+        message.stop_propagation()
 
     admins   = await get_group_admins(client, chat_id)
     reporter = message.from_user.mention
@@ -656,14 +744,12 @@ async def admin_call_handler(client: Client, message: Message):
         internal_id = str(chat_id)[4:]
         msg_link = f"https://t.me/c/{internal_id}/{message.id}"
 
-    # 1. Reply in group, tagging admins.
-    # tg://user?id= links only render as clickable if the named user has
-    # interacted with the bot/has a resolvable profile in this context — if
-    # get_group_admins comes back empty (e.g. bot lacks permission to list
-    # members, or none were found), we fall back to plain "Admins" text,
-    # which is what shows up as non-clickable.
+    # 1. Reply in group, tagging admins as PLAIN TEXT (not clickable).
+    # Previously used tg://user?id= markdown links, which render clickable
+    # when the named user is resolvable. Plain names are used here instead
+    # so the tag is never a clickable link.
     if admins:
-        tags = " ".join(f"[{a.first_name}](tg://user?id={a.id})" for a in admins[:8])
+        tags = ", ".join(a.first_name for a in admins[:8])
     else:
         tags = "Admins"
     await message.reply(
@@ -690,6 +776,44 @@ async def admin_call_handler(client: Client, message: Message):
             await client.send_message(a.id, pm_text, reply_markup=buttons, disable_web_page_preview=True)
         except:
             pass
+
+    # Stop here so this message never reaches the movie-search plugin
+    # (which runs at a later group). @admin / #admin should only ever
+    # trigger this admin-call alert — never a movie search.
+    message.stop_propagation()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   REPLY GUARD — any reply message should never trigger movie search.
+#   Guard checks (link/forward/long-msg) still run normally for replies via
+#   _check_and_act below; this only blocks the movie-search plugin, which is
+#   why this runs at group=-2 (same priority as admin_call_handler), runs the
+#   guard checks itself, then stops propagation so the message never reaches
+#   the movie-search plugin (which lives at a later group in another file).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@Client.on_message(
+    filters.group
+    & filters.incoming
+    & filters.reply
+    & ~filters.regex(ADMIN_CALL_REGEX),  # admin_call_handler already handles & stops these
+    group=-2
+)
+async def reply_no_search_handler(client: Client, message: Message):
+    if not message.from_user:
+        message.stop_propagation()
+
+    chat_id = message.chat.id
+    s       = await get_settings(chat_id)
+
+    # A reply should never be treated as a movie-search query, regardless
+    # of whether guard is enabled — so stop_propagation always happens by
+    # the end of this handler. Guard checks (link/forward/long-msg) only
+    # run when guard is enabled, matching normal guard behavior elsewhere.
+    if s.get("enabled", False):
+        await _check_and_act(client, message)
+
+    message.stop_propagation()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
