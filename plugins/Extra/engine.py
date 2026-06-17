@@ -2,10 +2,10 @@
 import os
 from openai import AsyncOpenAI
 
-client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))  # ✅ renamed to avoid conflict
 
 async def ai(query):
-    response = await client.chat.completions.create(
+    response = await openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": query}],
         max_tokens=100,
