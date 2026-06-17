@@ -3021,10 +3021,29 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             title = r.get('title') or r.get('name')
             if title:
                 tmdb_titles.append(title)
-        corrected = find_best_match(mv_rqst, tmdb_titles)
-        logger.info(f"SPELL DEBUG: query={mv_rqst} tmdb_titles={tmdb_titles} corrected={corrected}")
+        from database.ia_filterdb import get_search_results
+        all_files, _, _ = await get_search_results(msg.chat.id, mv_rqst, offset=0, filter=True)
+        db_titles = list({f['file_name'].split('(')[0].strip() for f in all_files}) if all_files else []
+        db_titles += tmdb_titles
+        db_titles = list(set(db_titles))
+        corrected = find_best_match(mv_rqst, db_titles)
+        logger.info(f"SPELL DEBUG: query={mv_rqst} db_titles={db_titles} corrected={corrected}")
         if corrected:
             await auto_filter(client, corrected, msg, reply_msg, vj_search_new)
+            return
+        if db_titles:
+            suggestions = db_titles[:5]
+            SPELL_CHECK[mv_id] = suggestions
+            btn = [
+                [InlineKeyboardButton(text=t.strip(), callback_data=f"spol#{reqstr1}#{i}")]
+                for i, t in enumerate(suggestions)
+            ]
+            btn.append([InlineKeyboardButton(text="Close ✖️", callback_data=f"spol#{reqstr1}#close_spellcheck")])
+            await reply_msg.edit_text(
+                f"❌ No results for **{mv_rqst}**\n\n🔍 Did you mean?",
+                reply_markup=InlineKeyboardMarkup(btn),
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
             return
         reqst_gle = urllib.parse.quote_plus(mv_rqst)
         button = [[
