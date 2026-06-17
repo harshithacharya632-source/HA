@@ -580,7 +580,7 @@ async def cb_cmd_unmute(client, callback):
     except:
         name = f"`{user_id}`"
 
-    confirm_msg = await callback.message.edit_text(
+    await callback.message.edit_text(
         f"🔓 **Unmuted**\n\n"
         f"👤 {name}\n"
         f"👮 **By:** {callback.from_user.mention}\n\n"
@@ -588,12 +588,17 @@ async def cb_cmd_unmute(client, callback):
     )
     await callback.answer("User unmuted! 🔓")
 
-    async def _del_unmute_confirm(m=confirm_msg):
+    # Use callback.message directly (not edit_text's return value) — this
+    # avoids any ambiguity about what edit_text returns in edge cases, and
+    # guarantees we're deleting the exact message the buttons were on.
+    target_msg = callback.message
+
+    async def _del_unmute_confirm(m=target_msg):
         await asyncio.sleep(120)  # 2 minutes
         try:
             await m.delete()
-        except:
-            pass
+        except Exception as e:
+            print(f"[guard] failed to auto-delete unmute confirmation: {e}")
     asyncio.ensure_future(_del_unmute_confirm())
 
 
@@ -619,7 +624,7 @@ async def cb_cmd_unban(client, callback):
     except:
         name = f"`{user_id}`"
 
-    confirm_msg = await callback.message.edit_text(
+    await callback.message.edit_text(
         f"🔓 **Unbanned**\n\n"
         f"👤 {name}\n"
         f"👮 **By:** {callback.from_user.mention}\n\n"
@@ -627,12 +632,14 @@ async def cb_cmd_unban(client, callback):
     )
     await callback.answer("User unbanned! 🔓")
 
-    async def _del_unban_confirm(m=confirm_msg):
+    target_msg = callback.message
+
+    async def _del_unban_confirm(m=target_msg):
         await asyncio.sleep(120)  # 2 minutes
         try:
             await m.delete()
-        except:
-            pass
+        except Exception as e:
+            print(f"[guard] failed to auto-delete unban confirmation: {e}")
     asyncio.ensure_future(_del_unban_confirm())
 
 
