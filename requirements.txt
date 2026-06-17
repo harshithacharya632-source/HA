@@ -1,6 +1,8 @@
 pyrofork==2.3.45
 tgcrypto 
 requests 
+fuzzywuzzy
+python-Levenshtein
 telegraph
 bs4 
 shortzy 
