@@ -3027,7 +3027,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             await auto_filter(client, corrected, msg, reply_msg, vj_search_new)
             return
         if tmdb_titles:
-            suggestions = db_titles[:5]
+            suggestions = tmdb_titles[:5]s
             SPELL_CHECK[mv_id] = suggestions
             btn = [
                 [InlineKeyboardButton(text=t.strip(), callback_data=f"spol#{reqstr1}#{i}")]
