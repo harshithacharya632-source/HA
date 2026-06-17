@@ -555,9 +555,15 @@ async def cb_resetwarns(client, callback):
 
 # ── Callbacks: unmute / unban from the warning/ban notice buttons ────────────
 # These buttons are attached to the warn/ban notices in _check_and_act.
-# After the admin taps Unmute/Unban, the confirmation message replacing the
-# notice is auto-deleted from the group after 2 minutes, keeping the chat
-# clean once the action has been taken.
+# Clicking Unmute/Unban performs the action, swaps the button for a disabled
+# "✅ Unmuted/Unbanned by Admin" label (no admin name, not clickable — just
+# the word "Admin"), and the original notice is auto-deleted from the group
+# 2 minutes later.
+
+@Client.on_callback_query(filters.regex(r"^noop$"))
+async def cb_noop(client, callback):
+    await callback.answer()
+
 
 @Client.on_callback_query(filters.regex(r"^cmd_unmute_(\d+)_(-\d+)$"))
 async def cb_cmd_unmute(client, callback):
@@ -574,23 +580,19 @@ async def cb_cmd_unmute(client, callback):
 
     await reset_warns(chat_id, user_id)
 
+    # Keep the original warning message as-is (don't replace its text) —
+    # just disable the Unmute button so it can't be clicked again, and
+    # let the user know via a toast popup instead of editing the message.
     try:
-        target = await client.get_users(user_id)
-        name   = target.mention
+        await callback.message.edit_reply_markup(
+            InlineKeyboardMarkup([[InlineKeyboardButton("✅ Unmuted by Admin", callback_data="noop")]])
+        )
     except:
-        name = f"`{user_id}`"
+        pass
+    await callback.answer("User unmuted! 🔓 This message will be removed in 2 minutes.", show_alert=True)
 
-    await callback.message.edit_text(
-        f"🔓 **Unmuted**\n\n"
-        f"👤 {name}\n"
-        f"👮 **By:** {callback.from_user.mention}\n\n"
-        f"_This message will be removed in 2 minutes._"
-    )
-    await callback.answer("User unmuted! 🔓")
-
-    # Use callback.message directly (not edit_text's return value) — this
-    # avoids any ambiguity about what edit_text returns in edge cases, and
-    # guarantees we're deleting the exact message the buttons were on.
+    # Delete the original warning message itself 2 minutes after unmute,
+    # rather than replacing it with a new confirmation message first.
     target_msg = callback.message
 
     async def _del_unmute_confirm(m=target_msg):
@@ -618,20 +620,17 @@ async def cb_cmd_unban(client, callback):
     await remove_ban_log(chat_id, user_id)
     await reset_warns(chat_id, user_id)
 
+    # Keep the original ban notice as-is — just disable the Unban button
+    # so it can't be clicked again, and confirm via toast popup.
     try:
-        target = await client.get_users(user_id)
-        name   = target.mention
+        await callback.message.edit_reply_markup(
+            InlineKeyboardMarkup([[InlineKeyboardButton("✅ Unbanned by Admin", callback_data="noop")]])
+        )
     except:
-        name = f"`{user_id}`"
+        pass
+    await callback.answer("User unbanned! 🔓 This message will be removed in 2 minutes.", show_alert=True)
 
-    await callback.message.edit_text(
-        f"🔓 **Unbanned**\n\n"
-        f"👤 {name}\n"
-        f"👮 **By:** {callback.from_user.mention}\n\n"
-        f"_This message will be removed in 2 minutes._"
-    )
-    await callback.answer("User unbanned! 🔓")
-
+    # Delete the original ban notice itself 2 minutes after unban.
     target_msg = callback.message
 
     async def _del_unban_confirm(m=target_msg):
