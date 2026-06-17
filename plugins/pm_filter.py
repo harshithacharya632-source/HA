@@ -2981,6 +2981,23 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             await asyncio.sleep(300)
             await fuk.delete()
             await message.delete()
+
+async def ai_spell_check(chat_id, wrong_name):
+    ia = Cinemagoer()
+    search_results = ia.search_movie(wrong_name)
+    movie_list = [movie['title'] for movie in search_results]
+    if not movie_list:
+        return None
+    for _ in range(5):
+        closest_match = process.extractOne(wrong_name, movie_list)
+        if not closest_match or closest_match[1] <= 80:
+            return None
+        movie = closest_match[0]
+        files, _, _ = await get_search_results(chat_id, movie)
+        if files:
+            return movie
+        movie_list.remove(movie)
+    return None
     
 async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
@@ -3012,35 +3029,9 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     if AI_SPELL_CHECK == True and vj_search == True:
         vj_search_new = False
         vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
-        import aiohttp
-        tmdb_url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={mv_rqst}&page=1"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(tmdb_url) as resp:
-                tmdb_data = await resp.json()
-        logger.info(f"SPELL DEBUG RAW: tmdb_data={tmdb_data}")
-        tmdb_titles = []
-        for r in tmdb_data.get('results', []):
-            title = r.get('title') or r.get('name')
-            if title:
-                tmdb_titles.append(title)
-        corrected = find_best_match(mv_rqst, tmdb_titles)
-        logger.info(f"SPELL DEBUG: query={mv_rqst} tmdb_titles={tmdb_titles} corrected={corrected}")
+        corrected = await ai_spell_check(msg.chat.id, mv_rqst)
         if corrected:
             await auto_filter(client, corrected, msg, reply_msg, vj_search_new)
-            return
-        if tmdb_titles:
-            suggestions = tmdb_titles[:5]
-            SPELL_CHECK[mv_id] = suggestions
-            btn = [
-                [InlineKeyboardButton(text=t.strip(), callback_data=f"spol#{reqstr1}#{i}")]
-                for i, t in enumerate(suggestions)
-            ]
-            btn.append([InlineKeyboardButton(text="Close ✖️", callback_data=f"spol#{reqstr1}#close_spellcheck")])
-            await reply_msg.edit_text(
-                f"❌ No results for **{mv_rqst}**\n\n🔍 Did you mean?",
-                reply_markup=InlineKeyboardMarkup(btn),
-                parse_mode=enums.ParseMode.MARKDOWN
-            )
             return
         reqst_gle = urllib.parse.quote_plus(mv_rqst)
         button = [[
