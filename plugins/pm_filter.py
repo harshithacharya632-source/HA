@@ -3026,7 +3026,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         if corrected:
             await auto_filter(client, corrected, msg, reply_msg, vj_search_new)
             return
-        if db_titles:
+        if tmdb_titles:
             suggestions = db_titles[:5]
             SPELL_CHECK[mv_id] = suggestions
             btn = [
