@@ -98,6 +98,18 @@ async def pm_text(bot, message):
         ai_search = True
         reply_msg = await bot.send_message(message.from_user.id, f"<b><i>Searching For {content} 🔍</i></b>", reply_to_message_id=message.id)
         await auto_filter(bot, content, message, reply_msg, ai_search)
+    else:
+        await message.reply_text(
+            f"👋 <b>Hello {message.from_user.mention}!</b>\n\n"
+            f"🎬 I am <b>Goflix</b> File Search Bot!\n\n"
+            f"📌 <b>How to use me?</b>\n"
+            f"➜ Join our group and search any movie or series!\n\n"
+            f"⚡️ I only work in our group, not in PM!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 Search Files", url=GRP_LNK)],
+                [InlineKeyboardButton("📢 Updates Channel", url=CHNL_LNK)]
+            ])
+        )
     
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
