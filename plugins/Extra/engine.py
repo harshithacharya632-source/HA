@@ -4,16 +4,16 @@ import os
 
 async def ai(query):
     openai.api_key = os.environ.get("OPENAI_API_KEY")  # ✅ reads from environment
-    response = openai.Completion.create(
-        engine="text-davinci-002",
-        prompt=query,
+    response = openai.chat.completions.create(
+        model="gpt-3.5-turbo",  # ✅ updated model
+        messages=[
+            {"role": "user", "content": query}
+        ],
         max_tokens=100,
         n=1,
-        stop=None,
-        temperature=0.9,
-        timeout=5
+        temperature=0.9
     )
-    return response.choices[0].text.strip()
+    return response.choices[0].message.content.strip()
      
 async def ask_ai(client, m, message):
     try:
