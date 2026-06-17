@@ -9,9 +9,6 @@ from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerId
 from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from utils import get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap
 from database.users_chats_db import db
-from plugins.spell_correct import find_best_match
-from imdb import Cinemagoer
-from fuzzywuzzy import process
 from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files
 from database.filters_mdb import del_all, find_filter, get_filters
 from database.connections_mdb import mydb, active_connection, all_connections, delete_connection, if_active, make_active, make_inactive
@@ -1063,7 +1060,38 @@ async def combined_files(client, query: CallbackQuery):
     except Exception as e:
         await query.answer(f"❌ Error: {e}", show_alert=True)
 
-#SEASON BUTTON END HERE
+
+# SESSON End Here ##############
+
+# Fix for advantage_spell_chok in pm_filter.py
+async def advantage_spell_chok(client, name, msg, reply_msg, ai_search):
+    try:
+        # Your existing code up to the edit_text call
+        # ...
+        # Before editing, check if message exists
+        try:
+            await reply_msg.edit_text(
+                text=script.I_CUDNT.format(name),
+                reply_markup=InlineKeyboardMarkup(button)
+            )
+        except MessageIdInvalid:
+            logging.error(f"Message ID invalid for reply_msg: {reply_msg.id}")
+            await msg.reply("⚠️ The original message was deleted. Please start a new search.")
+            return
+        except Exception as e:
+            logging.error(f"Error editing message in advantage_spell_chok: {e}")
+            await msg.reply("❌ An error occurred while updating the message.")
+            return
+        # Rest of your code
+        # ...
+    except Exception as e:
+        logging.error(f"Error in advantage_spell_chok: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        await msg.reply("❌ An error occurred. Check logs.")
+
+
+# END SEASON EDIT HERE
 
 
 @Client.on_callback_query(filters.regex(r"^episodes#"))
@@ -2803,7 +2831,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             files, offset, total_results = await get_search_results(message.chat.id, search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
-                if settings["spell_check"] or msg.chat.type == enums.ChatType.PRIVATE:
+                if settings["spell_check"]:
                     return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
                 else:
                     return await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {name}**\n**Make Sure Spelling Is Correct.**")
@@ -2981,25 +3009,79 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             await asyncio.sleep(300)
             await fuk.delete()
             await message.delete()
-
-async def ai_spell_check(chat_id, wrong_name):
-    import asyncio
-    ia = Cinemagoer()
-    search_results = await asyncio.to_thread(ia.search_movie, wrong_name)
-    movie_list = [movie['title'] for movie in search_results]
-    if not movie_list:
-        return None
-    for _ in range(5):
-        closest_match = process.extractOne(wrong_name, movie_list)
-        if not closest_match or closest_match[1] <= 80:
-            return None
-        movie = closest_match[0]
-        files, _, _ = await get_search_results(chat_id, movie)
-        if files:
-            return movie
-        movie_list.remove(movie)
-    return None
     
+async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
+    mv_id = msg.id
+    mv_rqst = name
+    reqstr1 = msg.from_user.id if msg.from_user else 0
+    reqstr = await client.get_users(reqstr1)
+    settings = await get_settings(msg.chat.id)
+    query = re.sub(
+        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*w?|kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|with\ssubtitle(s)?)",
+        "", msg.text, flags=re.IGNORECASE)  # plis contribute some common words
+    query = query.strip() + " movie"
+    try:
+        movies = await get_poster(mv_rqst, bulk=True)
+    except Exception as e:
+        logger.exception(e)
+        reqst_gle = mv_rqst.replace(" ", "+")
+        button = [[
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+        ]]
+        if NO_RESULTS_MSG:
+            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
+        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        await asyncio.sleep(30)
+        await k.delete()
+        return
+    movielist = []
+    if not movies:
+        reqst_gle = mv_rqst.replace(" ", "+")
+        button = [[
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+        ]]
+        if NO_RESULTS_MSG:
+            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
+        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        await asyncio.sleep(30)
+        await k.delete()
+        return
+    movielist += [movie.get('title') for movie in movies]
+    movielist += [f"{movie.get('title')} {movie.get('year')}" for movie in movies]
+    SPELL_CHECK[mv_id] = movielist
+    if AI_SPELL_CHECK == True and vj_search == True:
+        vj_search_new = False
+        vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
+        movienamelist = []
+        movienamelist += [movie.get('title') for movie in movies]
+        for techvj in movienamelist:
+            try:
+                mv_rqst = mv_rqst.capitalize()
+            except:
+                pass
+            if mv_rqst.startswith(techvj[0]):
+                await auto_filter(client, techvj, msg, reply_msg, vj_search_new)
+                break
+        reqst_gle = mv_rqst.replace(" ", "+")
+        button = [[
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+        ]]
+        if NO_RESULTS_MSG:
+            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
+        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        await asyncio.sleep(30)
+        await k.delete()
+        return
+    else:
+        btn = [
+            [
+                InlineKeyboardButton(
+                    text=movie_name.strip(),
+                    callback_data=f"spol#{reqstr1}#{k}",
+                )
+            ]
+            for k, movie_name in enumerate(movielist)
+        ]
 async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
     mv_rqst = name
@@ -3020,20 +3102,44 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         movies = await get_poster(mv_rqst, bulk=True)
     except Exception as e:
         logger.exception(e)
-        movies = []
-    if not movies:
-        movies = []
+        reqst_gle = urllib.parse.quote_plus(mv_rqst)
+        button = [[
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+        ]]
+        if NO_RESULTS_MSG:
+            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
+        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        await asyncio.sleep(30)
+        await k.delete()
+        return
     movielist = []
+    if not movies:
+        reqst_gle = urllib.parse.quote_plus(mv_rqst)
+        button = [[
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+        ]]
+        if NO_RESULTS_MSG:
+            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
+        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        await asyncio.sleep(30)
+        await k.delete()
+        return
     movielist += [movie.get('title') for movie in movies]
     movielist += [f"{movie.get('title')} {movie.get('year')}" for movie in movies]
     SPELL_CHECK[mv_id] = movielist
     if AI_SPELL_CHECK == True and vj_search == True:
         vj_search_new = False
         vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
-        corrected = await ai_spell_check(msg.chat.id, mv_rqst)
-        if corrected:
-            await auto_filter(client, corrected, msg, reply_msg, vj_search_new)
-            return
+        movienamelist = []
+        movienamelist += [movie.get('title') for movie in movies]
+        for techvj in movienamelist:
+            try:
+                mv_rqst = mv_rqst.capitalize()
+            except:
+                pass
+            if mv_rqst.startswith(techvj[0]):
+                await auto_filter(client, techvj, msg, reply_msg, vj_search_new)
+                break
         reqst_gle = urllib.parse.quote_plus(mv_rqst)
         button = [[
             InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
