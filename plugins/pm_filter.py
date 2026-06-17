@@ -3022,7 +3022,8 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             if title:
                 tmdb_titles.append(title)
         from database.ia_filterdb import get_search_results
-        all_files, _, _ = await get_search_results(msg.chat.id, mv_rqst, offset=0, filter=True)
+        all_files, _, _ = await get_search_results(msg.chat.id, mv_rqst[:3], offset=0, filter=True)
+        logger.info(f"DB DEBUG: mv_rqst={mv_rqst} all_files count={len(all_files) if all_files else 0}")
         db_titles = list({f['file_name'].split('(')[0].strip() for f in all_files}) if all_files else []
         db_titles += tmdb_titles
         db_titles = list(set(db_titles))
