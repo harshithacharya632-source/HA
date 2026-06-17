@@ -730,6 +730,40 @@ async def admin_call_handler(client: Client, message: Message):
     if await is_admin(client, chat_id, message.from_user.id):
         message.stop_propagation()
 
+    # ── Check if this @admin call also violates guard rules ──────────────────
+    # If the message contains a link, is forwarded, or exceeds the word limit,
+    # treat it as a guard violation AND notify admins — same warn/mute/ban flow.
+    guard_violation_reason = None
+    if s.get("enabled", False):
+        text_body = message.text or ""
+
+        # Check forwarded
+        if s.get("forward_guard", True) and message.forward_date:
+            guard_violation_reason = "📨 Forwarded message not allowed"
+
+        # Check link (strip @admin/#admin tokens before checking)
+        if not guard_violation_reason and s.get("link_guard", True):
+            text_for_link_check = ADMIN_CALL_REGEX.sub("", text_body)
+            has_link = bool(URL_REGEX.search(text_for_link_check))
+            if not has_link and message.entities:
+                has_link = any(e.type.name in ("URL", "TEXT_LINK") for e in message.entities)
+            if has_link:
+                guard_violation_reason = "🔗 Links not allowed"
+
+        # Check long message
+        if not guard_violation_reason and s.get("longmsg_guard", True):
+            word_count = len(text_body.split())
+            if word_count >= s.get("word_limit", 100):
+                guard_violation_reason = f"📝 Message too long ({word_count} words)"
+
+    if guard_violation_reason:
+        # The @admin call also broke a guard rule — apply warn/mute/ban.
+        # _check_and_act_with_reason handles delete + warn and stops propagation.
+        await _check_and_act_with_reason(client, message, guard_violation_reason)
+        # Note: _check_and_act_with_reason calls message.stop_propagation() at the end.
+        return
+
+    # ── Normal @admin call (no guard violation) — notify admins ─────────────
     admins   = await get_group_admins(client, chat_id)
     reporter = message.from_user.mention
     preview  = (message.text or "")[:300]
@@ -826,54 +860,16 @@ async def reply_no_search_handler(client: Client, message: Message):
 #   MAIN GUARD HANDLER — works silently in group
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def _check_and_act(client: Client, message: Message):
-    """Runs the guard checks (link/forward/long-msg) against a message and
-    takes action (delete + warn/mute/ban) if it violates a rule.
-    Shared by both the new-message handler and the edited-message handler,
-    so that a link added via editing an otherwise-clean message is still caught."""
-    if not message.from_user:
-        return
-
+async def _apply_warn_action(client: Client, message: Message, reason: str):
+    """
+    Core warn/mute/ban logic shared by _check_and_act and _check_and_act_with_reason.
+    Assumes the caller has already deleted the offending message and verified the user
+    is not an admin. Returns after posting the warning/ban notice and scheduling any
+    auto-delete.
+    """
     chat_id = message.chat.id
     user_id = message.from_user.id
     s       = await get_settings(chat_id)
-
-    if not s.get("enabled", False):
-        return
-
-    if await is_admin(client, chat_id, user_id):
-        return
-
-    text = message.text or message.caption or ""
-
-    reason = None
-
-    # 1. Forward
-    if s.get("forward_guard", True) and message.forward_date:
-        reason = "📨 Forwarded message not allowed"
-
-    # 2. Link
-    if not reason and s.get("link_guard", True):
-        # Strip @admin/#admin call-outs first so they're never mistaken for a link
-        text_for_link_check = ADMIN_CALL_REGEX.sub("", text)
-        has_link = bool(URL_REGEX.search(text_for_link_check))
-        if not has_link and message.entities:
-            has_link = any(e.type.name in ("URL", "TEXT_LINK") for e in message.entities)
-        if has_link:
-            reason = "🔗 Links not allowed"
-
-    # 3. Long message
-    if not reason and s.get("longmsg_guard", True):
-        if len(text.split()) >= s.get("word_limit", 100):
-            reason = f"📝 Message too long ({len(text.split())} words)"
-
-    if not reason:
-        return
-
-    try:
-        await message.delete()
-    except:
-        pass
 
     warns = await add_warn(chat_id, user_id)
     w1    = s.get("warn1_mute", 30)
@@ -946,6 +942,76 @@ async def _check_and_act(client: Client, message: Message):
                 pass
         asyncio.ensure_future(_del_warning())
 
+
+async def _check_and_act_with_reason(client: Client, message: Message, reason: str):
+    """
+    Apply guard action when the calling code has already determined the violation
+    reason (e.g. admin_call_handler detects a link inside an @admin message).
+    Deletes the offending message, runs the warn/mute/ban flow, then stops propagation.
+    """
+    if not message.from_user:
+        message.stop_propagation()
+        return
+
+    try:
+        await message.delete()
+    except:
+        pass
+
+    await _apply_warn_action(client, message, reason)
+    message.stop_propagation()
+
+
+async def _check_and_act(client: Client, message: Message):
+    """Runs the guard checks (link/forward/long-msg) against a message and
+    takes action (delete + warn/mute/ban) if it violates a rule.
+    Shared by both the new-message handler and the edited-message handler,
+    so that a link added via editing an otherwise-clean message is still caught."""
+    if not message.from_user:
+        return
+
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    s       = await get_settings(chat_id)
+
+    if not s.get("enabled", False):
+        return
+
+    if await is_admin(client, chat_id, user_id):
+        return
+
+    text = message.text or message.caption or ""
+
+    reason = None
+
+    # 1. Forward
+    if s.get("forward_guard", True) and message.forward_date:
+        reason = "📨 Forwarded message not allowed"
+
+    # 2. Link
+    if not reason and s.get("link_guard", True):
+        # Strip @admin/#admin call-outs first so they're never mistaken for a link
+        text_for_link_check = ADMIN_CALL_REGEX.sub("", text)
+        has_link = bool(URL_REGEX.search(text_for_link_check))
+        if not has_link and message.entities:
+            has_link = any(e.type.name in ("URL", "TEXT_LINK") for e in message.entities)
+        if has_link:
+            reason = "🔗 Links not allowed"
+
+    # 3. Long message
+    if not reason and s.get("longmsg_guard", True):
+        if len(text.split()) >= s.get("word_limit", 100):
+            reason = f"📝 Message too long ({len(text.split())} words)"
+
+    if not reason:
+        return
+
+    try:
+        await message.delete()
+    except:
+        pass
+
+    await _apply_warn_action(client, message, reason)
     message.stop_propagation()
 
 
