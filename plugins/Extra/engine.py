@@ -1,19 +1,21 @@
 
+import openai
 import os
-from openai import AsyncOpenAI
-
-openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))  # ✅ renamed to avoid conflict
 
 async def ai(query):
-    response = await openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": query}],
+    openai.api_key = os.environ.get("OPENAI_API_KEY")  # ✅ reads from environment
+    response = openai.Completion.create(
+        engine="text-davinci-002",
+        prompt=query,
         max_tokens=100,
-        temperature=0.9
+        n=1,
+        stop=None,
+        temperature=0.9,
+        timeout=5
     )
-    return response.choices[0].message.content.strip()
-
-async def ask_ai(client_tg, m, message):
+    return response.choices[0].text.strip()
+     
+async def ask_ai(client, m, message):
     try:
         question = message.text.split(" ", 1)[1]
         response = await ai(question)
