@@ -64,8 +64,8 @@ async def get_group_admins(client, chat_id):
         ):
             if m.user and not m.user.is_bot:
                 admins.append(m.user)
-    except:
-        pass
+    except Exception as e:
+        print(f"[guard] get_group_admins failed for chat {chat_id}: {e}")
     return admins
 
 
@@ -645,26 +645,49 @@ async def admin_call_handler(client: Client, message: Message):
     except:
         chat_title = "Group"
 
-    # 1. Reply in group, tagging admins
+    # Build a clickable "jump to message" link.
+    # Public groups: https://t.me/<username>/<msg_id>
+    # Private supergroups: https://t.me/c/<internal_id>/<msg_id>
+    #   (internal_id = chat_id with the leading -100 stripped)
+    msg_link = None
+    if message.chat.username:
+        msg_link = f"https://t.me/{message.chat.username}/{message.id}"
+    elif str(chat_id).startswith("-100"):
+        internal_id = str(chat_id)[4:]
+        msg_link = f"https://t.me/c/{internal_id}/{message.id}"
+
+    # 1. Reply in group, tagging admins.
+    # tg://user?id= links only render as clickable if the named user has
+    # interacted with the bot/has a resolvable profile in this context — if
+    # get_group_admins comes back empty (e.g. bot lacks permission to list
+    # members, or none were found), we fall back to plain "Admins" text,
+    # which is what shows up as non-clickable.
     if admins:
         tags = " ".join(f"[{a.first_name}](tg://user?id={a.id})" for a in admins[:8])
     else:
         tags = "Admins"
     await message.reply(
-        f"🔔 {tags}\n👤 {reporter} needs admin attention here."
+        f"🔔 {tags}\n👤 {reporter} needs admin attention here.",
+        disable_web_page_preview=True
     )
 
-    # 2. PM each admin with the message details
+    # 2. PM each admin with the message details + a jump-to-message link
     pm_text = (
         f"🔔 **Admin Call**\n\n"
         f"📌 **Group:** {chat_title}\n"
         f"👤 **From:** {reporter}\n"
-        f"💬 **Message:** {preview}\n\n"
-        f"👉 Check the group to see the full context."
+        f"💬 **Message:** {preview}\n"
     )
+    buttons = None
+    if msg_link:
+        pm_text += f"\n🔗 [Jump to message]({msg_link})"
+        buttons = InlineKeyboardMarkup([[InlineKeyboardButton("👉 Open in Group", url=msg_link)]])
+    else:
+        pm_text += "\n👉 Check the group to see the full context."
+
     for a in admins:
         try:
-            await client.send_message(a.id, pm_text)
+            await client.send_message(a.id, pm_text, reply_markup=buttons, disable_web_page_preview=True)
         except:
             pass
 
