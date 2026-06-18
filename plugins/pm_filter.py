@@ -126,7 +126,7 @@ async def next_page(bot, query):
       #  await query.answer(script.OLD_ALRT_TXT.format(query.from_user.first_name),show_alert=True)
        # return
 
-    files, n_offset, total = await get_search_results(query.message.chat.id, search, offset=offset, filter=True)
+    files, n_offset, total = await get_search_results(query.message.chat.id, search, offset=offset, max_results=8, filter=True)
     try:
         n_offset = int(n_offset)
     except:
@@ -275,7 +275,7 @@ async def advantage_spoll_choker(bot, query):
     if gl == False:
         k = await manual_filters(bot, query.message, text=movie)
         if k == False:
-            files, offset, total_results = await get_search_results(query.message.chat.id, movie, offset=0, filter=True)
+            files, offset, total_results = await get_search_results(query.message.chat.id, movie, offset=0, max_results=8, filter=True)
             if files:
                 k = (movie, files, offset, total_results)
                 ai_search = True
@@ -2840,7 +2840,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                 search, flags=re.IGNORECASE
             )
 
-            files, offset, total_results = await get_search_results(message.chat.id, search, offset=0, filter=True)
+            files, offset, total_results = await get_search_results(message.chat.id, search, offset=0, max_results=8, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
                 if settings["spell_check"]:
