@@ -690,32 +690,45 @@ async def start(client, message):
 
 @Client.on_callback_query(filters.regex(r"^gfnext#"))
 async def getfile_next(client, callback_query):
-     _, query, grpid, offset = callback_query.data.split("#")
-     grpid = int(grpid)
-     offset = int(offset)
-     files, next_offset, total_results = await get_search_results(grpid, query.lower(), offset=offset, max_results=8, filter=True)
-     if not files:
-         return await callback_query.answer("No more files!", show_alert=True)
-     settings = await get_settings(grpid)
-     pre = 'filep' if settings['file_secure'] else 'file'
-     btn = []
-     for file in files:
-         btn.append([
-             InlineKeyboardButton(
-                 text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}",
-                 callback_data=f'{pre}#{file["file_id"]}'
-             )
-         ])
-     nav = []
-     if offset > 0:
-         prev_offset = max(0, offset - 8)
-         nav.append(InlineKeyboardButton("⬅️ PREV", callback_data=f"gfnext#{query}#{grpid}#{prev_offset}"))
-     if next_offset:
-         nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"gfnext#{query}#{grpid}#{next_offset}"))
-     if nav:
-         btn.append(nav)
-     await callback_query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
-     await callback_query.answer()
+    _, query, grpid, offset = callback_query.data.split("#")
+    grpid = int(grpid)
+    offset = int(offset)
+    files, next_offset, total_results = await get_search_results(grpid, query.lower(), offset=offset, max_results=8, filter=True)
+    if not files:
+        return await callback_query.answer("No more files!", show_alert=True)
+    settings = await get_settings(grpid)
+    
+    # Fix 1: use .get() to avoid KeyError
+    pre = 'filep' if settings.get('file_secure', False) else 'file'
+    
+    # Fix 2: calculate current page and total pages
+    current_page = (offset // 8) + 1
+    total_pages = (total_results + 7) // 8  # ceiling division
+
+    btn = []
+    for file in files:
+        btn.append([
+            InlineKeyboardButton(
+                text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}",
+                callback_data=f'{pre}#{file["file_id"]}'
+            )
+        ])
+    
+    nav = []
+    if offset > 0:
+        prev_offset = max(0, offset - 8)
+        nav.append(InlineKeyboardButton("⬅️ PREV", callback_data=f"gfnext#{query}#{grpid}#{prev_offset}"))
+    
+    # Page indicator button (non-clickable)
+    nav.append(InlineKeyboardButton(f"📄 {current_page} / {total_pages}", callback_data="noop"))
+    
+    if next_offset:
+        nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"gfnext#{query}#{grpid}#{next_offset}"))
+    if nav:
+        btn.append(nav)
+    
+    await callback_query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(btn))
+    await callback_query.answer()
 
 @Client.on_message(filters.command('channel') & filters.user(ADMINS))
 async def channel_info(bot, message):
