@@ -133,11 +133,27 @@ def schedule_update(bot, base_name, delay=5):
     if handle := pending_updates.get(base_name):
         if not handle.cancelled():
             handle.cancel()
-    loop = asyncio.get_event_loop()
-    pending_updates[base_name] = loop.call_later(
-        delay,
-        lambda: asyncio.create_task(update_movie_message(bot, base_name))
-    )
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            return
+        pending_updates[base_name] = loop.call_later(
+            delay,
+            lambda: asyncio.ensure_future(
+                _safe_update(bot, base_name), loop=loop
+            )
+        )
+    except Exception as e:
+        logger.warning(f"schedule_update failed for {base_name}: {e}")
+
+
+async def _safe_update(bot, base_name):
+    try:
+        await update_movie_message(bot, base_name)
+    except Exception as e:
+        logger.warning(f"_safe_update silenced error for {base_name}: {e}")
+    finally:
+        pending_updates.pop(base_name, None)
 
 
 def extract_media_info(filename: str, caption: str):
