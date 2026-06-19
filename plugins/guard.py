@@ -438,9 +438,8 @@ async def mute_cmd(client, message):
 
     if target is None:
         return await message.reply(
-            "❌ Reply to a user or use `/mute @username <minutes>`
-"
-            "Example: `/mute @user 30`"
+            "❌ Reply to a user or use /mute @username minutes\n"
+            "Example: /mute @user 30"
         )
 
     if await is_admin(client, chat_id, target.id):
