@@ -155,7 +155,8 @@ def settings_text(s: dict, chat_title: str = "Group") -> str:
 
 @Client.on_message(filters.command(["guard", "guardsettings"]) & filters.group)
 async def guard_cmd(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
         return await message.reply("❌ Admins only!")
 
     chat_id    = message.chat.id
