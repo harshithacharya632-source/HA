@@ -238,7 +238,8 @@ async def guard_cmd(client, message):
 
 @Client.on_message(filters.command(["warns"]) & filters.group)
 async def guard_warns_group(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
         return await message.reply("❌ Admins only!")
 
     chat_id  = message.chat.id
@@ -299,7 +300,8 @@ async def guard_warns_group(client, message):
 
 @Client.on_message(filters.command("resetwarns") & filters.group)
 async def reset_warns_cmd(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
         return await message.reply("❌ Admins only!")
 
     target = None
@@ -327,7 +329,8 @@ async def reset_warns_cmd(client, message):
 
 @Client.on_message(filters.command("bannedusers") & filters.group)
 async def banned_users_cmd(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
         return await message.reply("❌ Admins only!")
 
     chat_id  = message.chat.id
@@ -346,7 +349,8 @@ async def banned_users_cmd(client, message):
 
 @Client.on_message(filters.command(["guardhelp", "ghelp"]) & filters.group)
 async def guard_help_cmd(client, message):
-    if not await is_admin(client, message.chat.id, message.from_user.id):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
         return await message.reply("❌ Admins only!")
 
     text = (
