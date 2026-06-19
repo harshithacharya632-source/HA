@@ -2606,7 +2606,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data == "kannada_info":
         btn = [[
             InlineKeyboardButton("⟸ Bᴀᴄᴋ", callback_data="start"),
-            nlineKeyboardButton("Cᴏɴᴛᴀᴄᴛ", url="https://t.me/Goflix_AdminBot")
+            InlineKeyboardButton("Cᴏɴᴛᴀᴄᴛ", url="https://t.me/Goflix_AdminBot")
         ]]
         await client.edit_message_media(
             query.message.chat.id, 
