@@ -2774,7 +2774,8 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
     req = message.from_user.id if message.from_user else 0
     FRESH[key] = search
     temp.GETALL[key] = files
-    temp.SHORT[message.from_user.id] = message.chat.id
+    if message.from_user:
+        temp.SHORT[message.from_user.id] = message.chat.id
     if settings.get("button", False):
         btn = [
             [
