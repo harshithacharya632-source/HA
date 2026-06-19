@@ -2761,8 +2761,17 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                 if settings["spell_check"]:
                     return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
                 else:
-                    return await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {name}**\n**Make Sure Spelling Is Correct.**")
+                    await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {name}**\n**Make Sure Spelling Is Correct.**")
+                    await asyncio.sleep(15)
+                    try:
+                        await reply_msg.delete()
+                    except: pass
+                    return
         else:
+            await asyncio.sleep(15)
+            try:
+                await reply_msg.delete()
+            except: pass
             return
     else:
         message = msg.message.reply_to_message  # msg will be callback query
