@@ -2847,8 +2847,8 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             **locals()
         )
 
-if message.from_user:                                          # ✅ fix 1
-    temp.IMDB_CAP[message.from_user.id] = cap
+        if message.from_user:
+            temp.IMDB_CAP[message.from_user.id] = cap
         if not settings["button"]:
             cap += "<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n"
             for file in files:
@@ -2856,9 +2856,9 @@ if message.from_user:                                          # ✅ fix 1
     else:
         user_mention = message.from_user.mention if message.from_user else "Anonymous"
         if settings["button"]:
-            cap = f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"  # ✅ fix 2
+            cap = f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
         else:
-            cap = f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"  # ✅ fix 3
+            cap = f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
             cap += "<b><u>🍿 Your Movie Files 👇</u></b>\n"
             for file in files:
                 cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}</a></b>\n"
