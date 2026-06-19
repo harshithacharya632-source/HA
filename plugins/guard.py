@@ -451,15 +451,10 @@ async def mute_cmd(client, message):
     until = await do_mute(client, chat_id, target.id, mute_min)
 
     mute_msg = await message.reply(
-        f"🔇 **Muted**
-
-"
-        f"👤 {target.mention}
-"
-        f"⏱ **Duration:** {mute_min} min
-"
-        f"🕐 **Until:** `{until.strftime('%d.%m.%y %H:%M')} UTC`
-"
+        f"🔇 **Muted**\n\n"
+        f"👤 {target.mention}\n"
+        f"⏱ **Duration:** {mute_min} min\n"
+        f"🕐 **Until:** `{until.strftime('%d.%m.%y %H:%M')} UTC`\n"
         f"📌 **Reason:** {reason_text}",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🔓 Unmute", callback_data=f"cmd_unmute_{target.id}_{chat_id}")
@@ -497,9 +492,7 @@ async def unmute_cmd(client, message):
     try:
         await do_unmute(client, chat_id, target.id)
         await reset_warns(chat_id, target.id)
-        msg = await message.reply(f"✅ **Unmuted**
-
-👤 {target.mention}")
+        msg = await message.reply(f"✅ **Unmuted**\n\n👤 {target.mention}")
         await asyncio.sleep(30)
         try: await msg.delete()
         except: pass
@@ -535,11 +528,8 @@ async def ban_cmd(client, message):
         return await message.reply(f"❌ Failed to ban: {e}")
 
     ban_msg = await message.reply(
-        f"🚫 **Banned**
-
-"
-        f"👤 {target.mention}
-"
+        f"🚫 **Banned**\n\n"
+        f"👤 {target.mention}\n"
         f"📌 **Reason:** {reason_text}",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🔓 Unban", callback_data=f"cmd_unban_{target.id}_{chat_id}")
@@ -576,9 +566,7 @@ async def unban_cmd(client, message):
         await client.unban_chat_member(chat_id, target.id)
         await remove_ban_log(chat_id, target.id)
         await reset_warns(chat_id, target.id)
-        msg = await message.reply(f"✅ **Unbanned**
-
-👤 {target.mention}")
+        msg = await message.reply(f"✅ **Unbanned**\n\n👤 {target.mention}")
         await asyncio.sleep(30)
         try: await msg.delete()
         except: pass
