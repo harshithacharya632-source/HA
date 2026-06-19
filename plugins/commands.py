@@ -16,6 +16,7 @@ from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
 from database.users_chats_db import db
+from plugins.pm_filter import FRESH
 from database.guard_db import reset_warns, remove_ban_log, get_settings
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
@@ -259,7 +260,9 @@ async def start(client, message):
             ])
         nav = []
         if next_offset:
-            nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"gfnext#{query}#{grpid}#{next_offset}"))
+            _qkey = str(abs(hash(query)))[:8]
+            FRESH[_qkey] = query
+            nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"gfnext#{_qkey}#{grpid}#{next_offset}"))
         if nav:
             btn.append(nav)
         k = await reply_msg.edit_text(
@@ -690,7 +693,8 @@ async def start(client, message):
 
 @Client.on_callback_query(filters.regex(r"^gfnext#"))
 async def getfile_next(client, callback_query):
-    _, query, grpid, offset = callback_query.data.split("#")
+    _, qkey, grpid, offset = callback_query.data.split("#")
+    query = FRESH.get(qkey, qkey)
     grpid = int(grpid)
     offset = int(offset)
     files, next_offset, total_results = await get_search_results(grpid, query.lower(), offset=offset, max_results=8, filter=True)
@@ -717,13 +721,13 @@ async def getfile_next(client, callback_query):
     nav = []
     if offset > 0:
         prev_offset = max(0, offset - 8)
-        nav.append(InlineKeyboardButton("⬅️ PREV", callback_data=f"gfnext#{query}#{grpid}#{prev_offset}"))
+        nav.append(InlineKeyboardButton("⬅️ PREV", callback_data=f"gfnext#{qkey}#{grpid}#{prev_offset}"))
     
     # Page indicator button (non-clickable)
     nav.append(InlineKeyboardButton(f"📄 {current_page} / {total_pages}", callback_data="noop"))
     
     if next_offset:
-        nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"gfnext#{query}#{grpid}#{next_offset}"))
+        nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"gfnext#{qkey}#{grpid}#{next_offset}"))
     if nav:
         btn.append(nav)
     
