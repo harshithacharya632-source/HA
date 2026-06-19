@@ -48,6 +48,9 @@ BAN_PM_TEXT = (
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 async def is_admin(client, chat_id, user_id):
+    # Anonymous admin sends as group itself — Pyrogram id 1087968824
+    if user_id in (1087968824, 136817688):
+        return True
     try:
         m = await client.get_chat_member(chat_id, user_id)
         return m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
@@ -385,6 +388,207 @@ async def guard_help_cmd(client, message):
         await message.reply("📲 Guard help sent to your PM!")
     except:
         await message.reply(text)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#   MANUAL MUTE / UNMUTE / BAN / UNBAN COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _resolve_target(client, message):
+    """Returns (target_user, minutes, reason) from reply or @username arg."""
+    args = message.command[1:]  # strip the command itself
+    target = None
+    minutes = None
+    reason_parts = []
+
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target = message.reply_to_message.from_user
+        # remaining args = [minutes_or_reason ...]
+        for a in args:
+            if a.isdigit() and minutes is None:
+                minutes = int(a)
+            else:
+                reason_parts.append(a)
+    elif args:
+        first = args[0].lstrip("@")
+        try:
+            target = await client.get_users(first)
+            args = args[1:]
+        except:
+            return None, None, "User not found"
+        for a in args:
+            if a.isdigit() and minutes is None:
+                minutes = int(a)
+            else:
+                reason_parts.append(a)
+
+    reason = " ".join(reason_parts) if reason_parts else None
+    return target, minutes, reason
+
+
+@Client.on_message(filters.command(["mute"]) & filters.group)
+async def mute_cmd(client, message):
+    # Allow real admins AND anonymous admins (from_user may be None for anon)
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
+        return await message.reply("❌ Admins only!")
+
+    chat_id = message.chat.id
+    s = await get_settings(chat_id)
+    target, minutes, reason = await _resolve_target(client, message)
+
+    if target is None:
+        return await message.reply(
+            "❌ Reply to a user or use `/mute @username <minutes>`
+"
+            "Example: `/mute @user 30`"
+        )
+
+    if await is_admin(client, chat_id, target.id):
+        return await message.reply("❌ Cannot mute an admin!")
+
+    mute_min = minutes if minutes and minutes > 0 else s.get("warn1_mute", 30)
+    reason_text = reason or "Manual mute by admin"
+
+    until = await do_mute(client, chat_id, target.id, mute_min)
+
+    mute_msg = await message.reply(
+        f"🔇 **Muted**
+
+"
+        f"👤 {target.mention}
+"
+        f"⏱ **Duration:** {mute_min} min
+"
+        f"🕐 **Until:** `{until.strftime('%d.%m.%y %H:%M')} UTC`
+"
+        f"📌 **Reason:** {reason_text}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔓 Unmute", callback_data=f"cmd_unmute_{target.id}_{chat_id}")
+        ]])
+    )
+
+    # Auto-delete the mute notice AND the offending message after mute expires
+    offending = message.reply_to_message
+
+    async def _auto_delete_mute(mm=mute_msg, om=offending, delay=mute_min * 60):
+        await asyncio.sleep(delay)
+        try: await mm.delete()
+        except: pass
+        if om:
+            try: await om.delete()
+            except: pass
+    asyncio.ensure_future(_auto_delete_mute())
+
+    try: await message.delete()
+    except: pass
+
+
+@Client.on_message(filters.command(["unmute"]) & filters.group)
+async def unmute_cmd(client, message):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
+        return await message.reply("❌ Admins only!")
+
+    chat_id = message.chat.id
+    target, _, _ = await _resolve_target(client, message)
+
+    if target is None:
+        return await message.reply("❌ Reply to a user or use `/unmute @username`")
+
+    try:
+        await do_unmute(client, chat_id, target.id)
+        await reset_warns(chat_id, target.id)
+        msg = await message.reply(f"✅ **Unmuted**
+
+👤 {target.mention}")
+        await asyncio.sleep(30)
+        try: await msg.delete()
+        except: pass
+    except Exception as e:
+        await message.reply(f"❌ Failed: {e}")
+
+    try: await message.delete()
+    except: pass
+
+
+@Client.on_message(filters.command(["ban"]) & filters.group)
+async def ban_cmd(client, message):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
+        return await message.reply("❌ Admins only!")
+
+    chat_id = message.chat.id
+    target, _, reason = await _resolve_target(client, message)
+
+    if target is None:
+        return await message.reply("❌ Reply to a user or use `/ban @username <reason>`")
+
+    if await is_admin(client, chat_id, target.id):
+        return await message.reply("❌ Cannot ban an admin!")
+
+    reason_text = reason or "Manual ban by admin"
+
+    try:
+        await client.restrict_chat_member(chat_id, target.id, ChatPermissions())
+        await log_ban(chat_id, target.id)
+        await reset_warns(chat_id, target.id)
+    except Exception as e:
+        return await message.reply(f"❌ Failed to ban: {e}")
+
+    ban_msg = await message.reply(
+        f"🚫 **Banned**
+
+"
+        f"👤 {target.mention}
+"
+        f"📌 **Reason:** {reason_text}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔓 Unban", callback_data=f"cmd_unban_{target.id}_{chat_id}")
+        ]])
+    )
+
+    # Delete banned user's message if replied to
+    if message.reply_to_message:
+        try: await message.reply_to_message.delete()
+        except: pass
+
+    try: await message.delete()
+    except: pass
+
+    try:
+        await client.send_message(target.id, BAN_PM_TEXT)
+    except:
+        pass
+
+
+@Client.on_message(filters.command(["unban"]) & filters.group)
+async def unban_cmd(client, message):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
+        return await message.reply("❌ Admins only!")
+
+    chat_id = message.chat.id
+    target, _, _ = await _resolve_target(client, message)
+
+    if target is None:
+        return await message.reply("❌ Reply to a user or use `/unban @username`")
+
+    try:
+        await client.unban_chat_member(chat_id, target.id)
+        await remove_ban_log(chat_id, target.id)
+        await reset_warns(chat_id, target.id)
+        msg = await message.reply(f"✅ **Unbanned**
+
+👤 {target.mention}")
+        await asyncio.sleep(30)
+        try: await msg.delete()
+        except: pass
+    except Exception as e:
+        await message.reply(f"❌ Failed: {e}")
+
+    try: await message.delete()
+    except: pass
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #   PM SETTINGS CALLBACKS
@@ -929,10 +1133,11 @@ async def _apply_warn_action(client: Client, message: Message, reason: str):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-    # Auto-delete the warning message from the group once the mute period ends.
+    # Auto-delete the warning message AND original offending message once mute ends.
     # (Ban notices are left in the group since the ban is permanent.)
     if warns in (1, 2):
         delay = (w1 if warns == 1 else w2) * 60
+        orig_msg = message  # the offending message (already deleted above, but keep ref)
 
         async def _del_warning(wm=warn_msg, delay=delay):
             await asyncio.sleep(delay)
