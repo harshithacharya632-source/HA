@@ -124,6 +124,10 @@ async def get_movie_details(query, id=False, file=None):
             plot = plot[:800] + "..."
             
         poster_url = movie.get('full-size cover url')
+        # FIX: guard against None poster_url before calling .endswith()
+        if poster_url:
+            poster_url = poster_url + "._V1_SX1440.jpg" if poster_url.endswith("@.jpg") else poster_url
+        
         return {
             'title': movie.get('title'),
             'votes': movie.get('votes'),
@@ -148,7 +152,7 @@ async def get_movie_details(query, id=False, file=None):
             'release_date': date,
             'year': movie.get('year'),
             'genres': list_to_str(movie.get("genres")),
-            'poster_url': (poster_url + "._V1_SX1440.jpg" if poster_url.endswith("@.jpg") else poster_url) if poster_url else None,
+            'poster_url': poster_url,
             'plot': plot,
             'rating': str(movie.get("rating", "N/A")),
             'url': f'https://www.imdb.com/title/tt{movieid}'
@@ -184,12 +188,19 @@ async def get_movie_detailsx(query, id=False, file=None):
             if not results:
                 logger.warning(f"No TMDB results for: {q}")
                 return None
-            result = results[0]
+
+            # Skip 'person' results
+            result = next((r for r in results if r.get("media_type") in ("movie", "tv")), None)
+            if not result:
+                logger.warning(f"No movie/tv result in TMDB for: {q}")
+                return None
+
             tmdb_id = result.get("id")
             media_type = result.get("media_type") or "movie"
 
+            # append_to_response=videos fetches trailer in same request
             detail_url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}"
-            params = {"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "credits"}
+            params = {"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "videos"}
             async with session.get(detail_url, params=params) as resp:
                 if resp.status != 200:
                     return None
@@ -204,6 +215,24 @@ async def get_movie_detailsx(query, id=False, file=None):
             plot = detail.get("overview", "")
             tmdb_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}"
 
+            # YouTube trailer: official first, then any trailer, then any video
+            trailer_url = None
+            videos = detail.get("videos", {}).get("results", [])
+            for v in videos:
+                if v.get("site") == "YouTube" and v.get("type") == "Trailer" and v.get("official"):
+                    trailer_url = f"https://www.youtube.com/watch?v={v['key']}"
+                    break
+            if not trailer_url:
+                for v in videos:
+                    if v.get("site") == "YouTube" and v.get("type") == "Trailer":
+                        trailer_url = f"https://www.youtube.com/watch?v={v['key']}"
+                        break
+            if not trailer_url:
+                for v in videos:
+                    if v.get("site") == "YouTube":
+                        trailer_url = f"https://www.youtube.com/watch?v={v['key']}"
+                        break
+
             return {
                 "title": title,
                 "year": int(year) if year else None,
@@ -214,54 +243,8 @@ async def get_movie_detailsx(query, id=False, file=None):
                 "backdrop_url": f"https://image.tmdb.org/t/p/w1280{backdrop}" if backdrop else None,
                 "tmdb_url": tmdb_url,
                 "tmdb_id": tmdb_id,
+                "trailer_url": trailer_url,
             }
     except Exception as e:
         logger.error(f"Direct TMDB error: {e}")
         return None
-
-    # Normalize fields
-    details = {}
-    details['title'] = data.get('title') or data.get('localized_title')
-    details['year'] = (data.get('year', 0)) if data.get('year') else None
-    details['release_date'] = data.get('release_date')
-    details['rating'] = round(float(data.get('rating', 0)), 1) if data.get('rating') is not None else None
-    details['votes'] = int(data.get('votes', 0))
-    details['runtime'] = data.get('runtime')
-    details['certificates'] = data.get('certificates')
-    details['tmdb_url'] = data.get('url')
-    
-    for key in ('genres', 'languages', 'countries'):
-        raw = data.get(key)
-        details[key] = [s.strip() for s in raw.split(',')] if raw else []
-    for role in ('director', 'writer', 'producer', 'composer', 'cinematographer', 'cast'):
-        raw = data.get(role)
-        details[role] = [s.strip() for s in raw.split(',')] if raw else []
-        
-    details['plot'] = data.get('plot')
-    details['tagline'] = data.get('tagline')
-    details['box_office'] = (data.get('box_office', 0)) if data.get('box_office') else None
-    raw_dist = data.get('distributors')
-    details['distributors'] = [d.strip() for d in raw_dist.split(',')] if raw_dist else []
-    details['imdb_id'] = data.get('imdb_id')
-    details['tmdb_id'] = data.get('tmdb_id')
-    
-    posters = data.get('images', {}).get('posters', {})
-    original_language = data.get('images', {}).get('original_language')
-    poster_url = data.get('poster_url')
-    if not poster_url:
-        for key in ('en', original_language, 'xx'):
-            if key and posters.get(key):
-                poster_url = posters[key][0]
-                break
-    details['poster_url'] = poster_url.replace("/original/", "/w1280/") if poster_url else None
-
-    backdrops = data.get('images', {}).get('backdrops', {})
-    original_language = data.get('images', {}).get('original_language')
-    backdrop_url = None
-    for key in ('en', original_language, 'xx' or 'no_lang'):
-        if key and backdrops.get(key):
-            backdrop_url = backdrops[key][0]
-            break
-    details['backdrop_url'] = backdrop_url.replace("/original/", "/w1280/") if backdrop_url else None
-
-    return details
