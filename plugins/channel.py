@@ -323,15 +323,13 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         else:
             logger.info(f"TMDB no result for '{base_name}', trying IMDB")
 
-        # Step 2: IMDB — strip episode/season/part tokens for cleaner search
-        # e.g. "Detective Conan Ep1204 Episode 1204" → "Detective Conan"
-        # e.g. "Krishnavataram P1 The Heart 2026" → "Krishnavataram The Heart 2026"
+        # Step 2: IMDB — only for imdb_url and languages bonus, TMDB is primary
         imdb_search_name = re.sub(
             r'\b(?:Ep|Episode|Part|P)\s*\d+\b', '', base_name, flags=re.IGNORECASE
         ).strip()
         imdb_search_name = re.sub(r'\s+', ' ', imdb_search_name).strip()
         imdb_data = await get_movie_details(imdb_search_name) or {}
-        logger.info(f"DEBUG '{base_name}' → imdb_search='{imdb_search_name}': rating={imdb_data.get('rating')!r} url={imdb_data.get('url')!r} lang={imdb_data.get('languages')!r}")
+        logger.info(f"DEBUG '{base_name}': rating={imdb_data.get('rating')!r} url={imdb_data.get('url')!r} lang={imdb_data.get('languages')!r}")
 
         # --- POSTER: TMDB first, IMDB fallback ---
         if not poster_url:
@@ -339,21 +337,18 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             is_backdrop = False
         final_poster = backdrop_url if (LANDSCAPE_POSTER and TMDB_POSTER and is_backdrop) else poster_url
 
-        # --- RATING: IMDB preferred, TMDB fallback, guard 0/0.0 ---
-        imdb_rating = imdb_data.get("rating", "")
-        try:
-            imdb_rating_val = float(str(imdb_rating).strip())
-            rating = f"{imdb_rating_val:.1f}" if imdb_rating_val > 0 else None
-        except (ValueError, TypeError):
-            rating = None
+        # --- RATING: TMDB primary, IMDB fallback, guard 0/0.0 ---
+        tmdb_rating_val = (tmdb_data or {}).get("rating", 0) or 0
+        if tmdb_rating_val > 0:
+            rating = f"{tmdb_rating_val:.1f}"
+        else:
+            try:
+                imdb_rating_val = float(str(imdb_data.get("rating", "")).strip())
+                rating = f"{imdb_rating_val:.1f}" if imdb_rating_val > 0 else "N/A"
+            except (ValueError, TypeError):
+                rating = "N/A"
 
-        if not rating and tmdb_data:
-            tmdb_rating_val = tmdb_data.get("rating", 0) or 0
-            rating = f"{tmdb_rating_val:.1f}" if tmdb_rating_val > 0 else "N/A"
-        elif not rating:
-            rating = "N/A"
-
-        # --- GENRES: TMDB preferred (richer), IMDB fallback ---
+        # --- GENRES: TMDB primary, IMDB fallback ---
         raw_genres = (tmdb_data or {}).get("genres") or imdb_data.get("genres", "N/A")
         if isinstance(raw_genres, list):
             genres = ", ".join(str(g) for g in raw_genres if g) or "N/A"
@@ -362,9 +357,9 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         else:
             genres = "N/A"
 
-        # --- LANGUAGES: merge IMDB + filename ---
+        # --- LANGUAGES: IMDB bonus + filename (TMDB doesn't give spoken languages) ---
         imdb_languages = imdb_data.get("languages", "")
-        lang_from_file = media_info["language"]  # already extracted from filename
+        lang_from_file = media_info["language"]
         lang_parts = set()
         if imdb_languages:
             lang_parts.update(l.strip() for l in imdb_languages.split(",") if l.strip())
@@ -372,15 +367,19 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             lang_parts.update(l.strip() for l in lang_from_file.split(",") if l.strip())
         language = ", ".join(sorted(lang_parts)) if lang_parts else "N/A"
 
-        # --- PLOT: IMDB preferred, TMDB fallback ---
-        raw_plot = imdb_data.get("plot") or (tmdb_data or {}).get("plot") or ""
+        # --- PLOT: TMDB primary, IMDB fallback ---
+        raw_plot = (tmdb_data or {}).get("plot") or imdb_data.get("plot") or ""
         plot_text = raw_plot.strip() if raw_plot else ""
 
-        # --- IMDB URL: always from imdb_data, never TMDB url ---
-        imdb_url = imdb_data.get("url", "")
+        # --- IMDB URL: from TMDB external_ids (reliable), fallback to imdb_data ---
+        imdb_url = (tmdb_data or {}).get("imdb_url", "") or imdb_data.get("url", "")
+        if not imdb_url:
+            imdb_id = imdb_data.get("imdb_id", "")
+            if imdb_id:
+                imdb_url = f"https://www.imdb.com/title/{imdb_id}"
 
-        # --- YEAR: filename first, then IMDB, then TMDB ---
-        year = media_info["year"] or imdb_data.get("year") or (tmdb_data or {}).get("year")
+        # --- YEAR: TMDB primary, filename, then IMDB ---
+        year = (tmdb_data or {}).get("year") or media_info["year"] or imdb_data.get("year")
 
         movie_doc = {
             "_id": base_name,
