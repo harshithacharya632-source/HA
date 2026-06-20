@@ -744,22 +744,19 @@ Example:- /set_caption 📕 File Name: {filename}
 /stream - ɢᴇᴛ sᴛʀᴇᴀᴍᴀʙʟᴇ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅᴀʙʟᴇ ʟɪɴᴋ ᴏғ ᴀɴʏ ғɪʟᴇ</b>"""
 
 
-    MOVIE_UPDATE_NOTIFY_TXT = """
-<b><a href={poster_url}>📥</a>{tag}</b>
+    MOVIE_UPDATE_NOTIFY_TXT = """<b><a href="{poster_url}">🎬</a> {tag}</b>
 
 ✨ <b>{filename}</b>
-🔗 <a href={imdb_url}>ɪᴍᴅʙ ʟɪɴᴋ</a>
+<a href="{imdb_url}">⭐ ɪᴍᴅʙ</a> · <b>{rating}</b>  |  📅 {year}
 
-<blockquote>🔥 ʀᴀᴛɪɴɢ   : <b>{rating}</b>
-🎭 ɢᴇɴʀᴇs  : <b>{genres}</b>
-📺 ᴏᴛᴛ        : <b>{ott}</b>
-📅 ʏᴇᴀʀ       : <b>{year}</b>
+<blockquote>🎭 <b>Gᴇɴʀᴇs  :</b> {genres}
+📺 <b>OTT       :</b> {ott}
+🎧 <b>Aᴜᴅɪᴏ   :</b> {language}</blockquote>
+
+<blockquote expandable>📖 <b>Sᴛᴏʀʏ</b>
 {plot}</blockquote>
 
-🎧 <b>ᴀᴜᴅɪᴏ ᴀᴠᴀɪʟᴀʙʟᴇ :</b> {language}
-
-🔍 <b>Sᴇᴀʀᴄʜ →</b> {search_link}
-"""
+🔍 <b>Sᴇᴀʀᴄʜ →</b> @{search_link}"""
 
 
     
