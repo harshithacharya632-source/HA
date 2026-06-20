@@ -752,7 +752,6 @@ Example:- /set_caption 📕 File Name: {filename}
 <blockquote>🎭 <b>Gᴇɴʀᴇs :</b> {genres}
 📺 <b>OTT      :</b> {ott}
 🎧 <b>Aᴜᴅɪᴏ  :</b> {language}</blockquote>
-
 <blockquote expandable>📖 <b>Sᴛᴏʀʏ</b>
 <i>{plot}</i></blockquote>
 
