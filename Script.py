@@ -747,14 +747,13 @@ Example:- /set_caption 📕 File Name: {filename}
     MOVIE_UPDATE_NOTIFY_TXT = """<b><a href="{poster_url}">🎬</a> {tag}</b>
 
 ✨ <b>{filename}</b>
+<a href="{imdb_url}">⭐ ɪᴍᴅʙ</a> · <b>{rating}</b>  |  📅 <b>{year}</b>
 
-<blockquote expandable>⭐ <a href="{imdb_url}"><b>ɪᴍᴅʙ</b></a> · <b>{rating}</b>  |  📅 <b>{year}</b>
-
-🎭 <b>Gᴇɴʀᴇs :</b> {genres}
+<blockquote>🎭 <b>Gᴇɴʀᴇs :</b> {genres}
 📺 <b>OTT      :</b> {ott}
-🎧 <b>Aᴜᴅɪᴏ  :</b> {language}
+🎧 <b>Aᴜᴅɪᴏ  :</b> {language}</blockquote>
 
-📖 <b>Sᴛᴏʀʏ</b>
+<blockquote expandable>📖 <b>Sᴛᴏʀʏ</b>
 <i>{plot}</i></blockquote>
 
 🔍 <b>Sᴇᴀʀᴄʜ →</b> @{search_link}"""
