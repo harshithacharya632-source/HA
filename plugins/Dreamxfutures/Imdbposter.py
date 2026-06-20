@@ -198,9 +198,9 @@ async def get_movie_detailsx(query, id=False, file=None):
             tmdb_id = result.get("id")
             media_type = result.get("media_type") or "movie"
 
-            # append_to_response=videos fetches trailer in same request
+            # append_to_response=videos,external_ids fetches trailer + imdb_id in same request
             detail_url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}"
-            params = {"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "videos"}
+            params = {"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "videos,external_ids"}
             async with session.get(detail_url, params=params) as resp:
                 if resp.status != 200:
                     return None
@@ -214,6 +214,10 @@ async def get_movie_detailsx(query, id=False, file=None):
             title = detail.get("title") or detail.get("name", q)
             plot = detail.get("overview", "")
             tmdb_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}"
+
+            # IMDB ID from external_ids → build IMDB link
+            imdb_id = detail.get("external_ids", {}).get("imdb_id", "")
+            imdb_url = f"https://www.imdb.com/title/{imdb_id}" if imdb_id else ""
 
             # YouTube trailer: official first, then any trailer, then any video
             trailer_url = None
@@ -243,6 +247,8 @@ async def get_movie_detailsx(query, id=False, file=None):
                 "backdrop_url": f"https://image.tmdb.org/t/p/w1280{backdrop}" if backdrop else None,
                 "tmdb_url": tmdb_url,
                 "tmdb_id": tmdb_id,
+                "imdb_id": imdb_id,
+                "imdb_url": imdb_url,
                 "trailer_url": trailer_url,
             }
     except Exception as e:
