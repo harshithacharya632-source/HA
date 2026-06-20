@@ -174,15 +174,14 @@ async def song(client, message):
     else:
         await m.edit("⚠️ **YouTube is blocking requests (bot detection)**\n\n✅ **Solutions:**\n1. Try a different song name\n2. Wait 5-10 minutes and try again\n3. Contact bot owner for YouTube API key")
     
-    finally:
-        # Cleanup
-        try:
-            if audio_file and os.path.exists(audio_file):
-                os.remove(audio_file)
-            if thumb_name and os.path.exists(thumb_name):
-                os.remove(thumb_name)
-        except Exception as e:
-            print(f"[CLEANUP ERROR] {e}")
+    # Cleanup
+    try:
+        if audio_file and os.path.exists(audio_file):
+            os.remove(audio_file)
+        if thumb_name and os.path.exists(thumb_name):
+            os.remove(thumb_name)
+    except Exception as e:
+        print(f"[CLEANUP ERROR] {e}")
 
 
 def get_text(message: Message) -> [None,str]:
@@ -231,6 +230,7 @@ async def vsong(client, message: Message):
         opts["logtostderr"] = False
         
         video_success = False
+        ytdl_data = None
         
         # Try YouTube first
         try:
@@ -264,7 +264,7 @@ async def vsong(client, message: Message):
                         print(f"[ERROR] Invidious video {instance} failed: {str(inv_error)}")
                         continue
         
-        if video_success and 'ytdl_data' in locals():
+        if video_success and ytdl_data:
             try:
                 file_stark = f"{ytdl_data['id']}.mp4"
                 capy = f"""**𝚃𝙸𝚃𝙻𝙴 :** [{thum}]({mo})\n**𝚁𝙴𝚀𝚄𝙴𝚂𝚃𝙴𝙳 𝙱𝚈 :** {message.from_user.mention}"""
@@ -288,7 +288,7 @@ async def vsong(client, message: Message):
                 await pablo.edit_text("❌ **Failed to upload video!**")
         else:
             await pablo.edit_text("⚠️ **YouTube is blocking requests**\n\n✅ **Solutions:**\n1. Try a different video\n2. Wait 5-10 minutes\n3. Contact bot owner")
-            
+        
         await pablo.delete()
         
     except Exception as e:
