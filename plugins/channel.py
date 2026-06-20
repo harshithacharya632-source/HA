@@ -323,9 +323,15 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         else:
             logger.info(f"TMDB no result for '{base_name}', trying IMDB")
 
-        # Step 2: IMDB — authoritative for rating, imdb_url, languages, fallback poster
-        imdb_data = await get_movie_details(base_name) or {}
-        logger.info(f"DEBUG '{base_name}': imdb_rating={imdb_data.get('rating')!r} imdb_url={imdb_data.get('url')!r} imdb_lang={imdb_data.get('languages')!r}")
+        # Step 2: IMDB — strip episode/season/part tokens for cleaner search
+        # e.g. "Detective Conan Ep1204 Episode 1204" → "Detective Conan"
+        # e.g. "Krishnavataram P1 The Heart 2026" → "Krishnavataram The Heart 2026"
+        imdb_search_name = re.sub(
+            r'\b(?:Ep|Episode|Part|P)\s*\d+\b', '', base_name, flags=re.IGNORECASE
+        ).strip()
+        imdb_search_name = re.sub(r'\s+', ' ', imdb_search_name).strip()
+        imdb_data = await get_movie_details(imdb_search_name) or {}
+        logger.info(f"DEBUG '{base_name}' → imdb_search='{imdb_search_name}': rating={imdb_data.get('rating')!r} url={imdb_data.get('url')!r} lang={imdb_data.get('languages')!r}")
 
         # --- POSTER: TMDB first, IMDB fallback ---
         if not poster_url:
@@ -563,7 +569,7 @@ def generate_movie_message(movie_doc, base_name):
         language=language_str,
         plot=movie_doc.get("plot", ""),
         rating=movie_doc.get("rating", "N/A"),
-        year=movie_doc.get("year", "N/A"),
+        year=movie_doc.get("year") or "N/A",
         trailer_url=movie_doc.get("trailer_url") or "",
         search_link=temp.U_NAME
     )
