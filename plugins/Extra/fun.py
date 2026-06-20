@@ -1,7 +1,5 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
 
+import random
 from pyrogram import Client, filters
 
 # AESTHETIC------------ https://telegram.me/Josprojects ------------ #
@@ -17,27 +15,34 @@ def aesthetify(string):
         yield chr(c)
 
 
-@Client.on_message(
-    filters.command(["ae"]))
+@Client.on_message(filters.command(["ae"]))
 async def aesthetic(client, message):
     status_message = await message.reply_text("...")
+    if len(message.command) < 2:
+        await status_message.edit("**Usage:** `/ae your text here`")
+        return
     text = "".join(str(e) for e in message.command[1:])
     text = "".join(aesthetify(text))
+    if not text.strip():
+        await status_message.edit("**Error:** Please provide some valid text!")
+        return
     await status_message.edit(text)
+
 
 # EMOJI CONSTANTS
 DART_E_MOJI = "🎯"
+DICE_E_MOJI = "🎲"
+TRY_YOUR_LUCK = "🎰"
+GOAL_E_MOJI = "⚽"
 # EMOJI CONSTANTS
 
 
-@Client.on_message(
-    filters.command(["throw", "dart"])
-)
+@Client.on_message(filters.command(["throw", "dart"]))
 async def throw_dart(client, message):
     """ /throw an @AnimatedDart """
-    rep_mesg_id = message.message_id
+    rep_mesg_id = message.id
     if message.reply_to_message:
-        rep_mesg_id = message.reply_to_message.message_id
+        rep_mesg_id = message.reply_to_message.id
     await client.send_dice(
         chat_id=message.chat.id,
         emoji=DART_E_MOJI,
@@ -45,19 +50,13 @@ async def throw_dart(client, message):
         reply_to_message_id=rep_mesg_id
     )
 
-# EMOJI CONSTANTS
-DICE_E_MOJI = "🎲"
-# EMOJI CONSTANTS
 
-
-@Client.on_message(
-    filters.command(["roll", "dice"])
-)
+@Client.on_message(filters.command(["roll", "dice"]))
 async def roll_dice(client, message):
     """ @RollADie """
-    rep_mesg_id = message.message_id
+    rep_mesg_id = message.id
     if message.reply_to_message:
-        rep_mesg_id = message.reply_to_message.message_id
+        rep_mesg_id = message.reply_to_message.id
     await client.send_dice(
         chat_id=message.chat.id,
         emoji=DICE_E_MOJI,
@@ -65,18 +64,13 @@ async def roll_dice(client, message):
         reply_to_message_id=rep_mesg_id
     )
 
-# EMOJI CONSTANTS
-TRY_YOUR_LUCK = "🎰"
-# EMOJI CONSTANTS
 
-@Client.on_message(
-    filters.command(["luck", "cownd"])
-)
+@Client.on_message(filters.command(["luck", "cownd"]))
 async def luck_cownd(client, message):
     """ /luck an @animatedluck """
-    rep_mesg_id = message.message_id
+    rep_mesg_id = message.id
     if message.reply_to_message:
-        rep_mesg_id = message.reply_to_message.message_id
+        rep_mesg_id = message.reply_to_message.id
     await client.send_dice(
         chat_id=message.chat.id,
         emoji=TRY_YOUR_LUCK,
@@ -85,18 +79,12 @@ async def luck_cownd(client, message):
     )
 
 
-# EMOJI CONSTANTS
-GOAL_E_MOJI = "⚽"
-# EMOJI CONSTANTS
-
-@Client.on_message(
-    filters.command(["goal", "shoot"])
-)
-async def roll_dice(client, message):
+@Client.on_message(filters.command(["goal", "shoot"]))
+async def goal_shoot(client, message):
     """ @Goal """
-    rep_mesg_id = message.message_id
+    rep_mesg_id = message.id
     if message.reply_to_message:
-        rep_mesg_id = message.reply_to_message.message_id
+        rep_mesg_id = message.reply_to_message.id
     await client.send_dice(
         chat_id=message.chat.id,
         emoji=GOAL_E_MOJI,
@@ -105,11 +93,8 @@ async def roll_dice(client, message):
     )
 
 
-import random
-
 RUN_STRINGS = (
-    "A broken of a demeanly filled with darkness \
-    Why have you come to remind it ",
+    "A broken of a demeanly filled with darkness. Why have you come to remind it?",
     "We have become the lives to be the underwater to the underwater that we do not know.",
     "You want the bad call ... but you need good thunder ....",
     "Oh Bloody Grama Virtues!",
@@ -122,13 +107,13 @@ RUN_STRINGS = (
     "Dayveyeese, Kingfisher ... Childe ...!.",
     "You have made your father for half of the midnight?",
     "This is the King of our work.",
-    "I'm fetts to feed ...."
+    "I'm fetts to feed ....",
     "Mumak is every Bearby Kachyo ...",
     "Oh it moves it .... When we moves it ...",
     "The self of carpenter is the virtue of a carpenter.",
     "Why not to feel this intelligence in Da Vijaya ...!",
-    "Where was this time ...."
-    "Save me only ...."
+    "Where was this time ....",
+    "Save me only ....",
     "I know his father's name is Bhavaniami ....",
     "Da Dasa ...",
     "Uppukam's English Salt Mongo Tree .....",
@@ -137,15 +122,13 @@ RUN_STRINGS = (
     "Car Engine Out Completely .....",
     "This is the eye or magnety ...",
     "Before falling in the 4th pegging, I will arrive there.",
-    "The drunk rains and wast ...."
-    "To tell me I love Yo ...."
+    "The drunk rains and wast ....",
+    "To tell me I love Yo ....",
     "No, the Meenaka of Verbapur is not ....",
 )
 
 
-@Client.on_message(
-    filters.command("runs")
-)
+@Client.on_message(filters.command("runs"))
 async def runs(_, message):
     """ /runs strings """
     effective_string = random.choice(RUN_STRINGS)
