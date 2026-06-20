@@ -697,7 +697,7 @@ async def getfile_next(client, callback_query):
      if not files:
          return await callback_query.answer("No more files!", show_alert=True)
      settings = await get_settings(grpid)
-     pre = 'filep' if settings['file_secure'] else 'file'
+     pre = 'filep' if settings.get('file_secure', False) else 'file'
      btn = []
      for file in files:
          btn.append([
