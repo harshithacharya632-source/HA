@@ -1,18 +1,15 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+
 import re
 import logging
 import asyncio
-import aiohttp
 from datetime import datetime
 from collections import defaultdict
-from plugins.Dreamxfutures.Imdbposter import fetch_image, get_movie_details
+from plugins.Dreamxfutures.Imdbposter import fetch_image, get_movie_details, get_movie_detailsx
 from database.users_chats_db import db
 from pyrogram import Client, filters, enums
 from info import (
     CHANNELS, MOVIE_UPDATE_CHANNEL, LINK_PREVIEW, ABOVE_PREVIEW,
-    LANDSCAPE_POSTER, TMDB_POSTER, MOVIE_UPDATE_NOTIFICATION, TMDB_API_KEY
+    LANDSCAPE_POSTER, TMDB_POSTER, MOVIE_UPDATE_NOTIFICATION
 )
 from Script import script
 from database.ia_filterdb import save_file
@@ -89,112 +86,6 @@ EP_ONLY_RANGE = re.compile(r'\b(?:EP|Episode)0*(\d{1,3})\s*-\s*0*(\d{1,3})\b', r
 MEDIA_FILTER = filters.document | filters.video | filters.audio
 locks = defaultdict(asyncio.Lock)
 pending_updates = {}
-
-TMDB_BASE = "https://api.themoviedb.org/3"
-TMDB_IMG_BASE = "https://image.tmdb.org/t/p/w500"
-TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
-TMDB_YT_BASE = "https://www.youtube.com/watch?v="
-
-
-async def fetch_tmdb_data(title: str) -> dict:
-    """Directly fetch movie/series data + YouTube trailer from TMDB API."""
-    if not TMDB_API_KEY:
-        return {}
-    try:
-        async with aiohttp.ClientSession() as session:
-            # Search for movie
-            search_url = f"{TMDB_BASE}/search/multi"
-            params = {"api_key": TMDB_API_KEY, "query": title, "language": "en-US", "page": 1}
-            async with session.get(search_url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    logger.warning(f"TMDB search HTTP {resp.status} for '{title}'")
-                    return {}
-                data = await resp.json()
-
-            results = data.get("results", [])
-            if not results:
-                logger.info(f"TMDB no results for '{title}'")
-                return {}
-
-            # Pick best result: prefer movie/tv, skip person
-            item = next((r for r in results if r.get("media_type") in ("movie", "tv")), None)
-            if not item:
-                return {}
-
-            media_type = item.get("media_type", "movie")
-            item_id = item.get("id")
-
-            # Fetch full details
-            detail_url = f"{TMDB_BASE}/{media_type}/{item_id}"
-            detail_params = {"api_key": TMDB_API_KEY, "language": "en-US", "append_to_response": "videos"}
-            async with session.get(detail_url, params=detail_params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    logger.warning(f"TMDB detail HTTP {resp.status} for id {item_id}")
-                    return {}
-                detail = await resp.json()
-
-            # Poster / backdrop
-            poster_path = detail.get("poster_path") or item.get("poster_path")
-            backdrop_path = detail.get("backdrop_path") or item.get("backdrop_path")
-            poster_url = f"{TMDB_IMG_BASE}{poster_path}" if poster_path else None
-            backdrop_url = f"{TMDB_BACKDROP_BASE}{backdrop_path}" if backdrop_path else None
-
-            # Genres
-            genres_list = [g["name"] for g in detail.get("genres", [])]
-            genres = ", ".join(genres_list) if genres_list else "N/A"
-
-            # Rating
-            rating = detail.get("vote_average")
-            rating_str = f"{rating:.1f}" if rating else "N/A"
-
-            # Year
-            release = detail.get("release_date") or detail.get("first_air_date") or ""
-            year = release[:4] if release else "N/A"
-
-            # Plot
-            plot = detail.get("overview", "") or ""
-
-            # TMDB page URL
-            tmdb_url = f"https://www.themoviedb.org/{media_type}/{item_id}"
-
-            # YouTube trailer
-            trailer_url = None
-            videos = detail.get("videos", {}).get("results", [])
-            # Prefer official trailer
-            for v in videos:
-                if v.get("site") == "YouTube" and v.get("type") == "Trailer" and v.get("official"):
-                    trailer_url = f"{TMDB_YT_BASE}{v['key']}"
-                    break
-            # Fallback to any YouTube trailer
-            if not trailer_url:
-                for v in videos:
-                    if v.get("site") == "YouTube" and v.get("type") == "Trailer":
-                        trailer_url = f"{TMDB_YT_BASE}{v['key']}"
-                        break
-            # Fallback to any YouTube video (teaser etc.)
-            if not trailer_url:
-                for v in videos:
-                    if v.get("site") == "YouTube":
-                        trailer_url = f"{TMDB_YT_BASE}{v['key']}"
-                        break
-
-            return {
-                "poster_url": poster_url,
-                "backdrop_url": backdrop_url,
-                "genres": genres,
-                "rating": rating_str,
-                "year": year,
-                "plot": plot,
-                "tmdb_url": tmdb_url,
-                "trailer_url": trailer_url,
-            }
-
-    except asyncio.TimeoutError:
-        logger.warning(f"TMDB timeout for '{title}'")
-        return {}
-    except Exception as e:
-        logger.warning(f"TMDB fetch error for '{title}': {e}")
-        return {}
 
 
 def clean_mentions_links(text: str) -> str:
@@ -422,7 +313,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         is_backdrop = False
         trailer_url = None
 
-        tmdb_data = await fetch_tmdb_data(base_name)
+        tmdb_data = await get_movie_detailsx(base_name)
         if tmdb_data:
             poster_url = tmdb_data.get("poster_url")
             backdrop_url = tmdb_data.get("backdrop_url")
@@ -509,6 +400,17 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         schedule_update(bot, base_name)
 
 
+def build_buttons(base_name: str, trailer_url: str = None) -> InlineKeyboardMarkup:
+    get_files_btn = InlineKeyboardButton(
+        '🎬 ɢᴇᴛ ғɪʟᴇs',
+        url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}"
+    )
+    if trailer_url:
+        trailer_btn = InlineKeyboardButton('▶️ ᴛʀᴀɪʟᴇʀ', url=trailer_url)
+        return InlineKeyboardMarkup([[get_files_btn, trailer_btn]])
+    return InlineKeyboardMarkup([[get_files_btn]])
+
+
 async def send_movie_update(bot, base_name):
     max_retries = 3
     for attempt in range(max_retries):
@@ -518,12 +420,7 @@ async def send_movie_update(bot, base_name):
                 return None
 
             text = generate_movie_message(movie_doc, base_name)
-            buttons = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    'ɢᴇᴛ ғɪʟᴇs',
-                    url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}"
-                )
-            ]])
+            buttons = build_buttons(base_name, movie_doc.get("trailer_url"))
             size = (2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and movie_doc.get("is_backdrop") else (853, 1280)
 
             if movie_doc.get("poster_url") and not LINK_PREVIEW:
@@ -569,12 +466,7 @@ async def update_movie_message(bot, base_name):
             return
 
         text = generate_movie_message(movie_doc, base_name)
-        buttons = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                'ɢᴇᴛ ғɪʟᴇs',
-                url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}"
-            )
-        ]])
+        buttons = build_buttons(base_name, movie_doc.get("trailer_url"))
 
         message_id = movie_doc.get("message_id")
         is_photo = movie_doc.get("is_photo", False)
