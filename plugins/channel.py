@@ -1,6 +1,4 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+
 import re
 import logging
 import asyncio
@@ -323,24 +321,27 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         ).strip()
         imdb_search_name = re.sub(r'\s+', ' ', imdb_search_name).strip()
 
-        # ── Step 1: IMDB — PRIMARY source for poster, rating, genres, plot, languages, url ──
-        imdb_data = await get_movie_details(imdb_search_name) or {}
-        logger.info(
-            f"IMDB result for '{base_name}': "
-            f"rating={imdb_data.get('rating')!r} "
-            f"url={imdb_data.get('url')!r} "
-            f"lang={imdb_data.get('languages')!r}"
-        )
-
-        # ── Step 2: TMDB — FALLBACK / supplemental (trailer, backdrop) ──
-        tmdb_data = await get_movie_detailsx(base_name) if not imdb_data else None
-        # Always fetch TMDB for trailer + backdrop regardless (they aren't on IMDB scraper)
+        # ── Step 1: TMDB — fetch first (trailer, backdrop, imdb_id for cross-lookup) ──
         tmdb_data_full = await get_movie_detailsx(base_name)
         if tmdb_data_full:
             trailer_url = tmdb_data_full.get("trailer_url")
             backdrop_url = tmdb_data_full.get("backdrop_url")
             is_backdrop = bool(backdrop_url)
             logger.info(f"TMDB supplemental for '{base_name}' | trailer: {trailer_url}")
+
+        # ── Step 2: IMDB — try by name first, then via TMDB's imdb_id if name search fails ──
+        imdb_data = await get_movie_details(imdb_search_name) or {}
+        if not imdb_data.get("rating") and tmdb_data_full and tmdb_data_full.get("imdb_id"):
+            # Cinemagoer failed by name — fetch directly by IMDB ID (reliable for non-English titles)
+            imdb_id_from_tmdb = tmdb_data_full["imdb_id"].replace("tt", "")
+            logger.info(f"IMDB name search failed, retrying by ID: {tmdb_data_full['imdb_id']}")
+            imdb_data = await get_movie_details(imdb_id_from_tmdb, id=True) or {}
+        logger.info(
+            f"IMDB result for '{base_name}': "
+            f"rating={imdb_data.get('rating')!r} "
+            f"url={imdb_data.get('url')!r} "
+            f"lang={imdb_data.get('languages')!r}"
+        )
 
         # ── POSTER: IMDB primary, TMDB fallback ──
         DEFAULT_POSTER = "https://i.ibb.co/0RQMzgyB/default.jpg"  # replace with your direct ibb.co image URL
@@ -397,7 +398,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
 
         # ── PLOT: IMDB primary, TMDB fallback ──
         raw_plot = imdb_data.get("plot") or (tmdb_data_full or {}).get("plot") or ""
-        plot_text = raw_plot.strip() if raw_plot else ""
+        plot_text = raw_plot.strip()[:600] if raw_plot else ""
 
         # ── IMDB URL: IMDB data primary, TMDB external_ids fallback ──
         imdb_url = imdb_data.get("url", "") or (tmdb_data_full or {}).get("imdb_url", "")
