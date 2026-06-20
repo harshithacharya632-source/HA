@@ -356,14 +356,20 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             final_poster = poster_url
 
         # ── RATING: IMDB primary, TMDB fallback ──
-        try:
-            imdb_rating_val = float(str(imdb_data.get("rating", "")).strip())
-            rating = f"{imdb_rating_val:.1f}" if imdb_rating_val > 0 else None
-        except (ValueError, TypeError):
-            rating = None
+        rating = None
+        imdb_rating_raw = str(imdb_data.get("rating", "")).strip()
+        if imdb_rating_raw and imdb_rating_raw not in ("N/A", "None", ""):
+            try:
+                imdb_rating_val = float(imdb_rating_raw)
+                rating = f"{imdb_rating_val:.1f}" if imdb_rating_val > 0 else None
+                if rating:
+                    logger.info(f"Using IMDB rating for '{base_name}': {rating}")
+            except (ValueError, TypeError):
+                pass
         if not rating:
             tmdb_rating_val = (tmdb_data_full or {}).get("rating", 0) or 0
             rating = f"{tmdb_rating_val:.1f}" if tmdb_rating_val > 0 else "N/A"
+            logger.info(f"Using TMDB rating for '{base_name}': {rating}")
 
         # ── GENRES: IMDB primary, TMDB fallback ──
         raw_genres = imdb_data.get("genres") or (tmdb_data_full or {}).get("genres", "N/A")
