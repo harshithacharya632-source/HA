@@ -339,14 +339,21 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
 
         # ── POSTER: IMDB primary, TMDB fallback ──
         DEFAULT_POSTER = "https://ibb.co/0RQMzgyB"
-        poster_url = imdb_data.get("poster_url") or (tmdb_data_full or {}).get("poster_url")
-        # Landscape backdrop only if no IMDB poster and TMDB backdrop available
-        use_backdrop = (
-            LANDSCAPE_POSTER and TMDB_POSTER
-            and is_backdrop
-            and not imdb_data.get("poster_url")
-        )
-        final_poster = (backdrop_url if use_backdrop else poster_url) or DEFAULT_POSTER
+        imdb_poster = imdb_data.get("poster_url", "").strip()
+        tmdb_poster = (tmdb_data_full or {}).get("poster_url", "").strip()
+
+        if imdb_poster:
+            # IMDB poster found — always use it, never override with backdrop
+            poster_url = imdb_poster
+            final_poster = imdb_poster
+        elif LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url:
+            # No IMDB poster — use TMDB landscape backdrop
+            poster_url = backdrop_url
+            final_poster = backdrop_url
+        else:
+            # No IMDB poster, no backdrop — use TMDB portrait poster
+            poster_url = tmdb_poster or DEFAULT_POSTER
+            final_poster = poster_url
 
         # ── RATING: IMDB primary, TMDB fallback ──
         try:
@@ -406,7 +413,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             "trailer_url": trailer_url,
             "message_id": None,
             "is_photo": False,
-            "is_backdrop": is_backdrop and not imdb_data.get("poster_url")
+            "is_backdrop": bool(not imdb_poster and LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url)
         }
         try:
             await db.movie_updates.insert_one(movie_doc)
