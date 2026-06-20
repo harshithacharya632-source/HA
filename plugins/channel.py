@@ -365,15 +365,9 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             lang_parts.update(l.strip() for l in lang_from_file.split(",") if l.strip())
         language = ", ".join(sorted(lang_parts)) if lang_parts else "N/A"
 
-        # --- PLOT: IMDB preferred, TMDB fallback; spoiler wrap if long ---
+        # --- PLOT: IMDB preferred, TMDB fallback ---
         raw_plot = imdb_data.get("plot") or (tmdb_data or {}).get("plot") or ""
-        if raw_plot:
-            if len(raw_plot) > 200:
-                plot_text = f"📖 <tg-spoiler>{raw_plot}</tg-spoiler>"
-            else:
-                plot_text = f"📖 <i>{raw_plot}</i>"
-        else:
-            plot_text = ""
+        plot_text = raw_plot.strip() if raw_plot else ""
 
         # --- IMDB URL: always from imdb_data, never TMDB url ---
         imdb_url = imdb_data.get("url", "")
