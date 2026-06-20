@@ -307,7 +307,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
     }
 
     if not movie_doc:
-        # Step 1: Direct TMDB fetch (poster + backdrop + metadata + trailer)
+        # Step 1: TMDB — poster, backdrop, trailer, genres, rating, plot, year
         poster_url = None
         backdrop_url = None
         is_backdrop = False
@@ -323,29 +323,31 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         else:
             logger.info(f"TMDB no result for '{base_name}', trying IMDB")
 
-        # Step 2: IMDB fallback for metadata (poster fallback too)
+        # Step 2: IMDB — authoritative for rating, imdb_url, languages, fallback poster
         imdb_data = await get_movie_details(base_name) or {}
 
-        # Use TMDB metadata if IMDB returned nothing useful
-        if tmdb_data and not imdb_data.get("rating"):
-            logger.info(f"Using TMDB metadata for '{base_name}'")
-            imdb_data = {
-                "genres": tmdb_data.get("genres", "N/A"),
-                "rating": tmdb_data.get("rating", "N/A"),
-                "plot": tmdb_data.get("plot", ""),
-                "year": tmdb_data.get("year", ""),
-                "url": tmdb_data.get("tmdb_url", ""),
-            }
-
-        # Fallback to IMDB poster if TMDB gave nothing
+        # --- POSTER: TMDB first, IMDB fallback ---
         if not poster_url:
             poster_url = imdb_data.get("poster_url")
             is_backdrop = False
-
         final_poster = backdrop_url if (LANDSCAPE_POSTER and TMDB_POSTER and is_backdrop) else poster_url
 
-        # Genres
-        raw_genres = imdb_data.get("genres", "N/A")
+        # --- RATING: IMDB preferred, TMDB fallback, guard 0/0.0 ---
+        imdb_rating = imdb_data.get("rating", "")
+        try:
+            imdb_rating_val = float(str(imdb_rating).strip())
+            rating = f"{imdb_rating_val:.1f}" if imdb_rating_val > 0 else None
+        except (ValueError, TypeError):
+            rating = None
+
+        if not rating and tmdb_data:
+            tmdb_rating_val = tmdb_data.get("rating", 0) or 0
+            rating = f"{tmdb_rating_val:.1f}" if tmdb_rating_val > 0 else "N/A"
+        elif not rating:
+            rating = "N/A"
+
+        # --- GENRES: TMDB preferred (richer), IMDB fallback ---
+        raw_genres = (tmdb_data or {}).get("genres") or imdb_data.get("genres", "N/A")
         if isinstance(raw_genres, list):
             genres = ", ".join(str(g) for g in raw_genres if g) or "N/A"
         elif isinstance(raw_genres, str):
@@ -353,13 +355,31 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         else:
             genres = "N/A"
 
-        # Plot
-        plot = imdb_data.get("plot", "")
-        plot_text = f"📖 <i>{plot}</i>" if plot else ""
+        # --- LANGUAGES: merge IMDB + filename ---
+        imdb_languages = imdb_data.get("languages", "")
+        lang_from_file = media_info["language"]  # already extracted from filename
+        lang_parts = set()
+        if imdb_languages:
+            lang_parts.update(l.strip() for l in imdb_languages.split(",") if l.strip())
+        if lang_from_file and lang_from_file != "N/A":
+            lang_parts.update(l.strip() for l in lang_from_file.split(",") if l.strip())
+        language = ", ".join(sorted(lang_parts)) if lang_parts else "N/A"
 
-        rating = imdb_data.get("rating", "N/A")
+        # --- PLOT: IMDB preferred, TMDB fallback; spoiler wrap if long ---
+        raw_plot = imdb_data.get("plot") or (tmdb_data or {}).get("plot") or ""
+        if raw_plot:
+            if len(raw_plot) > 200:
+                plot_text = f"📖 <tg-spoiler>{raw_plot}</tg-spoiler>"
+            else:
+                plot_text = f"📖 <i>{raw_plot}</i>"
+        else:
+            plot_text = ""
+
+        # --- IMDB URL: always from imdb_data, never TMDB url ---
         imdb_url = imdb_data.get("url", "")
-        year = media_info["year"] or imdb_data.get("year")
+
+        # --- YEAR: filename first, then IMDB, then TMDB ---
+        year = media_info["year"] or imdb_data.get("year") or (tmdb_data or {}).get("year")
 
         movie_doc = {
             "_id": base_name,
@@ -370,6 +390,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             "imdb_url": imdb_url,
             "plot": plot_text,
             "year": year,
+            "language": language,
             "tag": media_info["tag"],
             "ott_platform": media_info["ott_platform"],
             "trailer_url": trailer_url,
@@ -518,7 +539,13 @@ def generate_movie_message(movie_doc, base_name):
     all_ott_platforms = set()
     all_tags = set()
 
+    # Use stored merged language (IMDB + filenames) from doc if available
+    stored_language = movie_doc.get("language", "")
+    if stored_language and stored_language != "N/A":
+        all_languages.update(l.strip() for l in stored_language.split(",") if l.strip())
+
     for file in movie_doc["files"]:
+        # Always merge per-file language too (covers files added after first post)
         if file["language"] != "N/A":
             all_languages.update(l.strip() for l in file["language"].split(",") if l.strip())
         if file["ott_platform"] != "N/A":
