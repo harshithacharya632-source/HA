@@ -338,7 +338,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             logger.info(f"TMDB supplemental for '{base_name}' | trailer: {trailer_url}")
 
         # ── POSTER: IMDB primary, TMDB fallback ──
-        DEFAULT_POSTER = "https://ibb.co/0RQMzgyB"
+        DEFAULT_POSTER = "https://te.legra.ph/file/1c7b0b7e8bcca394d9edd.jpg"  # direct image fallback
         imdb_poster = imdb_data.get("poster_url", "").strip()
         tmdb_poster = (tmdb_data_full or {}).get("poster_url", "").strip()
 
@@ -461,8 +461,14 @@ async def send_movie_update(bot, base_name):
             buttons = build_buttons(base_name, movie_doc.get("trailer_url"))
             size = (2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and movie_doc.get("is_backdrop") else (853, 1280)
 
+            resized_poster = None
             if movie_doc.get("poster_url") and not LINK_PREVIEW:
-                resized_poster = await fetch_image(movie_doc["poster_url"], size)
+                try:
+                    resized_poster = await fetch_image(movie_doc["poster_url"], size)
+                except Exception as fe:
+                    logger.warning(f"fetch_image failed for '{base_name}': {fe}")
+
+            if resized_poster:
                 msg = await bot.send_photo(
                     chat_id=MOVIE_UPDATE_CHANNEL,
                     photo=resized_poster,
