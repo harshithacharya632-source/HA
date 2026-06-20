@@ -325,6 +325,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
 
         # Step 2: IMDB — authoritative for rating, imdb_url, languages, fallback poster
         imdb_data = await get_movie_details(base_name) or {}
+        logger.info(f"DEBUG '{base_name}': imdb_rating={imdb_data.get('rating')!r} imdb_url={imdb_data.get('url')!r} imdb_lang={imdb_data.get('languages')!r}")
 
         # --- POSTER: TMDB first, IMDB fallback ---
         if not poster_url:
