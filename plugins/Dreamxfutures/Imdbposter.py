@@ -124,10 +124,14 @@ async def get_movie_details(query, id=False, file=None):
             plot = plot[:800] + "..."
             
         poster_url = movie.get('full-size cover url')
-        # FIX: guard against None poster_url before calling .endswith()
         if poster_url:
             poster_url = poster_url + "._V1_SX1440.jpg" if poster_url.endswith("@.jpg") else poster_url
-        
+
+        # Return raw rating (float or None) — never "N/A" string
+        # so channel.py can cleanly detect missing rating and fall to TMDB
+        raw_rating = movie.get("rating")
+        rating = float(raw_rating) if raw_rating is not None else None
+
         return {
             'title': movie.get('title'),
             'votes': movie.get('votes'),
@@ -154,7 +158,7 @@ async def get_movie_details(query, id=False, file=None):
             'genres': list_to_str(movie.get("genres")),
             'poster_url': poster_url,
             'plot': plot,
-            'rating': str(movie.get("rating", "N/A")),
+            'rating': rating,
             'url': f'https://www.imdb.com/title/tt{movieid}'
         }
     except Exception as e:
