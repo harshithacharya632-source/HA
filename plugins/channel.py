@@ -1,4 +1,6 @@
-
+# Don't Remove Credit @VJ_Botz
+# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
+# Ask Doubt on telegram @KingVJ01
 import re
 import logging
 import asyncio
@@ -345,8 +347,8 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
 
         # ── POSTER: IMDB primary, TMDB fallback ──
         DEFAULT_POSTER = "https://i.ibb.co/0RQMzgyB/default.jpg"  # replace with your direct ibb.co image URL
-        imdb_poster = imdb_data.get("poster_url", "").strip()
-        tmdb_poster = (tmdb_data_full or {}).get("poster_url", "").strip()
+        imdb_poster = (imdb_data.get("poster_url") or "").strip()
+        tmdb_poster = ((tmdb_data_full or {}).get("poster_url") or "").strip()
 
         if imdb_poster:
             # IMDB poster found — always use it, never override with backdrop
@@ -397,8 +399,8 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         language = ", ".join(sorted(lang_parts)) if lang_parts else "N/A"
 
         # ── PLOT: IMDB primary, TMDB fallback ──
-        raw_plot = imdb_data.get("plot") or (tmdb_data_full or {}).get("plot") or ""
-        plot_text = raw_plot.strip()[:600] if raw_plot else ""
+        raw_plot = (imdb_data.get("plot") or (tmdb_data_full or {}).get("plot") or "")
+        plot_text = (raw_plot or "").strip()[:600]
 
         # ── IMDB URL: IMDB data primary, TMDB external_ids fallback ──
         imdb_url = imdb_data.get("url", "") or (tmdb_data_full or {}).get("imdb_url", "")
