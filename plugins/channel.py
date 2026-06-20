@@ -1,4 +1,6 @@
-
+# Don't Remove Credit @VJ_Botz
+# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
+# Ask Doubt on telegram @KingVJ01
 import re
 import logging
 import asyncio
@@ -332,21 +334,21 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         logger.info(f"DEBUG '{base_name}': rating={imdb_data.get('rating')!r} url={imdb_data.get('url')!r} lang={imdb_data.get('languages')!r}")
 
         # --- POSTER: TMDB first, IMDB fallback ---
+        DEFAULT_POSTER = "https://ibb.co/0RQMzgyB"
         if not poster_url:
             poster_url = imdb_data.get("poster_url")
             is_backdrop = False
-        final_poster = backdrop_url if (LANDSCAPE_POSTER and TMDB_POSTER and is_backdrop) else poster_url
+        final_poster = backdrop_url if (LANDSCAPE_POSTER and TMDB_POSTER and is_backdrop) else (poster_url or DEFAULT_POSTER)
 
-        # --- RATING: TMDB primary, IMDB fallback, guard 0/0.0 ---
-        tmdb_rating_val = (tmdb_data or {}).get("rating", 0) or 0
-        if tmdb_rating_val > 0:
-            rating = f"{tmdb_rating_val:.1f}"
-        else:
-            try:
-                imdb_rating_val = float(str(imdb_data.get("rating", "")).strip())
-                rating = f"{imdb_rating_val:.1f}" if imdb_rating_val > 0 else "N/A"
-            except (ValueError, TypeError):
-                rating = "N/A"
+        # --- RATING: IMDB primary, TMDB fallback, guard 0/0.0 ---
+        try:
+            imdb_rating_val = float(str(imdb_data.get("rating", "")).strip())
+            rating = f"{imdb_rating_val:.1f}" if imdb_rating_val > 0 else None
+        except (ValueError, TypeError):
+            rating = None
+        if not rating:
+            tmdb_rating_val = (tmdb_data or {}).get("rating", 0) or 0
+            rating = f"{tmdb_rating_val:.1f}" if tmdb_rating_val > 0 else "N/A"
 
         # --- GENRES: TMDB primary, IMDB fallback ---
         raw_genres = (tmdb_data or {}).get("genres") or imdb_data.get("genres", "N/A")
