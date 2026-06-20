@@ -1,4 +1,6 @@
-
+# Don't Remove Credit @VJ_Botz
+# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
+# Ask Doubt on telegram @KingVJ01
 import re
 import logging
 import asyncio
@@ -70,6 +72,7 @@ OTT_PLATFORMS = {
 }
 
 CLEAN_PATTERN = re.compile(r'@[^ \n\r\t\.,:;!?()\[\]{}<>\\/"\'=_%]+|\bwww\.[^\s\]\)]+|\([\@^]+\)|\[[\@^]+\]')
+WATERMARK_PATTERN = re.compile(r'(?i)^(?:www\.)?[a-z0-9_\-]{3,20}(?:boss|botz|hub|dl|zone|movies|flix|hd|world|net|site|tv|pro|xyz|store|official|team|media|wap|links?)\s+', re.IGNORECASE)
 NORMALIZE_PATTERN = re.compile(r"[._]+|[()\[\]{}:;'–!,.?_]")
 QUALITY_PATTERN = re.compile(
     r"\b(?:HDCam|HDTC|CamRip|TS|TC|TeleSync|DVDScr|DVDRip|PreDVD|"
@@ -89,7 +92,9 @@ pending_updates = {}
 
 
 def clean_mentions_links(text: str) -> str:
-    return CLEAN_PATTERN.sub("", text or "").strip()
+    text = CLEAN_PATTERN.sub("", text or "").strip()
+    text = WATERMARK_PATTERN.sub("", text).strip()
+    return text
 
 
 def normalize(s: str) -> str:
@@ -338,7 +343,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             logger.info(f"TMDB supplemental for '{base_name}' | trailer: {trailer_url}")
 
         # ── POSTER: IMDB primary, TMDB fallback ──
-        DEFAULT_POSTER = "https://te.legra.ph/file/1c7b0b7e8bcca394d9edd.jpg"  # direct image fallback
+        DEFAULT_POSTER = "https://i.ibb.co/0RQMzgyB/default.jpg"  # replace with your direct ibb.co image URL
         imdb_poster = imdb_data.get("poster_url", "").strip()
         tmdb_poster = (tmdb_data_full or {}).get("poster_url", "").strip()
 
