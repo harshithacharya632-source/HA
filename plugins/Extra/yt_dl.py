@@ -26,10 +26,17 @@ async def song(client, message):
         "nocheckcertificate": True,
         "geo_bypass": True,
         "source_address": "0.0.0.0",
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
     }
     try:
         results = YoutubeSearch(query, max_results=1).to_dict()
+        
+        # Error handling: Check if results list is empty
+        if not results or len(results) == 0:
+            return await m.edit("❌ **No results found for:** `" + query + "`\n\n**Example:** `/song vaa vaathi song`")
+        
         link = f"https://youtube.com{results[0]['url_suffix']}"
         title = results[0]["title"][:40]       
         thumbnail = results[0]["thumbnails"][0]
@@ -41,8 +48,8 @@ async def song(client, message):
         url_suffix = results[0]["url_suffix"]
         views = results[0]["views"]
     except Exception as e:
-        print(str(e))
-        return await m.edit("Example: /song vaa vaathi song")
+        print(f"[ERROR] Search failed: {str(e)}")
+        return await m.edit("❌ **Search failed!**\n\n**Example:** `/song vaa vaathi song`")
                 
     await m.edit("**dσwnlσαdíng чσur ѕσng...!**")
     try:
@@ -67,8 +74,8 @@ async def song(client, message):
         )            
         await m.delete()
     except Exception as e:
-        await m.edit("**🚫 𝙴𝚁𝚁𝙾𝚁 🚫**")
-        print(e)
+        print(f"[ERROR] Download failed: {str(e)}")
+        await m.edit("**🚫 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳 𝙵𝙰𝙸𝙻𝙴𝙳 🚫**\n\n**Try again or use a different song name**")
     try:
         os.remove(audio_file)
         os.remove(thumb_name)
@@ -96,6 +103,11 @@ async def vsong(client, message: Message):
     search = SearchVideos(f"{urlissed}", offset=1, mode="dict", max_results=1)
     mi = search.result()
     mio = mi["search_result"]
+    
+    # Error handling for empty search results
+    if not mio or len(mio) == 0:
+        return await pablo.edit("❌ **Video not found!**\n\nPlease try with a valid YouTube video URL or different search term")
+    
     mo = mio[0]["link"]
     thum = mio[0]["title"]
     fridayz = mio[0]["id"]
@@ -113,17 +125,19 @@ async def vsong(client, message: Message):
         "nocheckcertificate": True,
         "noplaylist": True,
         "source_address": "0.0.0.0",
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
         "postprocessors": [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
         "outtmpl": "%(id)s.mp4",
         "logtostderr": False,
-        "quiet": True,
     }
     try:
         with YoutubeDL(opts) as ytdl:
             ytdl_data = ytdl.extract_info(url, download=True)
     except Exception as e:
-        return await pablo.edit_text(f"**𝙳𝚘𝚠𝚗𝚕𝚘𝚊𝚍 𝙵𝚊𝚒𝚕𝚎𝚍 𝙿𝚕𝚎𝚊𝚜𝚎 𝚃𝚛𝚢 𝙰𝚐𝚊𝚒𝚗..♥️** \n**Error :** `{str(e)}`")       
+        print(f"[ERROR] Video download failed: {str(e)}")
+        return await pablo.edit_text(f"**𝙳𝚘𝚠𝚗𝚕𝚘𝚊𝚍 𝙵𝚊𝚒𝚕𝚎𝚍**\n\n**Please try again or use a different video link**") 
     
     file_stark = f"{ytdl_data['id']}.mp4"
     capy = f"""**𝚃𝙸𝚃𝙻𝙴 :** [{thum}]({mo})\n**𝚁𝙴𝚀𝚄𝙴𝚂𝚃𝙴𝙳 𝙱𝚈 :** {message.from_user.mention}"""
