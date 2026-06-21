@@ -345,7 +345,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         )
 
         # ── POSTER: IMDB primary, TMDB fallback ──
-        DEFAULT_POSTER = "https://ibb.co/0RQMzgyB"
+        DEFAULT_POSTER = "https://files.catbox.moe/4u8skn.jpg"
         imdb_poster = (imdb_data.get("poster_url") or "").strip()
 
         if imdb_poster:
@@ -472,8 +472,7 @@ async def send_movie_update(bot, base_name):
 
             resized_poster = None
             _poster = movie_doc.get("poster_url", "")
-            _is_default = _poster and "ibb.co" in _poster
-            if _poster and not LINK_PREVIEW and not _is_default:
+            if _poster and not LINK_PREVIEW:
                 try:
                     resized_poster = await fetch_image(_poster, size)
                 except Exception as fe:
