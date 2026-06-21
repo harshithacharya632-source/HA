@@ -166,28 +166,34 @@ async def get_movie_details(query, id=False, file=None):
         return None
 
 async def _search_youtube_trailer(session: aiohttp.ClientSession, title: str, year: int = None) -> str:
-    """Search YouTube for a trailer using the InvidiousAPI (no API key needed)."""
+    """Search YouTube for trailer using scraping — no API key needed."""
     try:
+        import urllib.parse
         query = f"{title} {year} official trailer" if year else f"{title} official trailer"
-        # Use Invidious public API — no key required
-        invidious_instances = [
-            "https://invidious.io.lol",
-            "https://inv.nadeko.net",
-            "https://invidious.nerdvpn.de",
-        ]
-        for base in invidious_instances:
-            try:
-                url = f"{base}/api/v1/search"
-                params = {"q": query, "type": "video", "fields": "videoId,title", "page": 1}
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status == 200:
-                        results = await resp.json()
-                        if results and isinstance(results, list):
-                            video_id = results[0].get("videoId")
-                            if video_id:
-                                return f"https://www.youtube.com/watch?v={video_id}"
-            except Exception:
-                continue
+        encoded = urllib.parse.quote(query)
+        url = f"https://www.youtube.com/results?search_query={encoded}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            if resp.status != 200:
+                logger.warning(f"YouTube search returned {resp.status} for '{title}'")
+                return None
+            html = await resp.text()
+            # Extract video IDs from YouTube search results page
+            video_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+            # Deduplicate while preserving order
+            seen = set()
+            unique_ids = []
+            for vid in video_ids:
+                if vid not in seen:
+                    seen.add(vid)
+                    unique_ids.append(vid)
+            if unique_ids:
+                trailer_url = f"https://www.youtube.com/watch?v={unique_ids[0]}"
+                logger.info(f"YouTube scrape trailer for '{title}': {trailer_url}")
+                return trailer_url
     except Exception as e:
         logger.warning(f"YouTube trailer search failed for '{title}': {e}")
     return None
