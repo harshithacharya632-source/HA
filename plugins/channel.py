@@ -351,17 +351,22 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         tmdb_poster = ((tmdb_data_full or {}).get("poster_url") or "").strip()
 
         if imdb_poster:
-            # IMDB poster found — always use it, never override with backdrop
+            # IMDB poster — primary always
             poster_url = imdb_poster
             final_poster = imdb_poster
-        elif LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url:
-            # No IMDB poster — use TMDB landscape backdrop
+        elif tmdb_poster:
+            # No IMDB poster — use TMDB portrait poster
+            poster_url = tmdb_poster
+            # Upgrade to landscape backdrop if enabled
+            final_poster = (backdrop_url if LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url else tmdb_poster)
+        elif backdrop_url:
+            # No poster at all — use backdrop
             poster_url = backdrop_url
             final_poster = backdrop_url
         else:
-            # No IMDB poster, no backdrop — use TMDB portrait poster
-            poster_url = tmdb_poster or DEFAULT_POSTER
-            final_poster = poster_url
+            # Absolute fallback
+            poster_url = DEFAULT_POSTER
+            final_poster = DEFAULT_POSTER
 
         # ── RATING: IMDB primary, TMDB fallback ──
         rating = None
@@ -441,19 +446,10 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
                     {"_id": base_name},
                     {"$push": {"files": file_data}}
                 )
-                old_message_id = movie_doc.get("message_id")
-                if old_message_id:
-                    try:
-                        await bot.delete_messages(
-                            chat_id=MOVIE_UPDATE_CHANNEL,
-                            message_ids=old_message_id
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not delete old message for {base_name}: {e}")
-                    await db.movie_updates.update_one(
-                        {"_id": base_name},
-                        {"$set": {"message_id": None, "is_photo": False}}
-                    )
+                await db.movie_updates.update_one(
+                    {"_id": base_name},
+                    {"$set": {"message_id": None, "is_photo": False}}
+                )
                 schedule_update(bot, base_name, delay=5)
     else:
         if any(f["filename"] == filename for f in movie_doc["files"]):
@@ -462,20 +458,11 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             {"_id": base_name},
             {"$push": {"files": file_data}}
         )
-        # Delete old post and send fresh one with poster for every new episode
-        old_message_id = movie_doc.get("message_id")
-        if old_message_id:
-            try:
-                await bot.delete_messages(
-                    chat_id=MOVIE_UPDATE_CHANNEL,
-                    message_ids=old_message_id
-                )
-            except Exception as e:
-                logger.warning(f"Could not delete old message for {base_name}: {e}")
-            await db.movie_updates.update_one(
-                {"_id": base_name},
-                {"$set": {"message_id": None, "is_photo": False}}
-            )
+        # Reset message_id so send_movie_update sends a fresh post with poster
+        await db.movie_updates.update_one(
+            {"_id": base_name},
+            {"$set": {"message_id": None, "is_photo": False}}
+        )
         # Delay 5s so if multiple episodes arrive together they batch into one post
         schedule_update(bot, base_name, delay=5)
 
