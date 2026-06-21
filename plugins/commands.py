@@ -92,22 +92,21 @@ async def start(client, message):
         )
         return
     
-    if AUTH_CHANNEL and not await is_subscribed(client, message):
-        try:
-            channels = AUTH_CHANNEL if isinstance(AUTH_CHANNEL, list) else [AUTH_CHANNEL]
-            btn = []
-            
-            for channel_id in channels:
-                try:
-                    if REQUEST_TO_JOIN_MODE == True:
-                        invite_link = await client.create_chat_invite_link(chat_id=int(channel_id), creates_join_request=True)
-                    else:
-                        invite_link = await client.create_chat_invite_link(int(channel_id))
-                    btn.append([InlineKeyboardButton("ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ", url=invite_link.invite_link)])
-                except Exception as e:
-                    print(e)
-                    await message.reply_text("Make sure Bot is admin in Forcesub channel")
-                    return
+if AUTH_CHANNEL and not await is_subscribed(client, message):
+    try:
+        channels = AUTH_CHANNEL if isinstance(AUTH_CHANNEL, list) else [AUTH_CHANNEL]
+        btn = []
+        for channel_id in channels:
+            try:
+                if REQUEST_TO_JOIN_MODE == True:
+                    invite_link = await client.create_chat_invite_link(chat_id=int(channel_id), creates_join_request=True)
+                else:
+                    invite_link = await client.create_chat_invite_link(int(channel_id))
+                btn.append([InlineKeyboardButton("ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ", url=invite_link.invite_link)])
+            except Exception as e:
+                print(e)
+                await message.reply_text("Make sure Bot is admin in Forcesub channel")
+                return
     
             if message.command[1] != "subscribe":
                 if REQUEST_TO_JOIN_MODE == True:
