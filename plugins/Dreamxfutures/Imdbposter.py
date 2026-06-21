@@ -106,31 +106,50 @@ async def get_movie_details(query, id=False, file=None):
         else:
             movieid = query
         movie = ia.get_movie(movieid)
-        ia.update(movie, info=['main', 'vote details'])
-        
+        # Fetch all useful info in one shot
+        for info_set in (['main', 'vote details'], ['main'], ['vote details']):
+            try:
+                ia.update(movie, info=info_set)
+                if movie.get('title'):
+                    break
+            except Exception as e:
+                logger.warning(f"ia.update failed with {info_set}: {e}")
+
         if movie.get("original air date"):
             date = movie["original air date"]
         elif movie.get("year"):
             date = movie.get("year")
         else:
             date = "N/A"
-            
+
         plot = movie.get('plot')
         if plot and len(plot) > 0:
             plot = plot[0]
+            # Cinemagoer sometimes returns "plot::author" format
+            if "::" in plot:
+                plot = plot.split("::")[0]
         else:
-            plot = movie.get('plot outline')
-        if plot and len(plot) > 800:
-            plot = plot[:800] + "..."
-            
-        poster_url = movie.get('full-size cover url')
+            plot = movie.get('plot outline') or ""
+        if plot and len(plot) > 600:
+            plot = plot[:600] + "..."
+
+        poster_url = movie.get('full-size cover url') or movie.get('cover url')
         if poster_url:
             poster_url = poster_url + "._V1_SX1440.jpg" if poster_url.endswith("@.jpg") else poster_url
 
-        # Return raw rating (float or None) — never "N/A" string
-        # so channel.py can cleanly detect missing rating and fall to TMDB
-        raw_rating = movie.get("rating")
-        rating = float(raw_rating) if raw_rating is not None else None
+        # Rating — try multiple keys Cinemagoer uses
+        raw_rating = movie.get("rating") or movie.get("vote average") or movie.get("arithmetic mean")
+        try:
+            rating = float(raw_rating) if raw_rating is not None else None
+        except (ValueError, TypeError):
+            rating = None
+
+        # Languages — Cinemagoer returns list, convert cleanly
+        raw_langs = movie.get("languages") or []
+        if isinstance(raw_langs, list):
+            languages_str = ", ".join(str(l) for l in raw_langs if l) or None
+        else:
+            languages_str = str(raw_langs).strip() or None
 
         return {
             'title': movie.get('title'),
@@ -145,7 +164,7 @@ async def get_movie_details(query, id=False, file=None):
             "runtime": list_to_str(movie.get("runtimes")),
             "countries": list_to_str(movie.get("countries")),
             "certificates": list_to_str(movie.get("certificates")),
-            "languages": list_to_str(movie.get("languages")),
+            "languages": languages_str or list_to_str(movie.get("languages")),
             "director": list_to_str(movie.get("director")),
             "writer": list_to_str(movie.get("writer")),
             "producer": list_to_str(movie.get("producer")),
