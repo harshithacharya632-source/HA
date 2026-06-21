@@ -33,18 +33,9 @@ CHANNELS = [int(ch) if id_pattern.search(ch) else ch for ch in environ.get('CHAN
 REQUEST_TO_JOIN_MODE = bool(environ.get('REQUEST_TO_JOIN_MODE', True)) # Set True Or False
 TRY_AGAIN_BTN = bool(environ.get('https://t.me/Goflix_movie', True)) # Set True Or False (This try again button is only for request to join fsub not for normal fsub)
 
-# NEW - FIXED (works for multiple channels)
-auth_channel = environ.get('AUTH_CHANNEL', '-1001887592232 -1002966435914')
-if auth_channel:
-    _channels = [ch.strip() for ch in auth_channel.split() if id_pattern.search(ch.strip())]
-    if len(_channels) == 1:
-        AUTH_CHANNEL = int(_channels[0])
-    elif len(_channels) > 1:
-        AUTH_CHANNEL = [int(ch) for ch in _channels]
-    else:
-        AUTH_CHANNEL = None
-else:
-    AUTH_CHANNEL = None
+# This Is Force Subscribe Channel, also known as Auth Channel 
+auth_channel = environ.get('AUTH_CHANNEL', '') # give your force subscribe channel id here else leave it blank
+AUTH_CHANNEL = int(auth_channel) if auth_channel and id_pattern.search(auth_channel) else None
 
 # This Channel Is For When User Request Any File Name With command or hashtag like - /request or #request
 reqst_channel = environ.get('REQST_CHANNEL', '-1003346859803')
