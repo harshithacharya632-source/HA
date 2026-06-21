@@ -65,7 +65,6 @@ async def is_subscribed(bot, query):
     if not AUTH_CHANNEL:
         return True
 
-    # Support both single int and list of channel IDs
     channels = AUTH_CHANNEL if isinstance(AUTH_CHANNEL, list) else [AUTH_CHANNEL]
 
     if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
@@ -78,14 +77,14 @@ async def is_subscribed(bot, query):
                     try:
                         user_data = await bot.get_chat_member(channel_id, query.from_user.id)
                     except UserNotParticipant:
-                        return False  # not in this channel → block
+                        return False
                     except Exception as e:
                         logger.exception(e)
                         return False
                     else:
                         if user_data.status == enums.ChatMemberStatus.BANNED:
                             return False
-                return True  # passed all channels
+                return True
         except Exception as e:
             logger.exception(e)
             return False
@@ -94,14 +93,14 @@ async def is_subscribed(bot, query):
             try:
                 user = await bot.get_chat_member(channel_id, query.from_user.id)
             except UserNotParticipant:
-                return False  # not in this channel → block
+                return False
             except Exception as e:
                 logger.exception(e)
                 return False
             else:
                 if user.status == enums.ChatMemberStatus.BANNED:
                     return False
-        return True  # passed all channels
+        return True
 
 
 async def get_poster(query, bulk=False, id=False, file=None):
