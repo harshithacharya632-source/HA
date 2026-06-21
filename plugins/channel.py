@@ -488,15 +488,17 @@ async def send_movie_update(bot, base_name):
             buttons = build_buttons(base_name, movie_doc.get("trailer_url"))
             size = (2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and movie_doc.get("is_backdrop") else (853, 1280)
 
+            DEFAULT_POSTER_URL = "https://files.catbox.moe/4u8skn.jpg"
+            _poster = movie_doc.get("poster_url", "") or DEFAULT_POSTER_URL
             resized_poster = None
-            _poster = movie_doc.get("poster_url", "")
-            logger.info(f"fetch_image URL for '{base_name}': {_poster}")
-            if _poster and not LINK_PREVIEW:
-                try:
-                    resized_poster = await fetch_image(_poster, size)
-                except Exception as fe:
-                    logger.warning(f"fetch_image failed for '{base_name}': {fe}")
 
+            # Always try fetch_image first (works for IMDB/TMDB/catbox direct URLs)
+            try:
+                resized_poster = await fetch_image(_poster, size)
+            except Exception as fe:
+                logger.warning(f"fetch_image failed for '{base_name}': {fe}")
+
+            # If fetch_image failed, try sending URL directly as photo
             if resized_poster:
                 msg = await bot.send_photo(
                     chat_id=MOVIE_UPDATE_CHANNEL,
@@ -507,16 +509,26 @@ async def send_movie_update(bot, base_name):
                 )
                 is_photo = True
             else:
-                send_params = {
-                    "chat_id": MOVIE_UPDATE_CHANNEL,
-                    "text": text,
-                    "reply_markup": buttons,
-                    "parse_mode": enums.ParseMode.HTML
-                }
-                if movie_doc.get("poster_url") and LINK_PREVIEW:
-                    send_params["invert_media"] = ABOVE_PREVIEW
-                msg = await bot.send_message(**send_params)
-                is_photo = False
+                # Send as photo URL directly — Telegram will download it
+                try:
+                    msg = await bot.send_photo(
+                        chat_id=MOVIE_UPDATE_CHANNEL,
+                        photo=_poster,
+                        caption=text,
+                        reply_markup=buttons,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    is_photo = True
+                except Exception as pe:
+                    logger.warning(f"send_photo URL failed for '{base_name}': {pe}")
+                    msg = await bot.send_message(
+                        chat_id=MOVIE_UPDATE_CHANNEL,
+                        text=text,
+                        reply_markup=buttons,
+                        parse_mode=enums.ParseMode.HTML,
+                        disable_web_page_preview=True
+                    )
+                    is_photo = False
 
             await db.movie_updates.update_one(
                 {"_id": base_name},
