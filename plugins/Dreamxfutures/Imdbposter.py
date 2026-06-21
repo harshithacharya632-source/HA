@@ -165,6 +165,34 @@ async def get_movie_details(query, id=False, file=None):
         logger.exception(f"An error occurred in get_movie_details: {e}")
         return None
 
+async def _search_youtube_trailer(session: aiohttp.ClientSession, title: str, year: int = None) -> str:
+    """Search YouTube for a trailer using the InvidiousAPI (no API key needed)."""
+    try:
+        query = f"{title} {year} official trailer" if year else f"{title} official trailer"
+        # Use Invidious public API — no key required
+        invidious_instances = [
+            "https://invidious.io.lol",
+            "https://inv.nadeko.net",
+            "https://invidious.nerdvpn.de",
+        ]
+        for base in invidious_instances:
+            try:
+                url = f"{base}/api/v1/search"
+                params = {"q": query, "type": "video", "fields": "videoId,title", "page": 1}
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        results = await resp.json()
+                        if results and isinstance(results, list):
+                            video_id = results[0].get("videoId")
+                            if video_id:
+                                return f"https://www.youtube.com/watch?v={video_id}"
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning(f"YouTube trailer search failed for '{title}': {e}")
+    return None
+
+
 async def get_movie_detailsx(query, id=False, file=None):
     q = str(query).strip()
     try:
@@ -240,6 +268,12 @@ async def get_movie_detailsx(query, id=False, file=None):
                     if v.get("site") == "YouTube":
                         trailer_url = f"https://www.youtube.com/watch?v={v['key']}"
                         break
+
+            # Fallback: YouTube search if TMDB has no trailer
+            if not trailer_url:
+                trailer_url = await _search_youtube_trailer(session, title, int(year) if year else None)
+                if trailer_url:
+                    logger.info(f"YouTube search fallback trailer for '{title}': {trailer_url}")
 
             return {
                 "title": title,
