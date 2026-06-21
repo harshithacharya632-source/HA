@@ -2,6 +2,7 @@ import re
 import aiohttp
 import warnings
 import logging
+from PIL import Image, features
 from io import BytesIO
 from PIL import Image
 from info import DREAMXBOTZ_IMAGE_FETCH, TMDB_API_KEY
@@ -33,13 +34,21 @@ async def fetch_image(url, size=(860, 1200)):
     try:
         session = await get_session()
 
-        async with session.get(url) as response:
+        async with session.get(url, allow_redirects=True) as response:
             if response.status != 200:
                 logger.error(f"Failed to fetch image: {response.status} for {url}")
                 return None
+            content_type = response.headers.get("Content-Type", "")
+            if "image" not in content_type:
+                logger.error(f"URL is not an image (got {content_type}): {url}")
+                return None
 
             data = await response.read()
-            img = Image.open(BytesIO(data))
+            try:
+                img = Image.open(BytesIO(data))
+            except Exception as img_err:
+                logger.error(f"PIL cannot open image from URL: {url} | error: {img_err} | content-type: {content_type} | bytes[:50]: {data[:50]}")
+                return None
             img = img.resize(size, Image.LANCZOS)
 
             out = BytesIO()
