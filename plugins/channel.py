@@ -255,6 +255,20 @@ def extract_media_info(filename: str, caption: str):
     }
 
 
+async def fix_bad_poster_urls(db):
+    """One-time migration: replace old ibb.co poster URLs with catbox default."""
+    try:
+        DEFAULT_POSTER = "https://files.catbox.moe/4u8skn.jpg"
+        result = await db.movie_updates.update_many(
+            {"poster_url": {"$regex": "ibb\.co"}},
+            {"$set": {"poster_url": DEFAULT_POSTER, "message_id": None, "is_photo": False}}
+        )
+        if result.modified_count:
+            logger.info(f"Fixed {result.modified_count} docs with bad ibb.co poster URLs")
+    except Exception as e:
+        logger.warning(f"fix_bad_poster_urls failed: {e}")
+
+
 @Client.on_message(filters.chat(CHANNELS) & MEDIA_FILTER)
 async def media_handler(bot, message):
     media = next(
@@ -279,6 +293,10 @@ async def media_handler(bot, message):
 
 async def process_and_send_update(bot, filename, caption):
     try:
+        if not hasattr(process_and_send_update, '_migrated'):
+            process_and_send_update._migrated = True
+            if hasattr(db, 'movie_updates'):
+                await fix_bad_poster_urls(db)
         media_info = extract_media_info(filename, caption)
         base_name = media_info["base_name"]
         processed = media_info["processed"]
@@ -472,6 +490,7 @@ async def send_movie_update(bot, base_name):
 
             resized_poster = None
             _poster = movie_doc.get("poster_url", "")
+            logger.info(f"fetch_image URL for '{base_name}': {_poster}")
             if _poster and not LINK_PREVIEW:
                 try:
                     resized_poster = await fetch_image(_poster, size)
