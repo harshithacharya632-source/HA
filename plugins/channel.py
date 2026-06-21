@@ -346,7 +346,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         )
 
         # ── POSTER: IMDB primary, TMDB fallback ──
-        DEFAULT_POSTER = "https://i.ibb.co/0RQMzgyB/default.jpg"  # replace with your direct ibb.co image URL
+        DEFAULT_POSTER = "https://ibb.co/0RQMzgyB"  # ibb.co page URL — used as link preview only
         imdb_poster = (imdb_data.get("poster_url") or "").strip()
         tmdb_poster = ((tmdb_data_full or {}).get("poster_url") or "").strip()
 
@@ -476,9 +476,11 @@ async def send_movie_update(bot, base_name):
             size = (2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and movie_doc.get("is_backdrop") else (853, 1280)
 
             resized_poster = None
-            if movie_doc.get("poster_url") and not LINK_PREVIEW:
+            _poster = movie_doc.get("poster_url", "")
+            _is_default = _poster and "ibb.co" in _poster
+            if _poster and not LINK_PREVIEW and not _is_default:
                 try:
-                    resized_poster = await fetch_image(movie_doc["poster_url"], size)
+                    resized_poster = await fetch_image(_poster, size)
                 except Exception as fe:
                     logger.warning(f"fetch_image failed for '{base_name}': {fe}")
 
