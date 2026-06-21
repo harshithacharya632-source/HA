@@ -1,6 +1,4 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+
 import re
 import logging
 import asyncio
@@ -312,32 +310,33 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
     }
 
     if not movie_doc:
-        poster_url = None
+        # ── Step 1: TMDB — poster, backdrop, trailer, imdb_id ──
+        tmdb_data_full = await get_movie_detailsx(base_name)
         trailer_url = None
-        is_backdrop = False
         backdrop_url = None
+        tmdb_poster = ""
+        is_backdrop = False
 
-        # Clean search name (strip episode/part tokens)
+        if tmdb_data_full:
+            trailer_url = tmdb_data_full.get("trailer_url")
+            backdrop_url = tmdb_data_full.get("backdrop_url") or ""
+            tmdb_poster = tmdb_data_full.get("poster_url") or ""
+            is_backdrop = bool(backdrop_url)
+            logger.info(f"TMDB for '{base_name}' | trailer: {trailer_url}")
+
+        # ── Step 2: IMDB — by name, then by TMDB imdb_id fallback ──
         imdb_search_name = re.sub(
             r'\b(?:Ep|Episode|Part|P)\s*\d+\b', '', base_name, flags=re.IGNORECASE
         ).strip()
         imdb_search_name = re.sub(r'\s+', ' ', imdb_search_name).strip()
 
-        # ── Step 1: TMDB — fetch first (trailer, backdrop, imdb_id for cross-lookup) ──
-        tmdb_data_full = await get_movie_detailsx(base_name)
-        if tmdb_data_full:
-            trailer_url = tmdb_data_full.get("trailer_url")
-            backdrop_url = tmdb_data_full.get("backdrop_url")
-            is_backdrop = bool(backdrop_url)
-            logger.info(f"TMDB supplemental for '{base_name}' | trailer: {trailer_url}")
-
-        # ── Step 2: IMDB — try by name first, then via TMDB's imdb_id if name search fails ──
         imdb_data = await get_movie_details(imdb_search_name) or {}
+
         if not imdb_data.get("rating") and tmdb_data_full and tmdb_data_full.get("imdb_id"):
-            # Cinemagoer failed by name — fetch directly by IMDB ID (reliable for non-English titles)
             imdb_id_from_tmdb = tmdb_data_full["imdb_id"].replace("tt", "")
             logger.info(f"IMDB name search failed, retrying by ID: {tmdb_data_full['imdb_id']}")
             imdb_data = await get_movie_details(imdb_id_from_tmdb, id=True) or {}
+
         logger.info(
             f"IMDB result for '{base_name}': "
             f"rating={imdb_data.get('rating')!r} "
@@ -346,55 +345,41 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         )
 
         # ── POSTER: IMDB primary, TMDB fallback ──
-        DEFAULT_POSTER = "https://ibb.co/0RQMzgyB"  # ibb.co page URL — used as link preview only
+        DEFAULT_POSTER = "https://ibb.co/0RQMzgyB"
         imdb_poster = (imdb_data.get("poster_url") or "").strip()
-        tmdb_poster = ((tmdb_data_full or {}).get("poster_url") or "").strip()
 
         if imdb_poster:
-            # IMDB poster — primary always
-            poster_url = imdb_poster
             final_poster = imdb_poster
-        elif tmdb_poster:
-            # No IMDB poster — use TMDB portrait poster
-            poster_url = tmdb_poster
-            # Upgrade to landscape backdrop if enabled
-            final_poster = (backdrop_url if LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url else tmdb_poster)
-        elif backdrop_url:
-            # No poster at all — use backdrop
-            poster_url = backdrop_url
+        elif LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url:
             final_poster = backdrop_url
+        elif tmdb_poster:
+            final_poster = tmdb_poster
         else:
-            # Absolute fallback
-            poster_url = DEFAULT_POSTER
             final_poster = DEFAULT_POSTER
 
         # ── RATING: IMDB primary, TMDB fallback ──
         rating = None
-        imdb_rating_raw = str(imdb_data.get("rating", "")).strip()
-        if imdb_rating_raw and imdb_rating_raw not in ("N/A", "None", ""):
-            try:
-                imdb_rating_val = float(imdb_rating_raw)
-                rating = f"{imdb_rating_val:.1f}" if imdb_rating_val > 0 else None
-                if rating:
-                    logger.info(f"Using IMDB rating for '{base_name}': {rating}")
-            except (ValueError, TypeError):
-                pass
+        raw_rating = imdb_data.get("rating")
+        try:
+            rating = f"{float(raw_rating):.1f}" if raw_rating is not None else None
+        except (ValueError, TypeError):
+            rating = None
         if not rating:
-            tmdb_rating_val = (tmdb_data_full or {}).get("rating", 0) or 0
-            rating = f"{tmdb_rating_val:.1f}" if tmdb_rating_val > 0 else "N/A"
+            tmdb_rating = (tmdb_data_full or {}).get("rating", 0) or 0
+            rating = f"{tmdb_rating:.1f}" if tmdb_rating > 0 else "N/A"
             logger.info(f"Using TMDB rating for '{base_name}': {rating}")
+        else:
+            logger.info(f"Using IMDB rating for '{base_name}': {rating}")
 
         # ── GENRES: IMDB primary, TMDB fallback ──
         raw_genres = imdb_data.get("genres") or (tmdb_data_full or {}).get("genres", "N/A")
         if isinstance(raw_genres, list):
             genres = ", ".join(str(g) for g in raw_genres if g) or "N/A"
-        elif isinstance(raw_genres, str):
-            genres = raw_genres.strip() or "N/A"
         else:
-            genres = "N/A"
+            genres = str(raw_genres).strip() or "N/A"
 
-        # ── LANGUAGES: IMDB primary + filename supplement ──
-        imdb_languages = imdb_data.get("languages", "")
+        # ── LANGUAGES: IMDB primary + filename ──
+        imdb_languages = imdb_data.get("languages") or ""
         lang_from_file = media_info["language"]
         lang_parts = set()
         if imdb_languages:
@@ -407,12 +392,12 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         raw_plot = (imdb_data.get("plot") or (tmdb_data_full or {}).get("plot") or "")
         plot_text = (raw_plot or "").strip()[:600]
 
-        # ── IMDB URL: IMDB data primary, TMDB external_ids fallback ──
-        imdb_url = imdb_data.get("url", "") or (tmdb_data_full or {}).get("imdb_url", "")
+        # ── IMDB URL: always from IMDB data, fallback build from imdb_id ──
+        imdb_url = imdb_data.get("url", "")
         if not imdb_url:
-            imdb_id = imdb_data.get("imdb_id", "") or (tmdb_data_full or {}).get("imdb_id", "")
-            if imdb_id:
-                imdb_url = f"https://www.imdb.com/title/{imdb_id}"
+            imdb_id_val = imdb_data.get("imdb_id", "") or (tmdb_data_full or {}).get("imdb_id", "")
+            if imdb_id_val:
+                imdb_url = f"https://www.imdb.com/title/{imdb_id_val}"
 
         # ── YEAR: IMDB primary, filename, TMDB fallback ──
         year = imdb_data.get("year") or media_info["year"] or (tmdb_data_full or {}).get("year")
@@ -432,7 +417,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             "trailer_url": trailer_url,
             "message_id": None,
             "is_photo": False,
-            "is_backdrop": bool(not imdb_poster and LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url)
+            "is_backdrop": bool(LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url and not imdb_poster)
         }
         try:
             await db.movie_updates.insert_one(movie_doc)
@@ -446,10 +431,6 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
                     {"_id": base_name},
                     {"$push": {"files": file_data}}
                 )
-                await db.movie_updates.update_one(
-                    {"_id": base_name},
-                    {"$set": {"message_id": None, "is_photo": False}}
-                )
                 schedule_update(bot, base_name, delay=5)
     else:
         if any(f["filename"] == filename for f in movie_doc["files"]):
@@ -458,13 +439,12 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             {"_id": base_name},
             {"$push": {"files": file_data}}
         )
-        # Reset message_id so send_movie_update sends a fresh post with poster
-        await db.movie_updates.update_one(
-            {"_id": base_name},
-            {"$set": {"message_id": None, "is_photo": False}}
-        )
-        # Delay 5s so if multiple episodes arrive together they batch into one post
-        schedule_update(bot, base_name, delay=5)
+        # SERIES: send fresh post for new episode
+        # MOVIE: just update caption (movies don't have new episodes)
+        if media_info["tag"] == "#SERIES":
+            schedule_update(bot, base_name, delay=5)
+        else:
+            schedule_update(bot, base_name, delay=5)
 
 
 def build_buttons(base_name: str, trailer_url: str = None) -> InlineKeyboardMarkup:
@@ -546,6 +526,7 @@ async def update_movie_message(bot, base_name):
         message_id = movie_doc.get("message_id")
         is_photo = movie_doc.get("is_photo", False)
 
+        # Always send fresh post (message_id is reset to None for new episodes)
         if not message_id:
             await send_movie_update(bot, base_name)
             return
