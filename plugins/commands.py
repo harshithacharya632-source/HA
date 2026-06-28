@@ -1106,10 +1106,16 @@ async def requests(bot, message):
         mention = message.from_user.mention
         success = True
         content = message.text
+        
+        # Strip command keywords AND bot username mention
+        import re
+        bot_username = (await bot.get_me()).username
         keywords = ["#request", "/request", "#Request", "/Request"]
         for keyword in keywords:
             if keyword in content:
                 content = content.replace(keyword, "")
+        # Remove @BotUsername from content (case-insensitive)
+        content = re.sub(rf"@{re.escape(bot_username)}", "", content, flags=re.IGNORECASE).strip()
         try:
             if REQST_CHANNEL is not None and len(content) >= 3:
                 btn = [[
