@@ -752,8 +752,6 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 # ===============================
 @Client.on_callback_query(filters.regex(r"^eps#"))
 async def episode_selector(client, query: CallbackQuery):
-    await query.answer()  # ✅ FIRST — kills button blink instantly
-
     try:
         _, season_tag, key, user = query.data.split("#")
 
@@ -827,6 +825,10 @@ async def episode_selector(client, query: CallbackQuery):
         except MessageNotModified:
             pass
 
+        # ✅ Answer LAST — keeps the button's loading spinner active
+        # for the whole time the episodes are being processed.
+        await query.answer()
+
     except Exception as e:
         await query.answer(f"❌ Error: {e}", show_alert=True)
 
@@ -836,8 +838,6 @@ async def episode_selector(client, query: CallbackQuery):
 # ===============================
 @Client.on_callback_query(filters.regex(r"^fs#"))
 async def filter_files(client, query: CallbackQuery):
-    await query.answer()  # ✅ FIRST — kills button blink instantly
-
     try:
         _, tag, key, page, user = query.data.split("#")
 
@@ -919,6 +919,10 @@ async def filter_files(client, query: CallbackQuery):
         except MessageNotModified:
             pass
 
+        # ✅ Answer LAST — keeps the button's loading spinner active
+        # for the whole time the file list is being processed.
+        await query.answer()
+
     except Exception as e:
         await query.answer(f"❌ Error: {e}", show_alert=True)
 
@@ -928,8 +932,6 @@ async def filter_files(client, query: CallbackQuery):
 # ===============================
 @Client.on_callback_query(filters.regex(r"^combined#"))
 async def combined_files(client, query: CallbackQuery):
-    await query.answer()  # ✅ FIRST — kills button blink instantly
-
     try:
         _, season_tag, key, page, user = query.data.split("#")
 
@@ -1007,6 +1009,10 @@ async def combined_files(client, query: CallbackQuery):
             await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
         except MessageNotModified:
             pass
+
+        # ✅ Answer LAST — keeps the button's loading spinner active
+        # for the whole time the combined files are being processed.
+        await query.answer()
 
     except Exception as e:
         await query.answer(f"❌ Error: {e}", show_alert=True)
