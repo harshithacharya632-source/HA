@@ -23,6 +23,7 @@ lock = asyncio.Lock()
 BUTTON = {}
 BUTTONS = {}
 FRESH = {}
+SEASON_OWNER = {}
 BUTTONS0 = {}
 BUTTONS1 = {}
 BUTTONS2 = {}
@@ -672,12 +673,19 @@ def filter_and_rank(files: list, search: str) -> list:
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
 async def seasons_cb_handler(client, query: CallbackQuery):
-    await query.answer()  # ✅ FIRST — kills button blink instantly
-
     try:
         _, key = query.data.split("#")
         search  = FRESH.get(key)
         chat_id = query.message.chat.id
+        uid     = query.from_user.id
+
+        # 🔒 Only the person who searched can open the seasons list
+        owner = SEASON_OWNER.get(key)
+        if owner and uid != owner:
+            return await query.answer(
+                "⚠️ This is not your search. Please search your own.",
+                show_alert=True
+            )
 
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
@@ -702,7 +710,6 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             return await query.answer("🚫 No seasons found in filenames.", show_alert=True)
 
         seasons = sorted(season_set)
-        uid = query.from_user.id
 
         btn = [[InlineKeyboardButton("📺 SELECT SEASON", callback_data="ident")]]
 
@@ -731,6 +738,10 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
         except MessageNotModified:
             pass
+
+        # ✅ Answer LAST — keeps the button's loading spinner active
+        # for the whole time the seasons are being processed.
+        await query.answer()
 
     except Exception as e:
         await query.answer(f"❌ Error: {e}", show_alert=True)
@@ -2788,6 +2799,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
     key = f"{message.chat.id}-{message.id}"
     req = message.from_user.id if message.from_user else 0
     FRESH[key] = search
+    SEASON_OWNER[key] = req
     temp.GETALL[key] = files
     if message.from_user:
         temp.SHORT[message.from_user.id] = message.chat.id
