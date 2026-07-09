@@ -669,6 +669,69 @@ def filter_and_rank(files: list, search: str) -> list:
 
 
 # ===============================
+# SPEED FIX: CACHE FILTERED FILE LIST PER SEARCH KEY
+# ===============================
+# Previously every season/episode/combined button click re-ran a fresh
+# DB query for up to 50,000 files PLUS the regex-based filter_and_rank()
+# pass on EVERY click. That's why series buttons felt slow. Now we fetch
+# + filter ONCE per search key and reuse the cached, already-filtered
+# list for all subsequent season/episode/combined clicks.
+SEASON_CACHE = {}          # key -> {"files": [...], "ts": epoch_seconds}
+SEASON_CACHE_TTL = 900     # 15 minutes
+
+
+async def get_cached_season_files(chat_id, key, search):
+    entry = SEASON_CACHE.get(key)
+    if entry and (time.time() - entry["ts"] < SEASON_CACHE_TTL):
+        return entry["files"]
+    files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+    files = filter_and_rank(files, search)
+    SEASON_CACHE[key] = {"files": files, "ts": time.time()}
+    return files
+
+
+# ===============================
+# QUALITY (BY FILE SIZE) BUTTONS
+# ===============================
+# 4K    : 3000 MB - 40000 MB
+# 2K    : 2000 MB - 3000 MB
+# 1080p : 1300 MB - 2000 MB
+# 720p  : 500 MB  - 1300 MB
+# 480p  : 0 MB    - 500 MB
+_MB = 1024 * 1024
+QUALITY_RANGES = {
+    "4k":   (3000 * _MB, 40000 * _MB),
+    "2k":   (2000 * _MB, 3000 * _MB),
+    "1080": (1300 * _MB, 2000 * _MB),
+    "720":  (500 * _MB, 1300 * _MB),
+    "480":  (0, 500 * _MB),
+}
+QUALITY_LABELS = {"4k": "4K", "2k": "2K", "1080": "1080p", "720": "720p", "480": "480p"}
+QUALITY_ORDER = ["4k", "2k", "1080", "720", "480"]
+
+
+def get_quality_label(file_size):
+    """Classify a file by size (bytes) into a quality bucket, or None."""
+    try:
+        size = int(file_size)
+    except (TypeError, ValueError):
+        return None
+    for qkey in QUALITY_ORDER:
+        lo, hi = QUALITY_RANGES[qkey]
+        if lo <= size < hi:
+            return QUALITY_LABELS[qkey]
+    return None
+
+
+def build_quality_row(key, uid):
+    """Row of 4K / 2K / 1080p / 720p / 480p buttons for a given search key."""
+    return [
+        InlineKeyboardButton(QUALITY_LABELS[q], callback_data=f"qual#{q}#{key}#{uid}")
+        for q in QUALITY_ORDER
+    ]
+
+
+# ===============================
 # SEASON LIST
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
@@ -690,11 +753,8 @@ async def seasons_cb_handler(client, query: CallbackQuery):
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        # Fetch all files
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
-        # ✅ Only files that START WITH the show name
-        files = filter_and_rank(files, search)
+        # ✅ Fetch + filter ONCE, then reuse cached list on later clicks (fast)
+        files = await get_cached_season_files(chat_id, key, search)
 
         if not files:
             return await query.answer("🚫 No matching files found.", show_alert=True)
@@ -729,6 +789,10 @@ async def seasons_cb_handler(client, query: CallbackQuery):
                     )
                 )
             btn.append(row)
+
+        # ✅ Quality buttons shown here too (after opening series/season list)
+        btn.append([InlineKeyboardButton("🎚 SELECT QUALITY", callback_data="ident")])
+        btn.append(build_quality_row(key, uid))
 
         btn.append([
             InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{uid}_{key}_0")
@@ -769,10 +833,8 @@ async def episode_selector(client, query: CallbackQuery):
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
-        # ✅ PREFIX ONLY — correct show files only
-        files = filter_and_rank(files, search)
+        # ✅ Cached — no repeat DB fetch / regex filter on every click
+        files = await get_cached_season_files(chat_id, key, search)
 
         episode_set    = set()
         combined_exist = False
@@ -857,10 +919,8 @@ async def filter_files(client, query: CallbackQuery):
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
-        # ✅ PREFIX ONLY
-        files = filter_and_rank(files, search)
+        # ✅ Cached — no repeat DB fetch / regex filter on every click
+        files = await get_cached_season_files(chat_id, key, search)
 
         # Filter exact season + episode
         filtered = [
@@ -950,10 +1010,8 @@ async def combined_files(client, query: CallbackQuery):
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
-        # ✅ PREFIX ONLY
-        files = filter_and_rank(files, search)
+        # ✅ Cached — no repeat DB fetch / regex filter on every click
+        files = await get_cached_season_files(chat_id, key, search)
 
         combined = [
             f for f in files
@@ -1012,6 +1070,77 @@ async def combined_files(client, query: CallbackQuery):
 
         # ✅ Answer LAST — keeps the button's loading spinner active
         # for the whole time the combined files are being processed.
+        await query.answer()
+
+    except Exception as e:
+        await query.answer(f"❌ Error: {e}", show_alert=True)
+
+
+# ===============================
+# QUALITY FILTER (4K / 2K / 1080p / 720p / 480p) — by file size
+# ===============================
+@Client.on_callback_query(filters.regex(r"^qual#"))
+async def quality_filter_cb_handler(client, query: CallbackQuery):
+    try:
+        _, qkey, key, uid = query.data.split("#")
+
+        if int(uid) != query.from_user.id:
+            return await query.answer(
+                "⚠️ This is not your search. Please search your own.",
+                show_alert=True
+            )
+
+        search  = FRESH.get(key)
+        chat_id = query.message.chat.id
+
+        if not search:
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+
+        lo, hi = QUALITY_RANGES.get(qkey, (0, float("inf")))
+        label  = QUALITY_LABELS.get(qkey, qkey)
+
+        # Prefer the full cached season/series file list (built when the
+        # series/season buttons were opened) since it covers every file
+        # for this search, not just the current page of results.
+        entry = SEASON_CACHE.get(key)
+        if entry:
+            files = entry["files"]
+        else:
+            files = temp.GETALL.get(key)
+            if not files:
+                files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+                files = filter_and_rank(files, search)
+
+        matched = [f for f in files if lo <= f.get("file_size", 0) < hi]
+
+        if not matched:
+            return await query.answer(f"🚫 No {label} files found.", show_alert=True)
+
+        settings = await get_settings(chat_id)
+        pre = 'filep' if settings.get('file_secure', False) else 'file'
+
+        FILES_PER_PAGE = 30  # keep well under Telegram's button-count limits
+        matched = matched[:FILES_PER_PAGE]
+
+        btn = [[InlineKeyboardButton(f"🎚 {label} Results ({len(matched)})", callback_data="ident")]]
+        for f in matched:
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
+            display = name[:45] + "…" if len(name) > 45 else name
+            btn.append([InlineKeyboardButton(
+                f"[{size}] {display}",
+                callback_data=f'{pre}#{f["file_id"]}'
+            )])
+
+        btn.append([
+            InlineKeyboardButton("↩️ Back", callback_data=f"next_{uid}_{key}_0")
+        ])
+
+        try:
+            await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+        except MessageNotModified:
+            pass
+
         await query.answer()
 
     except Exception as e:
@@ -2819,9 +2948,11 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             for file in files
         ]
         btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(1, build_quality_row(key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
+            build_quality_row(key, req)
         ]
     if offset != "":
         try:
