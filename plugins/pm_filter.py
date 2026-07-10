@@ -149,9 +149,11 @@ async def next_page(bot, query):
         ]
 
         btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(1, build_quality_row("all", key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
+            build_quality_row("all", key, req)
         ]
     try:
         if settings['max_btn']:
@@ -669,6 +671,76 @@ def filter_and_rank(files: list, search: str) -> list:
 
 
 # ===============================
+# SPEED FIX: CACHE FILTERED FILE LIST PER SEARCH KEY
+# ===============================
+# Previously every season/episode/combined button click re-ran a fresh
+# DB query for up to 50,000 files PLUS the regex-based filter_and_rank()
+# pass on EVERY click. That's why series buttons felt slow. Now we fetch
+# + filter ONCE per search key and reuse the cached, already-filtered
+# list for all subsequent season/episode/combined clicks.
+SEASON_CACHE = {}          # key -> {"files": [...], "ts": epoch_seconds}
+SEASON_CACHE_TTL = 900     # 15 minutes
+
+
+async def get_cached_season_files(chat_id, key, search):
+    entry = SEASON_CACHE.get(key)
+    if entry and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
+        return entry["files"]
+    files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+    files = filter_and_rank(files, search)
+    SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
+    return files
+
+
+# ===============================
+# QUALITY (BY FILE SIZE) BUTTONS
+# ===============================
+# 4K    : 3000 MB - 40000 MB
+# 2K    : 2000 MB - 3000 MB
+# 1080p : 1300 MB - 2000 MB
+# 720p  : 500 MB  - 1300 MB
+# 480p  : 0 MB    - 500 MB
+_MB = 1024 * 1024
+QUALITY_RANGES = {
+    "4k":   (3000 * _MB, 40000 * _MB),
+    "2k":   (2000 * _MB, 3000 * _MB),
+    "1080": (1300 * _MB, 2000 * _MB),
+    "720":  (500 * _MB, 1300 * _MB),
+    "480":  (0, 500 * _MB),
+}
+QUALITY_LABELS = {"4k": "4K", "2k": "2K", "1080": "1080p", "720": "720p", "480": "480p"}
+QUALITY_ORDER = ["4k", "2k", "1080", "720", "480"]
+
+
+def get_quality_label(file_size):
+    """Classify a file by size (bytes) into a quality bucket, or None."""
+    try:
+        size = int(file_size)
+    except (TypeError, ValueError):
+        return None
+    for qkey in QUALITY_ORDER:
+        lo, hi = QUALITY_RANGES[qkey]
+        if lo <= size < hi:
+            return QUALITY_LABELS[qkey]
+    return None
+
+
+def build_quality_row(scope, key, uid, selected=None):
+    """Row of 4K / 2K / 1080p / 720p / 480p buttons, scoped to a specific
+    context so the filter only searches within that context's files:
+      scope = "s{season}e{episode}"  -> that single episode's files
+      scope = "c{season}"            -> that season's combined/batch files
+    If `selected` is set (e.g. "2k"), that button gets a ✅."""
+    return [
+        InlineKeyboardButton(
+            f"✅ {QUALITY_LABELS[q]}" if q == selected else QUALITY_LABELS[q],
+            callback_data=f"qual#{q}#{scope}#{key}#0#{uid}"
+        )
+        for q in QUALITY_ORDER
+    ]
+
+
+# ===============================
 # SEASON LIST
 # ===============================
 @Client.on_callback_query(filters.regex(r"^seasons#"))
@@ -690,11 +762,8 @@ async def seasons_cb_handler(client, query: CallbackQuery):
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        # Fetch all files
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
-        # ✅ Only files that START WITH the show name
-        files = filter_and_rank(files, search)
+        # ✅ Fetch + filter ONCE, then reuse cached list on later clicks (fast)
+        files = await get_cached_season_files(chat_id, key, search)
 
         if not files:
             return await query.answer("🚫 No matching files found.", show_alert=True)
@@ -769,10 +838,8 @@ async def episode_selector(client, query: CallbackQuery):
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
-        # ✅ PREFIX ONLY — correct show files only
-        files = filter_and_rank(files, search)
+        # ✅ Cached — no repeat DB fetch / regex filter on every click
+        files = await get_cached_season_files(chat_id, key, search)
 
         episode_set    = set()
         combined_exist = False
@@ -857,10 +924,8 @@ async def filter_files(client, query: CallbackQuery):
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
-        # ✅ PREFIX ONLY
-        files = filter_and_rank(files, search)
+        # ✅ Cached — no repeat DB fetch / regex filter on every click
+        files = await get_cached_season_files(chat_id, key, search)
 
         # Filter exact season + episode
         filtered = [
@@ -883,6 +948,9 @@ async def filter_files(client, query: CallbackQuery):
                 callback_data="ident"
             )]
         ]
+
+        # ✅ Quality buttons at the TOP, scoped to just this episode's files
+        btn.append(build_quality_row(f"s{season_no}e{episode_no}", key, uid))
 
         for f in filtered[start:end]:
             name    = f["file_name"]
@@ -950,10 +1018,8 @@ async def combined_files(client, query: CallbackQuery):
         if not search:
             return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
 
-        files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-
-        # ✅ PREFIX ONLY
-        files = filter_and_rank(files, search)
+        # ✅ Cached — no repeat DB fetch / regex filter on every click
+        files = await get_cached_season_files(chat_id, key, search)
 
         combined = [
             f for f in files
@@ -975,6 +1041,9 @@ async def combined_files(client, query: CallbackQuery):
                 callback_data="ident"
             )]
         ]
+
+        # ✅ Quality buttons at the TOP, scoped to just this season's combined files
+        btn.append(build_quality_row(f"c{season_no}", key, uid))
 
         for f in combined[start:end]:
             name    = f["file_name"]
@@ -1012,6 +1081,124 @@ async def combined_files(client, query: CallbackQuery):
 
         # ✅ Answer LAST — keeps the button's loading spinner active
         # for the whole time the combined files are being processed.
+        await query.answer()
+
+    except Exception as e:
+        await query.answer(f"❌ Error: {e}", show_alert=True)
+
+
+# ===============================
+# QUALITY FILTER (4K / 2K / 1080p / 720p / 480p) — by file size
+# ===============================
+@Client.on_callback_query(filters.regex(r"^qual#"))
+async def quality_filter_cb_handler(client, query: CallbackQuery):
+    try:
+        _, qkey, scope, key, page, uid = query.data.split("#")
+        page = int(page)
+
+        if int(uid) != query.from_user.id:
+            return await query.answer(
+                "⚠️ This is not your search. Please search your own.",
+                show_alert=True
+            )
+
+        search  = FRESH.get(key)
+        chat_id = query.message.chat.id
+
+        if not search:
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+
+        lo, hi = QUALITY_RANGES.get(qkey, (0, float("inf")))
+        label  = QUALITY_LABELS.get(qkey, qkey)
+
+        all_files = await get_cached_season_files(chat_id, key, search)
+
+        # ✅ Scope down to just the episode / combined-batch context this
+        # quality row was opened from, not the whole show's file list.
+        # scope == "all" means it was opened from the main results screen,
+        # so it searches across everything and Back returns to that
+        # same starting search screen.
+        if scope == "all":
+            pool = all_files
+            back_cb = f"next_{uid}_{key}_0"
+        elif scope.startswith("c"):
+            season_no = int(scope[1:])
+            pool = [
+                f for f in all_files
+                if extract_season(f["file_name"]) == season_no
+                and is_combined_file(f["file_name"])
+            ]
+            back_cb = f"combined#s{season_no}#{key}#0#{uid}"
+        elif scope.startswith("s") and "e" in scope:
+            season_no  = int(scope[1:scope.index("e")])
+            episode_no = int(scope[scope.index("e")+1:])
+            pool = [
+                f for f in all_files
+                if extract_season(f["file_name"]) == season_no
+                and extract_episode(f["file_name"]) == episode_no
+                and not is_combined_file(f["file_name"])
+            ]
+            back_cb = f"fs#s{season_no}e{episode_no}#{key}#0#{uid}"
+        else:
+            pool = all_files
+            back_cb = f"seasons#{key}"
+
+        matched = [f for f in pool if lo <= f.get("file_size", 0) < hi]
+
+        if not matched:
+            return await query.answer(f"🚫 No {label} files found here.", show_alert=True)
+
+        settings = await get_settings(chat_id)
+        pre = 'filep' if settings.get('file_secure', False) else 'file'
+
+        FILES_PER_PAGE = 8  # same page size as the episode file list, for consistency
+        total_pages    = max(1, (len(matched) - 1) // FILES_PER_PAGE + 1)
+        page            = max(0, min(page, total_pages - 1))
+        start           = page * FILES_PER_PAGE
+        end             = start + FILES_PER_PAGE
+
+        # ✅ Quality row stays visible (with a ✅ on the active one) so the
+        # user can switch quality directly without hitting Back first.
+        btn = [build_quality_row(scope, key, uid, selected=qkey)]
+        btn.append([InlineKeyboardButton(
+            f"🎚 {label} — {len(matched)} file(s)", callback_data="ident"
+        )])
+
+        for f in matched[start:end]:
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
+            display = name[:45] + "…" if len(name) > 45 else name
+            btn.append([InlineKeyboardButton(
+                f"[{size}] {display}",
+                callback_data=f'{pre}#{f["file_id"]}'
+            )])
+
+        # Pagination nav — identical pattern to the episode file list
+        if total_pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton(
+                    "⬅️ Prev", callback_data=f"qual#{qkey}#{scope}#{key}#{page-1}#{uid}"
+                ))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
+            if page + 1 < total_pages:
+                nav.append(InlineKeyboardButton(
+                    "Next ➡️", callback_data=f"qual#{qkey}#{scope}#{key}#{page+1}#{uid}"
+                ))
+            btn.append(nav)
+
+        # ✅ Back returns to the exact plain (unfiltered) screen this was
+        # opened from — the episode's file list or the season's combined
+        # list — not the season list.
+        btn.append([
+            InlineKeyboardButton("↩️ Back", callback_data=back_cb)
+        ])
+
+        try:
+            await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+        except MessageNotModified:
+            pass
+
         await query.answer()
 
     except Exception as e:
@@ -2819,9 +3006,11 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             for file in files
         ]
         btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(1, build_quality_row("all", key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
+            build_quality_row("all", key, req)
         ]
     if offset != "":
         try:
