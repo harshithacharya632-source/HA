@@ -947,6 +947,9 @@ async def filter_files(client, query: CallbackQuery):
             )]
         ]
 
+        # ✅ Quality buttons at the TOP, scoped to just this episode's files
+        btn.append(build_quality_row(f"s{season_no}e{episode_no}", key, uid))
+
         for f in filtered[start:end]:
             name    = f["file_name"]
             size    = get_size(f["file_size"])
@@ -971,9 +974,6 @@ async def filter_files(client, query: CallbackQuery):
                     callback_data=f"fs#s{season_no}e{episode_no}#{key}#{page+1}#{uid}"
                 ))
             btn.append(nav)
-
-        # ✅ Quality buttons here, scoped to just this episode's files
-        btn.append(build_quality_row(f"s{season_no}e{episode_no}", key, uid))
 
         btn.append([
             InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}"),
@@ -1040,6 +1040,9 @@ async def combined_files(client, query: CallbackQuery):
             )]
         ]
 
+        # ✅ Quality buttons at the TOP, scoped to just this season's combined files
+        btn.append(build_quality_row(f"c{season_no}", key, uid))
+
         for f in combined[start:end]:
             name    = f["file_name"]
             size    = get_size(f["file_size"])
@@ -1063,9 +1066,6 @@ async def combined_files(client, query: CallbackQuery):
                     callback_data=f"combined#s{season_no}#{key}#{page+1}#{uid}"
                 ))
             btn.append(nav)
-
-        # ✅ Quality buttons here, scoped to just this season's combined files
-        btn.append(build_quality_row(f"c{season_no}", key, uid))
 
         btn.append([
             InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}"),
@@ -1113,7 +1113,13 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
 
         # ✅ Scope down to just the episode / combined-batch context this
         # quality row was opened from, not the whole show's file list.
-        if scope.startswith("c"):
+        # scope == "all" means it was opened from the main results screen,
+        # so it searches across everything and Back returns to that
+        # same starting search screen.
+        if scope == "all":
+            pool = all_files
+            back_cb = f"next_{uid}_{key}_0"
+        elif scope.startswith("c"):
             season_no = int(scope[1:])
             pool = [
                 f for f in all_files
@@ -2998,9 +3004,11 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             for file in files
         ]
         btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(1, build_quality_row("all", key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
+            build_quality_row("all", key, req)
         ]
     if offset != "":
         try:
