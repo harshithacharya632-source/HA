@@ -1726,9 +1726,11 @@ async def cb_handler(client: Client, query: CallbackQuery):
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
             await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={ident}_{file_id}")
+        except QueryIdInvalid:
+            logger.warning(f"Expired callback query for file_id={file_id}, user={query.from_user.id}")
         except Exception as e:
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={ident}_{file_id}")
-            
+            logger.exception(e)
+
     elif query.data.startswith("sendfiles"):
         clicked = query.from_user.id
         ident, key = query.data.split("#")
@@ -1749,9 +1751,10 @@ async def cb_handler(client: Client, query: CallbackQuery):
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
             await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=sendfiles3_{key}")
+        except QueryIdInvalid:
+            logger.warning(f"Expired callback query for key={key}, user={query.from_user.id}")
         except Exception as e:
             logger.exception(e)
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=sendfiles4_{key}")
 
     elif query.data.startswith("unmuteme"):
         ident, userid = query.data.split("#")
