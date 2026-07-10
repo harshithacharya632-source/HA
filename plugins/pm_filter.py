@@ -723,14 +723,16 @@ def get_quality_label(file_size):
     return None
 
 
-def build_quality_row(key, uid, selected=None):
-    """Row of 4K / 2K / 1080p / 720p / 480p buttons for a given search key.
-    If `selected` is set (e.g. "2k"), that button gets a ✅ so the user
-    can see which quality is currently applied and switch directly."""
+def build_quality_row(scope, key, uid, selected=None):
+    """Row of 4K / 2K / 1080p / 720p / 480p buttons, scoped to a specific
+    context so the filter only searches within that context's files:
+      scope = "s{season}e{episode}"  -> that single episode's files
+      scope = "c{season}"            -> that season's combined/batch files
+    If `selected` is set (e.g. "2k"), that button gets a ✅."""
     return [
         InlineKeyboardButton(
             f"✅ {QUALITY_LABELS[q]}" if q == selected else QUALITY_LABELS[q],
-            callback_data=f"qual#{q}#{key}#0#{uid}"
+            callback_data=f"qual#{q}#{scope}#{key}#0#{uid}"
         )
         for q in QUALITY_ORDER
     ]
@@ -794,10 +796,6 @@ async def seasons_cb_handler(client, query: CallbackQuery):
                     )
                 )
             btn.append(row)
-
-        # ✅ Quality buttons shown here too (after opening series/season list)
-        btn.append([InlineKeyboardButton("🎚 SELECT QUALITY", callback_data="ident")])
-        btn.append(build_quality_row(key, uid))
 
         btn.append([
             InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{uid}_{key}_0")
@@ -882,9 +880,6 @@ async def episode_selector(client, query: CallbackQuery):
                     for ep in episodes[i:i+3]
                 ]
                 btn.append(row)
-
-        # ✅ Quality buttons shown here too
-        btn.append(build_quality_row(key, uid))
 
         btn.append([
             InlineKeyboardButton("↩️ Back to Seasons", callback_data=f"seasons#{key}")
@@ -977,8 +972,8 @@ async def filter_files(client, query: CallbackQuery):
                 ))
             btn.append(nav)
 
-        # ✅ Quality buttons now shown here too
-        btn.append(build_quality_row(key, uid))
+        # ✅ Quality buttons here, scoped to just this episode's files
+        btn.append(build_quality_row(f"s{season_no}e{episode_no}", key, uid))
 
         btn.append([
             InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}"),
@@ -1069,8 +1064,8 @@ async def combined_files(client, query: CallbackQuery):
                 ))
             btn.append(nav)
 
-        # ✅ Quality buttons now shown here too
-        btn.append(build_quality_row(key, uid))
+        # ✅ Quality buttons here, scoped to just this season's combined files
+        btn.append(build_quality_row(f"c{season_no}", key, uid))
 
         btn.append([
             InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}"),
@@ -1096,7 +1091,7 @@ async def combined_files(client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex(r"^qual#"))
 async def quality_filter_cb_handler(client, query: CallbackQuery):
     try:
-        _, qkey, key, page, uid = query.data.split("#")
+        _, qkey, scope, key, page, uid = query.data.split("#")
         page = int(page)
 
         if int(uid) != query.from_user.id:
@@ -1114,14 +1109,36 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         lo, hi = QUALITY_RANGES.get(qkey, (0, float("inf")))
         label  = QUALITY_LABELS.get(qkey, qkey)
 
-        # ✅ Always use the FULL matching file list for this search (cached
-        # after first fetch), not just whatever page happens to be loaded.
-        files = await get_cached_season_files(chat_id, key, search)
+        all_files = await get_cached_season_files(chat_id, key, search)
 
-        matched = [f for f in files if lo <= f.get("file_size", 0) < hi]
+        # ✅ Scope down to just the episode / combined-batch context this
+        # quality row was opened from, not the whole show's file list.
+        if scope.startswith("c"):
+            season_no = int(scope[1:])
+            pool = [
+                f for f in all_files
+                if extract_season(f["file_name"]) == season_no
+                and is_combined_file(f["file_name"])
+            ]
+            back_cb = f"combined#s{season_no}#{key}#0#{uid}"
+        elif scope.startswith("s") and "e" in scope:
+            season_no  = int(scope[1:scope.index("e")])
+            episode_no = int(scope[scope.index("e")+1:])
+            pool = [
+                f for f in all_files
+                if extract_season(f["file_name"]) == season_no
+                and extract_episode(f["file_name"]) == episode_no
+                and not is_combined_file(f["file_name"])
+            ]
+            back_cb = f"fs#s{season_no}e{episode_no}#{key}#0#{uid}"
+        else:
+            pool = all_files
+            back_cb = f"seasons#{key}"
+
+        matched = [f for f in pool if lo <= f.get("file_size", 0) < hi]
 
         if not matched:
-            return await query.answer(f"🚫 No {label} files found.", show_alert=True)
+            return await query.answer(f"🚫 No {label} files found here.", show_alert=True)
 
         settings = await get_settings(chat_id)
         pre = 'filep' if settings.get('file_secure', False) else 'file'
@@ -1134,7 +1151,7 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
 
         # ✅ Quality row stays visible (with a ✅ on the active one) so the
         # user can switch quality directly without hitting Back first.
-        btn = [build_quality_row(key, uid, selected=qkey)]
+        btn = [build_quality_row(scope, key, uid, selected=qkey)]
         btn.append([InlineKeyboardButton(
             f"🎚 {label} — {len(matched)} file(s)", callback_data="ident"
         )])
@@ -1153,18 +1170,20 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
             nav = []
             if page > 0:
                 nav.append(InlineKeyboardButton(
-                    "⬅️ Prev", callback_data=f"qual#{qkey}#{key}#{page-1}#{uid}"
+                    "⬅️ Prev", callback_data=f"qual#{qkey}#{scope}#{key}#{page-1}#{uid}"
                 ))
             nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
             if page + 1 < total_pages:
                 nav.append(InlineKeyboardButton(
-                    "Next ➡️", callback_data=f"qual#{qkey}#{key}#{page+1}#{uid}"
+                    "Next ➡️", callback_data=f"qual#{qkey}#{scope}#{key}#{page+1}#{uid}"
                 ))
             btn.append(nav)
 
-        # ✅ Back leads to the season list, which also has quality buttons
+        # ✅ Back returns to the exact plain (unfiltered) screen this was
+        # opened from — the episode's file list or the season's combined
+        # list — not the season list.
         btn.append([
-            InlineKeyboardButton("↩️ Back", callback_data=f"seasons#{key}")
+            InlineKeyboardButton("↩️ Back", callback_data=back_cb)
         ])
 
         try:
@@ -2979,11 +2998,9 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             for file in files
         ]
         btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
-        btn.insert(1, build_quality_row(key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
-            build_quality_row(key, req)
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
         ]
     if offset != "":
         try:
