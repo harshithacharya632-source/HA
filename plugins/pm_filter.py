@@ -730,7 +730,7 @@ def build_quality_row(key, uid, selected=None):
     return [
         InlineKeyboardButton(
             f"✅ {QUALITY_LABELS[q]}" if q == selected else QUALITY_LABELS[q],
-            callback_data=f"qual#{q}#{key}#{uid}"
+            callback_data=f"qual#{q}#{key}#0#{uid}"
         )
         for q in QUALITY_ORDER
     ]
@@ -883,6 +883,9 @@ async def episode_selector(client, query: CallbackQuery):
                 ]
                 btn.append(row)
 
+        # ✅ Quality buttons shown here too
+        btn.append(build_quality_row(key, uid))
+
         btn.append([
             InlineKeyboardButton("↩️ Back to Seasons", callback_data=f"seasons#{key}")
         ])
@@ -974,6 +977,9 @@ async def filter_files(client, query: CallbackQuery):
                 ))
             btn.append(nav)
 
+        # ✅ Quality buttons now shown here too
+        btn.append(build_quality_row(key, uid))
+
         btn.append([
             InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}"),
             InlineKeyboardButton("🏠 Home",     callback_data=f"next_{uid}_{key}_0")
@@ -1063,6 +1069,9 @@ async def combined_files(client, query: CallbackQuery):
                 ))
             btn.append(nav)
 
+        # ✅ Quality buttons now shown here too
+        btn.append(build_quality_row(key, uid))
+
         btn.append([
             InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}"),
             InlineKeyboardButton("🏠 Home",     callback_data=f"next_{uid}_{key}_0")
@@ -1087,7 +1096,8 @@ async def combined_files(client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex(r"^qual#"))
 async def quality_filter_cb_handler(client, query: CallbackQuery):
     try:
-        _, qkey, key, uid = query.data.split("#")
+        _, qkey, key, page, uid = query.data.split("#")
+        page = int(page)
 
         if int(uid) != query.from_user.id:
             return await query.answer(
@@ -1106,7 +1116,6 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
 
         # ✅ Always use the FULL matching file list for this search (cached
         # after first fetch), not just whatever page happens to be loaded.
-        # This is what was causing only 3-4 files to show before.
         files = await get_cached_season_files(chat_id, key, search)
 
         matched = [f for f in files if lo <= f.get("file_size", 0) < hi]
@@ -1117,17 +1126,20 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         settings = await get_settings(chat_id)
         pre = 'filep' if settings.get('file_secure', False) else 'file'
 
-        FILES_PER_PAGE = 40  # keep well under Telegram's button-count limits
-        shown = matched[:FILES_PER_PAGE]
+        FILES_PER_PAGE = 8  # same page size as the episode file list, for consistency
+        total_pages    = max(1, (len(matched) - 1) // FILES_PER_PAGE + 1)
+        page            = max(0, min(page, total_pages - 1))
+        start           = page * FILES_PER_PAGE
+        end             = start + FILES_PER_PAGE
 
         # ✅ Quality row stays visible (with a ✅ on the active one) so the
         # user can switch quality directly without hitting Back first.
         btn = [build_quality_row(key, uid, selected=qkey)]
-        header = f"🎚 {label} Results ({len(matched)} found"
-        header += f", showing {len(shown)})" if len(matched) > len(shown) else ")"
-        btn.append([InlineKeyboardButton(header, callback_data="ident")])
+        btn.append([InlineKeyboardButton(
+            f"🎚 {label} — {len(matched)} file(s)", callback_data="ident"
+        )])
 
-        for f in shown:
+        for f in matched[start:end]:
             name    = f["file_name"]
             size    = get_size(f["file_size"])
             display = name[:45] + "…" if len(name) > 45 else name
@@ -1136,6 +1148,21 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
+        # Pagination nav — identical pattern to the episode file list
+        if total_pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton(
+                    "⬅️ Prev", callback_data=f"qual#{qkey}#{key}#{page-1}#{uid}"
+                ))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
+            if page + 1 < total_pages:
+                nav.append(InlineKeyboardButton(
+                    "Next ➡️", callback_data=f"qual#{qkey}#{key}#{page+1}#{uid}"
+                ))
+            btn.append(nav)
+
+        # ✅ Back leads to the season list, which also has quality buttons
         btn.append([
             InlineKeyboardButton("↩️ Back", callback_data=f"seasons#{key}")
         ])
