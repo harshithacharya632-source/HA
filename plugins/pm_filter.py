@@ -682,11 +682,11 @@ SEASON_CACHE_TTL = 900     # 15 minutes
 
 async def get_cached_season_files(chat_id, key, search):
     entry = SEASON_CACHE.get(key)
-    if entry and (time.time() - entry["ts"] < SEASON_CACHE_TTL):
+    if entry and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
         return entry["files"]
     files, _, _ = await get_search_results(chat_id, search, max_results=50000)
     files = filter_and_rank(files, search)
-    SEASON_CACHE[key] = {"files": files, "ts": time.time()}
+    SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
 
 
@@ -723,10 +723,15 @@ def get_quality_label(file_size):
     return None
 
 
-def build_quality_row(key, uid):
-    """Row of 4K / 2K / 1080p / 720p / 480p buttons for a given search key."""
+def build_quality_row(key, uid, selected=None):
+    """Row of 4K / 2K / 1080p / 720p / 480p buttons for a given search key.
+    If `selected` is set (e.g. "2k"), that button gets a ✅ so the user
+    can see which quality is currently applied and switch directly."""
     return [
-        InlineKeyboardButton(QUALITY_LABELS[q], callback_data=f"qual#{q}#{key}#{uid}")
+        InlineKeyboardButton(
+            f"✅ {QUALITY_LABELS[q]}" if q == selected else QUALITY_LABELS[q],
+            callback_data=f"qual#{q}#{key}#{uid}"
+        )
         for q in QUALITY_ORDER
     ]
 
@@ -1099,17 +1104,10 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         lo, hi = QUALITY_RANGES.get(qkey, (0, float("inf")))
         label  = QUALITY_LABELS.get(qkey, qkey)
 
-        # Prefer the full cached season/series file list (built when the
-        # series/season buttons were opened) since it covers every file
-        # for this search, not just the current page of results.
-        entry = SEASON_CACHE.get(key)
-        if entry:
-            files = entry["files"]
-        else:
-            files = temp.GETALL.get(key)
-            if not files:
-                files, _, _ = await get_search_results(chat_id, search, max_results=50000)
-                files = filter_and_rank(files, search)
+        # ✅ Always use the FULL matching file list for this search (cached
+        # after first fetch), not just whatever page happens to be loaded.
+        # This is what was causing only 3-4 files to show before.
+        files = await get_cached_season_files(chat_id, key, search)
 
         matched = [f for f in files if lo <= f.get("file_size", 0) < hi]
 
@@ -1119,11 +1117,17 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         settings = await get_settings(chat_id)
         pre = 'filep' if settings.get('file_secure', False) else 'file'
 
-        FILES_PER_PAGE = 30  # keep well under Telegram's button-count limits
-        matched = matched[:FILES_PER_PAGE]
+        FILES_PER_PAGE = 40  # keep well under Telegram's button-count limits
+        shown = matched[:FILES_PER_PAGE]
 
-        btn = [[InlineKeyboardButton(f"🎚 {label} Results ({len(matched)})", callback_data="ident")]]
-        for f in matched:
+        # ✅ Quality row stays visible (with a ✅ on the active one) so the
+        # user can switch quality directly without hitting Back first.
+        btn = [build_quality_row(key, uid, selected=qkey)]
+        header = f"🎚 {label} Results ({len(matched)} found"
+        header += f", showing {len(shown)})" if len(matched) > len(shown) else ")"
+        btn.append([InlineKeyboardButton(header, callback_data="ident")])
+
+        for f in shown:
             name    = f["file_name"]
             size    = get_size(f["file_size"])
             display = name[:45] + "…" if len(name) > 45 else name
@@ -1133,7 +1137,7 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
             )])
 
         btn.append([
-            InlineKeyboardButton("↩️ Back", callback_data=f"next_{uid}_{key}_0")
+            InlineKeyboardButton("↩️ Back", callback_data=f"seasons#{key}")
         ])
 
         try:
