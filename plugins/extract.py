@@ -117,7 +117,7 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
 
         media_info = await asyncio.wait_for(
             asyncio.to_thread(MediaInfo.parse, temp_path, library_file=lib_path),
-            timeout=6
+            timeout=15
         )
 
         audio_tracks = []
@@ -232,6 +232,16 @@ async def extract_data_handler(client: Client, query: CallbackQuery):
 
         await query.edit_message_reply_markup(
             reply_markup=InlineKeyboardMarkup(success_keyboard)
+        )
+
+    except asyncio.TimeoutError:
+        logger.warning(f"MediaInfo.parse timed out for file_id={file_id}")
+        try:
+            await query.edit_message_reply_markup(reply_markup=current_markup)
+        except Exception:
+            pass
+        await query.message.reply_text(
+            "⏳ Fetching track details took too long. Please try again.", quote=True
         )
 
     except Exception as e:
