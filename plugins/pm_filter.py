@@ -111,29 +111,6 @@ async def pm_text(bot, message):
             ])
         )
     
-# ✅ Cache next_page results per (key, offset) so revisiting a page
-# (Back, then Next again, or another user opening the same result) is
-# instant instead of re-querying the database every single click —
-# same speedup idea as the quality-button cache, applied here too.
-# Behavior/output is 100% identical to before; this only skips repeat
-# DB round trips for a page already fetched.
-NEXT_PAGE_CACHE = {}
-NEXT_PAGE_CACHE_TTL = 900  # 15 minutes
-
-
-async def get_cached_page(chat_id, search, key, offset):
-    cache_key = (key, offset)
-    entry = NEXT_PAGE_CACHE.get(cache_key)
-    if entry and (datetime.now().timestamp() - entry["ts"] < NEXT_PAGE_CACHE_TTL):
-        return entry["files"], entry["n_offset"], entry["total"]
-    files, n_offset, total = await get_search_results(chat_id, search, offset=offset, max_results=8, filter=True)
-    NEXT_PAGE_CACHE[cache_key] = {
-        "files": files, "n_offset": n_offset, "total": total,
-        "ts": datetime.now().timestamp()
-    }
-    return files, n_offset, total
-
-
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
     ident, req, key, offset = query.data.split("_")
@@ -149,7 +126,7 @@ async def next_page(bot, query):
       #  await query.answer(script.OLD_ALRT_TXT.format(query.from_user.first_name),show_alert=True)
        # return
 
-    files, n_offset, total = await get_cached_page(query.message.chat.id, search, key, offset)
+    files, n_offset, total = await get_search_results(query.message.chat.id, search, offset=offset, max_results=8, filter=True)
     try:
         n_offset = int(n_offset)
     except:
