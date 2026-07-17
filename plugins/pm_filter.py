@@ -1,4 +1,4 @@
-import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram, functools
+import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram, functools, difflib
 from datetime import datetime, timedelta, date, time
 from Script import script
 from info import *
@@ -666,10 +666,70 @@ def format_file_button_text(file):
     return f"{size} ▷ {tag}{clean}"
 
 
+# ===============================
+# LOCAL FUZZY TITLE SUGGESTIONS (typo fallback that doesn't need the
+# external poster/TMDB API)
+# ===============================
+# get_poster() sometimes finds nothing for a typo (wrong API match, API
+# down, obscure/new title not indexed there yet) — in that case we had
+# NO suggestions at all, just a dead "Google" button. This fuzzy-matches
+# the typo against titles that actually exist in OUR OWN file database,
+# so "Durandhar" can still surface "Dhurandhar" if it's really in the
+# library, without depending on any external service.
+_KNOWN_TITLES_CACHE = {"titles": [], "ts": 0}
+_KNOWN_TITLES_TTL   = 3600     # refresh once an hour
+_KNOWN_TITLES_LIMIT = 20000    # sample size, not the whole DB — keeps this cheap
+
+
+async def _get_known_titles():
+    now = datetime.now().timestamp()
+    if _KNOWN_TITLES_CACHE["titles"] and (now - _KNOWN_TITLES_CACHE["ts"] < _KNOWN_TITLES_TTL):
+        return _KNOWN_TITLES_CACHE["titles"]
+
+    titles = set()
+    try:
+        for collection in (col, sec_col):
+            cursor = collection.find({}, {"file_name": 1}).limit(_KNOWN_TITLES_LIMIT)
+            async for doc in cursor:
+                name = doc.get("file_name")
+                if not name:
+                    continue
+                base = clean_name(name)          # strips quality/season/tags, lowercases
+                words = base.split()
+                if not words:
+                    continue
+                # Cap to first 6 words so long release-group junk after
+                # the actual title doesn't dilute the fuzzy match.
+                title = " ".join(words[:6]).strip()
+                if len(title) >= 2:
+                    titles.add(title)
+    except Exception as e:
+        logging.error(f"_get_known_titles error: {e}")
+
+    _KNOWN_TITLES_CACHE["titles"] = list(titles)
+    _KNOWN_TITLES_CACHE["ts"] = now
+    return _KNOWN_TITLES_CACHE["titles"]
+
+
+async def get_similar_titles(query, limit=5):
+    """Up to `limit` titles from our own DB that closely resemble `query`
+    (typo-tolerant). Returns nicely title-cased strings, or [] if nothing
+    is close enough to be a confident suggestion."""
+    titles = await _get_known_titles()
+    if not titles:
+        return []
+    q = clean_name(query)
+    if not q:
+        return []
+    matches = difflib.get_close_matches(q, titles, n=limit, cutoff=0.6)
+    return [m.title() for m in matches]
+
+
 def filter_and_rank(files: list, search: str) -> list:
     """
     ✅ Only keep files whose cleaned name STARTS WITH the search term.
     This prevents middle/end matches from polluting season & episode lists.
+
     """
     # Clean the search term too
     search_clean = STRIP_RE.sub(' ', search.lower().strip())
@@ -3668,18 +3728,43 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         movies = await get_poster(mv_rqst, bulk=True)
     except Exception as e:
         logger.exception(e)
-        reqst_gle = urllib.parse.quote_plus(mv_rqst)
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
+        movies = None
+
     movielist = []
     if not movies:
+        # ✅ External poster/TMDB lookup found nothing (or the API call
+        # itself failed) — before giving up to a dead Google-only button,
+        # try fuzzy-matching the typo against titles that actually exist
+        # in OUR OWN file database.
+        similar = await get_similar_titles(mv_rqst)
+        if similar:
+            SPELL_CHECK[mv_id] = similar
+            btn = [
+                [InlineKeyboardButton(text=t.strip(), callback_data=f"spol#{reqstr1}#{k}")]
+                for k, t in enumerate(similar)
+            ]
+            reqst_gle = urllib.parse.quote_plus(mv_rqst)
+            btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")])
+            btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
+            spell_check_del = await reply_msg.edit_text(
+                text=script.CUDNT_FND.format(mv_rqst),
+                reply_markup=InlineKeyboardMarkup(btn)
+            )
+            try:
+                if settings['auto_delete']:
+                    await asyncio.sleep(600)
+                    await spell_check_del.delete()
+            except KeyError:
+                if msg.from_user:
+                    grpid = await active_connection(str(msg.from_user.id))
+                    await save_group_settings(grpid, 'auto_delete', True)
+                    settings = await get_settings(msg.chat.id)
+                    if settings['auto_delete']:
+                        await asyncio.sleep(600)
+                        await spell_check_del.delete()
+            return
+
+        # Truly nothing anywhere (external API AND our own DB) — Google-only
         reqst_gle = urllib.parse.quote_plus(mv_rqst)
         button = [[
             InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
