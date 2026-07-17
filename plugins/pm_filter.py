@@ -1,4 +1,4 @@
-import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram
+import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram, functools, difflib
 from datetime import datetime, timedelta, date, time
 from Script import script
 from info import *
@@ -138,21 +138,33 @@ async def next_page(bot, query):
     temp.SHORT[query.from_user.id] = query.message.chat.id
     settings = await get_settings(query.message.chat.id)
     pre = 'filep' if settings.get('file_secure', False) else 'file'
+    # ✅ Speed: the ❌-availability scan needs the FULL matching pool
+    # (up to 50,000 files), which is what was adding 1.5-2s to every
+    # single search. Don't block the results on it here — fire it off
+    # in the background so SEASON_CACHE is warm by the time the user
+    # taps into a season/episode/quality screen (where ❌ marks do show).
+    asyncio.create_task(get_cached_season_files(query.message.chat.id, key, search))
     if settings.get('button', False):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
         ]
 
-        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(0, [
+            InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
+            build_language_button("all", key, req)[0]
+        ])
         btn.insert(1, build_quality_row("all", key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
+            [
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
+                build_language_button("all", key, req)[0]
+            ],
             build_quality_row("all", key, req)
         ]
     try:
@@ -331,10 +343,10 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
             ]
             for file in files
         ]
-        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")])
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")]
         ]
 
     if offset != "":
@@ -420,15 +432,15 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
         ]
-        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")])
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")]
         ]
 
     if offset != "":
@@ -515,7 +527,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
@@ -524,7 +536,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")
             ]
         )
     else:
@@ -533,7 +545,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")
             ]
         )
 
@@ -638,10 +650,116 @@ def clean_name(filename: str) -> str:
     return name
 
 
+def format_file_button_text(file):
+    """File list label — '{size} ▷ [S01E02] Clean Name' for series files,
+    '{size} ▷ Clean Name' for movies (no season/episode = no tag).
+    Uses the same extract_season/extract_episode detectors as the rest of
+    the bot (season lists, episode grouping) so it also catches spaced
+    formats like 'S08 E03', not just tight 'S08E03' — and always renders
+    the tag normalized to the no-space 'S08E03' form either way."""
+    size = get_size(file['file_size'])
+    name = file['file_name']
+    season  = extract_season(name)
+    episode = extract_episode(name)
+    tag = f"[S{season:02d}E{episode:02d}] " if season is not None and episode is not None else ""
+    clean = re.sub(r'\[.*?\]', '', name).replace("WEBRip", "").strip()
+    return f"{size} ▷ {tag}{clean}"
+
+
+# ===============================
+# LOCAL FUZZY TITLE SUGGESTIONS (typo fallback that doesn't need the
+# external poster/TMDB API)
+# ===============================
+# get_poster() sometimes finds nothing for a typo (wrong API match, API
+# down, obscure/new title not indexed there yet) — in that case we had
+# NO suggestions at all, just a dead "Google" button. This fuzzy-matches
+# the typo against titles that actually exist in OUR OWN file database,
+# so "Durandhar" can still surface "Dhurandhar" if it's really in the
+# library, without depending on any external service.
+_KNOWN_TITLES_CACHE = {"titles": [], "ts": 0}
+_KNOWN_TITLES_TTL   = 3600     # refresh once an hour
+_KNOWN_TITLES_LIMIT = 20000    # sample size, not the whole DB — keeps this cheap
+
+
+def _sync_fetch_known_titles(limit):
+    """col/sec_col are plain synchronous PyMongo collections (same as
+    col.delete_one() / col.count_documents() used elsewhere in this file
+    — no await, no motor). Run with a normal blocking cursor, called via
+    asyncio.to_thread so it doesn't stall the event loop.
+    Only touches sec_col when MULTIPLE_DATABASE is on — same rule
+    get_search_results() already follows — so this doesn't hang on a
+    second DB that isn't actually configured for use."""
+    titles = set()
+    collections = (col, sec_col) if MULTIPLE_DATABASE else (col,)
+    for collection in collections:
+        try:
+            cursor = collection.find({}, {"file_name": 1}).limit(limit)
+            for doc in cursor:
+                name = doc.get("file_name")
+                if not name:
+                    continue
+                base = clean_name(name)          # strips quality/season/tags, lowercases
+                # Drop stray punctuation-only leftovers (e.g. a lone "."
+                # or "-" where a stripped extension/tag used to be).
+                words = [
+                    w.strip(".-_") for w in base.split()
+                    if any(c.isalnum() for c in w)
+                ]
+                if not words:
+                    continue
+                # Cap to first 6 words so long release-group junk after
+                # the actual title doesn't dilute the fuzzy match.
+                title = " ".join(words[:6]).strip()
+                if len(title) >= 2:
+                    titles.add(title)
+        except Exception as e:
+            # print() as well as logging — ia_filterdb.py's own save_file()
+            # uses print() for its status messages, so if Koyeb's log view
+            # is tuned to stdout, logging.error() alone might not surface.
+            print(f"[spell-fuzzy] _sync_fetch_known_titles ERROR on {collection}: {e}")
+            logging.error(f"_sync_fetch_known_titles error: {e}")
+    return titles
+
+
+async def _get_known_titles():
+    now = datetime.now().timestamp()
+    if _KNOWN_TITLES_CACHE["titles"] and (now - _KNOWN_TITLES_CACHE["ts"] < _KNOWN_TITLES_TTL):
+        return _KNOWN_TITLES_CACHE["titles"]
+
+    try:
+        titles = await asyncio.to_thread(_sync_fetch_known_titles, _KNOWN_TITLES_LIMIT)
+        print(f"[spell-fuzzy] loaded {len(titles)} known titles for fuzzy suggestions")
+    except Exception as e:
+        print(f"[spell-fuzzy] _get_known_titles ERROR: {e}")
+        logging.error(f"_get_known_titles error: {e}")
+        titles = set()
+
+    _KNOWN_TITLES_CACHE["titles"] = list(titles)
+    _KNOWN_TITLES_CACHE["ts"] = now
+    return _KNOWN_TITLES_CACHE["titles"]
+
+
+async def get_similar_titles(query, limit=5):
+    """Up to `limit` titles from our own DB that closely resemble `query`
+    (typo-tolerant). Returns nicely title-cased strings, or [] if nothing
+    is close enough to be a confident suggestion."""
+    titles = await _get_known_titles()
+    if not titles:
+        print("[spell-fuzzy] no known titles available — can't suggest anything")
+        return []
+    q = clean_name(query)
+    if not q:
+        return []
+    matches = difflib.get_close_matches(q, titles, n=limit, cutoff=0.6)
+    print(f"[spell-fuzzy] query='{query}' cleaned='{q}' pool_size={len(titles)} matches={matches}")
+    return [m.title() for m in matches]
+
+
 def filter_and_rank(files: list, search: str) -> list:
     """
     ✅ Only keep files whose cleaned name STARTS WITH the search term.
     This prevents middle/end matches from polluting season & episode lists.
+
     """
     # Clean the search term too
     search_clean = STRIP_RE.sub(' ', search.lower().strip())
@@ -725,19 +843,163 @@ def get_quality_label(file_size):
     return None
 
 
-def build_quality_row(scope, key, uid, selected=None):
+def get_available_qualities(pool):
+    """Which of the 5 quality buckets actually have at least one file in
+    this pool. Used to mark the missing ones with ❌ instead of pretending
+    every quality is always available."""
+    avail = set()
+    for f in pool:
+        try:
+            size = int(f.get("file_size", 0))
+        except (TypeError, ValueError):
+            continue
+        for qkey in QUALITY_ORDER:
+            lo, hi = QUALITY_RANGES[qkey]
+            if lo <= size < hi:
+                avail.add(qkey)
+                break
+    return avail
+
+
+def build_quality_row(scope, key, uid, selected=None, available=None):
     """Row of 4K / 2K / 1080p / 720p / 480p buttons, scoped to a specific
     context so the filter only searches within that context's files:
       scope = "s{season}e{episode}"  -> that single episode's files
       scope = "c{season}"            -> that season's combined/batch files
-    If `selected` is set (e.g. "2k"), that button gets a ✅."""
+    If `selected` is set (e.g. "2k"), that button gets a ✅.
+    If `available` is given (a set of quality keys), any quality NOT in
+    it gets a ❌ instead of the plain label, since there's nothing to
+    show for it here."""
+    buttons = []
+    for q in QUALITY_ORDER:
+        if available is not None and q not in available:
+            label = f"❌ {QUALITY_LABELS[q]}"
+        elif q == selected:
+            label = f"✅ {QUALITY_LABELS[q]}"
+        else:
+            label = QUALITY_LABELS[q]
+        buttons.append(InlineKeyboardButton(
+            label, callback_data=f"qual#{q}#{scope}#{key}#0#{uid}"
+        ))
+    return buttons
+
+
+# ===============================
+# LANGUAGE (BY FILENAME TAG) BUTTON
+# ===============================
+# Works the same way as the QUALITY system above, except instead of
+# classifying by file size it detects language tags inside the file name
+# (kan/kannada, eng/english, mal/malayalam, tel/telugu, tam/tamil,
+# hin/hindi, multi audio, dual audio).
+#
+# UI difference from Quality: quality always shows all 5 buttons up
+# front. Language instead shows ONE "🌐 Language" button — tapping it
+# opens a submenu built on the fly from only the languages that are
+# actually present in that scope's files, so users never see a dead
+# button for a language that isn't available.
+LANGUAGE_DEFS = [
+    ("hin",   "Hindi",       {"hindi", "hin"}),
+    ("eng",   "English",     {"english", "eng"}),
+    ("tam",   "Tamil",       {"tamil", "tam"}),
+    ("tel",   "Telugu",      {"telugu", "tel"}),
+    ("kan",   "Kannada",     {"kannada", "kan"}),
+    ("mal",   "Malayalam",   {"malayalam", "mal"}),
+    ("multi", "Multi Audio", {"multi", "dual"}),
+]
+LANGUAGE_LABELS = {k: v for k, v, _ in LANGUAGE_DEFS}
+LANGUAGE_TOKENS = {k: t for k, _, t in LANGUAGE_DEFS}
+LANGUAGE_ORDER  = [k for k, _, _ in LANGUAGE_DEFS]
+
+_LANG_TOKEN_SPLIT_RE = re.compile(r'[^A-Za-z0-9]+')
+
+
+@functools.lru_cache(maxsize=8192)
+def get_file_languages(filename: str) -> tuple:
+    """Detect which language tags exist in a filename, e.g.
+    'Movie.2024.Tam.Tel.Kan.Mal.Eng.WEBRip.mkv' -> ('tam','tel','kan','mal','eng').
+    Matches whole tokens only (split on any non-alphanumeric char) so it
+    won't false-positive on tags buried inside other words. 'dual' tags
+    are folded into the single 'Multi Audio' bucket."""
+    tokens = set(_LANG_TOKEN_SPLIT_RE.split(filename.lower()))
+    if not tokens:
+        return ()
+    found = tuple(
+        key for key in LANGUAGE_ORDER
+        if tokens & LANGUAGE_TOKENS[key]
+    )
+    return found
+
+
+def build_language_button(scope, key, uid):
+    """Single 🌐 Language entry button — opens the dynamic submenu."""
+    return [InlineKeyboardButton("🌐 Language", callback_data=f"langmenu#{scope}#{key}#{uid}")]
+
+
+def build_language_row(lang_keys, scope, key, uid, selected=None):
+    """Row(s) of language buttons for the languages actually detected in
+    this scope. If `selected` is set (e.g. 'tam'), that button gets a ✅."""
     return [
         InlineKeyboardButton(
-            f"✅ {QUALITY_LABELS[q]}" if q == selected else QUALITY_LABELS[q],
-            callback_data=f"qual#{q}#{scope}#{key}#0#{uid}"
+            f"✅ {LANGUAGE_LABELS[lk]}" if lk == selected else LANGUAGE_LABELS[lk],
+            callback_data=f"lang#{lk}#{scope}#{key}#0#{uid}"
         )
-        for q in QUALITY_ORDER
+        for lk in lang_keys
     ]
+
+
+def _language_menu_rows(available, scope, key, uid, selected=None):
+    """Chunk detected languages 2-per-row."""
+    rows = []
+    for i in range(0, len(available), 2):
+        rows.append(build_language_row(available[i:i + 2], scope, key, uid, selected=selected))
+    return rows
+
+
+def build_language_quality_row(lkey, scope, key, uid, selected=None, available=None):
+    """Quality row shown AFTER a language is picked, so the user can
+    refine within that language without losing the language filter.
+    Routes through the combined lq# handler, not the plain qual# one.
+    `available` (a set of quality keys) marks the missing ones with ❌."""
+    buttons = []
+    for q in QUALITY_ORDER:
+        if available is not None and q not in available:
+            label = f"❌ {QUALITY_LABELS[q]}"
+        elif q == selected:
+            label = f"✅ {QUALITY_LABELS[q]}"
+        else:
+            label = QUALITY_LABELS[q]
+        buttons.append(InlineKeyboardButton(
+            label, callback_data=f"lq#{lkey}#{q}#{scope}#{key}#0#{uid}"
+        ))
+    return buttons
+
+
+def resolve_scope_pool(scope, key, uid, all_files):
+    """Shared by quality & language filters: narrows the full cached file
+    list down to whatever context (all / a season's combined files / one
+    episode's files) a filter button was opened from, and returns the
+    matching 'Back' destination for that context."""
+    if scope == "all":
+        return all_files, f"next_{uid}_{key}_0"
+    if scope.startswith("c"):
+        season_no = int(scope[1:])
+        pool = [
+            f for f in all_files
+            if extract_season(f["file_name"]) == season_no
+            and is_combined_file(f["file_name"])
+        ]
+        return pool, f"combined#s{season_no}#{key}#0#{uid}"
+    if scope.startswith("s") and "e" in scope:
+        season_no  = int(scope[1:scope.index("e")])
+        episode_no = int(scope[scope.index("e") + 1:])
+        pool = [
+            f for f in all_files
+            if extract_season(f["file_name"]) == season_no
+            and extract_episode(f["file_name"]) == episode_no
+            and not is_combined_file(f["file_name"])
+        ]
+        return pool, f"fs#s{season_no}e{episode_no}#{key}#0#{uid}"
+    return all_files, f"seasons#{key}"
 
 
 # ===============================
@@ -943,14 +1205,20 @@ async def filter_files(client, query: CallbackQuery):
         end            = start + FILES_PER_PAGE
 
         btn = [
-            [InlineKeyboardButton(
-                f"📁 S{season_no:02d}E{episode_no:02d} — {len(filtered)} file(s)",
-                callback_data="ident"
-            )]
+            [
+                InlineKeyboardButton(
+                    f"📁 S{season_no:02d}E{episode_no:02d} — {len(filtered)} file(s)",
+                    callback_data="ident"
+                ),
+                build_language_button(f"s{season_no}e{episode_no}", key, uid)[0]
+            ]
         ]
 
         # ✅ Quality buttons at the TOP, scoped to just this episode's files
-        btn.append(build_quality_row(f"s{season_no}e{episode_no}", key, uid))
+        btn.append(build_quality_row(
+            f"s{season_no}e{episode_no}", key, uid,
+            available=get_available_qualities(filtered)
+        ))
 
         for f in filtered[start:end]:
             name    = f["file_name"]
@@ -1036,14 +1304,20 @@ async def combined_files(client, query: CallbackQuery):
         end            = start + FILES_PER_PAGE
 
         btn = [
-            [InlineKeyboardButton(
-                f"📦 Season {season_no:02d} — Batch/Complete ({len(combined)} files)",
-                callback_data="ident"
-            )]
+            [
+                InlineKeyboardButton(
+                    f"📦 Season {season_no:02d} — Batch/Complete ({len(combined)} files)",
+                    callback_data="ident"
+                ),
+                build_language_button(f"c{season_no}", key, uid)[0]
+            ]
         ]
 
         # ✅ Quality buttons at the TOP, scoped to just this season's combined files
-        btn.append(build_quality_row(f"c{season_no}", key, uid))
+        btn.append(build_quality_row(
+            f"c{season_no}", key, uid,
+            available=get_available_qualities(combined)
+        ))
 
         for f in combined[start:end]:
             name    = f["file_name"]
@@ -1159,7 +1433,7 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
 
         # ✅ Quality row stays visible (with a ✅ on the active one) so the
         # user can switch quality directly without hitting Back first.
-        btn = [build_quality_row(scope, key, uid, selected=qkey)]
+        btn = [build_quality_row(scope, key, uid, selected=qkey, available=get_available_qualities(pool))]
         btn.append([InlineKeyboardButton(
             f"🎚 {label} — {len(matched)} file(s)", callback_data="ident"
         )])
@@ -1192,6 +1466,242 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         # list — not the season list.
         btn.append([
             InlineKeyboardButton("↩️ Back", callback_data=back_cb)
+        ])
+
+        try:
+            await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+        except MessageNotModified:
+            pass
+
+        await query.answer()
+
+    except Exception as e:
+        await query.answer(f"❌ Error: {e}", show_alert=True)
+
+
+# ===============================
+# LANGUAGE MENU — shows only the languages actually present in scope
+# ===============================
+@Client.on_callback_query(filters.regex(r"^langmenu#"))
+async def language_menu_cb_handler(client, query: CallbackQuery):
+    try:
+        _, scope, key, uid = query.data.split("#")
+
+        if int(uid) != query.from_user.id:
+            return await query.answer(
+                "⚠️ This is not your search. Please search your own.",
+                show_alert=True
+            )
+
+        search  = FRESH.get(key)
+        chat_id = query.message.chat.id
+
+        if not search:
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+
+        all_files = await get_cached_season_files(chat_id, key, search)
+        pool, back_cb = resolve_scope_pool(scope, key, uid, all_files)
+
+        if not pool:
+            return await query.answer("🚫 No files found here.", show_alert=True)
+
+        # ✅ Only show languages that actually exist among these files
+        seen = set()
+        for f in pool:
+            seen.update(get_file_languages(f["file_name"]))
+
+        if not seen:
+            return await query.answer("🚫 No language tags detected in these files.", show_alert=True)
+
+        available = [k for k in LANGUAGE_ORDER if k in seen]
+
+        btn = _language_menu_rows(available, scope, key, uid)
+        btn.append([InlineKeyboardButton("↩️ Back", callback_data=back_cb)])
+
+        try:
+            await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+        except MessageNotModified:
+            pass
+
+        await query.answer()
+
+    except Exception as e:
+        await query.answer(f"❌ Error: {e}", show_alert=True)
+
+
+# ===============================
+# LANGUAGE FILTER — files matching a chosen detected language tag
+# ===============================
+@Client.on_callback_query(filters.regex(r"^lang#"))
+async def language_filter_cb_handler(client, query: CallbackQuery):
+    try:
+        _, lkey, scope, key, page, uid = query.data.split("#")
+        page = int(page)
+
+        if int(uid) != query.from_user.id:
+            return await query.answer(
+                "⚠️ This is not your search. Please search your own.",
+                show_alert=True
+            )
+
+        search  = FRESH.get(key)
+        chat_id = query.message.chat.id
+
+        if not search:
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+
+        label = LANGUAGE_LABELS.get(lkey, lkey)
+
+        all_files = await get_cached_season_files(chat_id, key, search)
+        pool, back_cb = resolve_scope_pool(scope, key, uid, all_files)
+
+        matched = [f for f in pool if lkey in get_file_languages(f["file_name"])]
+
+        if not matched:
+            return await query.answer(f"🚫 No {label} files found here.", show_alert=True)
+
+        settings = await get_settings(chat_id)
+        pre = 'filep' if settings.get('file_secure', False) else 'file'
+
+        FILES_PER_PAGE = 8
+        total_pages    = max(1, (len(matched) - 1) // FILES_PER_PAGE + 1)
+        page            = max(0, min(page, total_pages - 1))
+        start           = page * FILES_PER_PAGE
+        end             = start + FILES_PER_PAGE
+
+        # ✅ Top of the results now shows a Quality row (to refine within
+        # this language, routed through lq# so the language filter isn't
+        # lost) plus a single compact "Change Language" button — instead
+        # of repeating the full language menu here.
+        btn = [build_language_quality_row(lkey, scope, key, uid, available=get_available_qualities(matched))]
+        btn.append([InlineKeyboardButton(
+            "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}"
+        )])
+        btn.append([InlineKeyboardButton(
+            f"🌐 {label} — {len(matched)} file(s)", callback_data="ident"
+        )])
+
+        for f in matched[start:end]:
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
+            display = name[:45] + "…" if len(name) > 45 else name
+            btn.append([InlineKeyboardButton(
+                f"[{size}] {display}",
+                callback_data=f'{pre}#{f["file_id"]}'
+            )])
+
+        if total_pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton(
+                    "⬅️ Prev", callback_data=f"lang#{lkey}#{scope}#{key}#{page-1}#{uid}"
+                ))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
+            if page + 1 < total_pages:
+                nav.append(InlineKeyboardButton(
+                    "Next ➡️", callback_data=f"lang#{lkey}#{scope}#{key}#{page+1}#{uid}"
+                ))
+            btn.append(nav)
+
+        # ✅ Back returns to the exact plain screen this was opened from
+        btn.append([
+            InlineKeyboardButton("↩️ Back", callback_data=back_cb)
+        ])
+
+        try:
+            await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+        except MessageNotModified:
+            pass
+
+        await query.answer()
+
+    except Exception as e:
+        await query.answer(f"❌ Error: {e}", show_alert=True)
+
+
+# ===============================
+# LANGUAGE + QUALITY COMBINED FILTER
+# ===============================
+# Reached by tapping a quality button on top of an already-language-
+# filtered screen. Keeps BOTH filters active at once instead of one
+# overwriting the other.
+@Client.on_callback_query(filters.regex(r"^lq#"))
+async def language_quality_filter_cb_handler(client, query: CallbackQuery):
+    try:
+        _, lkey, qkey, scope, key, page, uid = query.data.split("#")
+        page = int(page)
+
+        if int(uid) != query.from_user.id:
+            return await query.answer(
+                "⚠️ This is not your search. Please search your own.",
+                show_alert=True
+            )
+
+        search  = FRESH.get(key)
+        chat_id = query.message.chat.id
+
+        if not search:
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+
+        lang_label = LANGUAGE_LABELS.get(lkey, lkey)
+        q_label    = QUALITY_LABELS.get(qkey, qkey)
+        lo, hi     = QUALITY_RANGES.get(qkey, (0, float("inf")))
+
+        all_files = await get_cached_season_files(chat_id, key, search)
+        pool, _   = resolve_scope_pool(scope, key, uid, all_files)
+
+        matched = [
+            f for f in pool
+            if lkey in get_file_languages(f["file_name"])
+            and lo <= f.get("file_size", 0) < hi
+        ]
+
+        if not matched:
+            return await query.answer(f"🚫 No {q_label} {lang_label} files found here.", show_alert=True)
+
+        settings = await get_settings(chat_id)
+        pre = 'filep' if settings.get('file_secure', False) else 'file'
+
+        FILES_PER_PAGE = 8
+        total_pages    = max(1, (len(matched) - 1) // FILES_PER_PAGE + 1)
+        page            = max(0, min(page, total_pages - 1))
+        start           = page * FILES_PER_PAGE
+        end             = start + FILES_PER_PAGE
+
+        btn = [build_language_quality_row(lkey, scope, key, uid, selected=qkey)]
+        btn.append([InlineKeyboardButton(
+            "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}"
+        )])
+        btn.append([InlineKeyboardButton(
+            f"🎚 {q_label} · 🌐 {lang_label} — {len(matched)} file(s)", callback_data="ident"
+        )])
+
+        for f in matched[start:end]:
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
+            display = name[:45] + "…" if len(name) > 45 else name
+            btn.append([InlineKeyboardButton(
+                f"[{size}] {display}",
+                callback_data=f'{pre}#{f["file_id"]}'
+            )])
+
+        if total_pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton(
+                    "⬅️ Prev", callback_data=f"lq#{lkey}#{qkey}#{scope}#{key}#{page-1}#{uid}"
+                ))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
+            if page + 1 < total_pages:
+                nav.append(InlineKeyboardButton(
+                    "Next ➡️", callback_data=f"lq#{lkey}#{qkey}#{scope}#{key}#{page+1}#{uid}"
+                ))
+            btn.append(nav)
+
+        # ✅ Back returns to the language-only filtered list (drops just
+        # the quality refinement, keeps the language filter)
+        btn.append([
+            InlineKeyboardButton("↩️ Back", callback_data=f"lang#{lkey}#{scope}#{key}#0#{uid}")
         ])
 
         try:
@@ -1373,7 +1883,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
@@ -1382,7 +1892,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")
             ]
         )
     else:
@@ -1391,7 +1901,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")
             ]
         )
 
@@ -2997,22 +3507,34 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
     FRESH[key] = search
     SEASON_OWNER[key] = req
     temp.GETALL[key] = files
+    # ✅ Speed: the ❌-availability scan needs the FULL matching pool
+    # (up to 50,000 files), which is what was adding 1.5-2s to every
+    # single search. Don't block the results on it here — fire it off
+    # in the background so SEASON_CACHE is warm by the time the user
+    # taps into a season/episode/quality screen (where ❌ marks do show).
+    asyncio.create_task(get_cached_season_files(message.chat.id, key, search))
     if message.from_user:
         temp.SHORT[message.from_user.id] = message.chat.id
     if settings.get("button", False):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
         ]
-        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(0, [
+            InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
+            build_language_button("all", key, req)[0]
+        ])
         btn.insert(1, build_quality_row("all", key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
+            [
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
+                build_language_button("all", key, req)[0]
+            ],
             build_quality_row("all", key, req)
         ]
     if offset != "":
@@ -3236,81 +3758,103 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         movies = await get_poster(mv_rqst, bulk=True)
     except Exception as e:
         logger.exception(e)
-        reqst_gle = urllib.parse.quote_plus(mv_rqst)
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
+        movies = None
+
     movielist = []
     if not movies:
-        reqst_gle = urllib.parse.quote_plus(mv_rqst)
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
-    movielist += [movie.get('title') for movie in movies]
-    movielist += [f"{movie.get('title')} {movie.get('year')}" for movie in movies]
-    SPELL_CHECK[mv_id] = movielist
-    if AI_SPELL_CHECK == True and vj_search == True:
-        vj_search_new = False
-        vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
-        movienamelist = []
-        movienamelist += [movie.get('title') for movie in movies]
-        for techvj in movienamelist:
-            try:
-                mv_rqst = mv_rqst.capitalize()
-            except:
-                pass
-            if mv_rqst.startswith(techvj[0]):
-                await auto_filter(client, techvj, msg, reply_msg, vj_search_new)
-                break
-        reqst_gle = urllib.parse.quote_plus(mv_rqst)
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
-    else:
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=movie_name.strip(),
-                    callback_data=f"spol#{reqstr1}#{k}",
-                )
+        # ✅ External poster/TMDB lookup found nothing (or the API call
+        # itself failed) — before giving up to a dead Google-only button,
+        # try fuzzy-matching the typo against titles that actually exist
+        # in OUR OWN file database.
+        similar = await get_similar_titles(mv_rqst)
+        if similar:
+            SPELL_CHECK[mv_id] = similar
+            btn = [
+                [InlineKeyboardButton(text=t.strip(), callback_data=f"spol#{reqstr1}#{k}")]
+                for k, t in enumerate(similar)
             ]
-            for k, movie_name in enumerate(movielist)
-        ]
-        btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
-        spell_check_del = await reply_msg.edit_text(
-            text=script.CUDNT_FND.format(mv_rqst),
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
-        try:
-            if settings['auto_delete']:
-                await asyncio.sleep(600)
-                await spell_check_del.delete()
-        except KeyError:
-            if msg.from_user:
-                grpid = await active_connection(str(msg.from_user.id))
-                await save_group_settings(grpid, 'auto_delete', True)
-                settings = await get_settings(msg.chat.id)
+            reqst_gle = urllib.parse.quote_plus(mv_rqst)
+            btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")])
+            btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
+            spell_check_del = await reply_msg.edit_text(
+                text=script.CUDNT_FND.format(mv_rqst),
+                reply_markup=InlineKeyboardMarkup(btn)
+            )
+            try:
                 if settings['auto_delete']:
                     await asyncio.sleep(600)
                     await spell_check_del.delete()
+            except KeyError:
+                if msg.from_user:
+                    grpid = await active_connection(str(msg.from_user.id))
+                    await save_group_settings(grpid, 'auto_delete', True)
+                    settings = await get_settings(msg.chat.id)
+                    if settings['auto_delete']:
+                        await asyncio.sleep(600)
+                        await spell_check_del.delete()
+            return
+
+        # Truly nothing anywhere (external API AND our own DB) — Google-only
+        reqst_gle = urllib.parse.quote_plus(mv_rqst)
+        button = [[
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+        ]]
+        if NO_RESULTS_MSG:
+            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
+        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        await asyncio.sleep(30)
+        await k.delete()
+        return
+
+    # ✅ "Did you mean" suggestions — deduped, max 5, "Title (Year)" so
+    # each button is a distinct, useful guess instead of the old list
+    # which duplicated every title once plain and once with the year
+    # tacked on (unbounded length), and instead of the silent auto-guess
+    # path below always overwriting this with a dead-end Google button.
+    seen = set()
+    for movie in movies:
+        title = (movie.get('title') or '').strip()
+        year  = movie.get('year')
+        if not title:
+            continue
+        label = f"{title} ({year})" if year else title
+        if label.lower() in seen:
+            continue
+        seen.add(label.lower())
+        movielist.append(label)
+        if len(movielist) >= 5:
+            break
+
+    SPELL_CHECK[mv_id] = movielist
+
+    btn = [
+        [
+            InlineKeyboardButton(
+                text=movie_name.strip(),
+                callback_data=f"spol#{reqstr1}#{k}",
+            )
+        ]
+        for k, movie_name in enumerate(movielist)
+    ]
+    reqst_gle = urllib.parse.quote_plus(mv_rqst)
+    btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")])
+    btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
+    spell_check_del = await reply_msg.edit_text(
+        text=script.CUDNT_FND.format(mv_rqst),
+        reply_markup=InlineKeyboardMarkup(btn)
+    )
+    try:
+        if settings['auto_delete']:
+            await asyncio.sleep(600)
+            await spell_check_del.delete()
+    except KeyError:
+        if msg.from_user:
+            grpid = await active_connection(str(msg.from_user.id))
+            await save_group_settings(grpid, 'auto_delete', True)
+            settings = await get_settings(msg.chat.id)
+            if settings['auto_delete']:
+                await asyncio.sleep(600)
+                await spell_check_del.delete()
 
 
 async def manual_filters(client, message, text=False):
