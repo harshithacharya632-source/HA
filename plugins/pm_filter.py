@@ -138,6 +138,10 @@ async def next_page(bot, query):
     temp.SHORT[query.from_user.id] = query.message.chat.id
     settings = await get_settings(query.message.chat.id)
     pre = 'filep' if settings.get('file_secure', False) else 'file'
+    # ✅ Full pool (cached) so the ❌ marks reflect ALL matching files,
+    # not just this page's 8 results.
+    all_files_qc = await get_cached_season_files(query.message.chat.id, key, search)
+    available_q  = get_available_qualities(all_files_qc)
     if settings.get('button', False):
         btn = [
             [
@@ -149,17 +153,17 @@ async def next_page(bot, query):
         ]
 
         btn.insert(0, [
-            InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}"),
+            InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
             build_language_button("all", key, req)[0]
         ])
-        btn.insert(1, build_quality_row("all", key, req))
+        btn.insert(1, build_quality_row("all", key, req, available=available_q))
     else:
         btn = [
             [
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}"),
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
                 build_language_button("all", key, req)[0]
             ],
-            build_quality_row("all", key, req)
+            build_quality_row("all", key, req, available=available_q)
         ]
     try:
         if settings['max_btn']:
@@ -337,10 +341,10 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
             ]
             for file in files
         ]
-        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")])
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")]
         ]
 
     if offset != "":
@@ -431,10 +435,10 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
             ]
             for file in files
         ]
-        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")])
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")]
+            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")]
         ]
 
     if offset != "":
@@ -530,7 +534,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")
             ]
         )
     else:
@@ -539,7 +543,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")
             ]
         )
 
@@ -731,19 +735,45 @@ def get_quality_label(file_size):
     return None
 
 
-def build_quality_row(scope, key, uid, selected=None):
+def get_available_qualities(pool):
+    """Which of the 5 quality buckets actually have at least one file in
+    this pool. Used to mark the missing ones with ❌ instead of pretending
+    every quality is always available."""
+    avail = set()
+    for f in pool:
+        try:
+            size = int(f.get("file_size", 0))
+        except (TypeError, ValueError):
+            continue
+        for qkey in QUALITY_ORDER:
+            lo, hi = QUALITY_RANGES[qkey]
+            if lo <= size < hi:
+                avail.add(qkey)
+                break
+    return avail
+
+
+def build_quality_row(scope, key, uid, selected=None, available=None):
     """Row of 4K / 2K / 1080p / 720p / 480p buttons, scoped to a specific
     context so the filter only searches within that context's files:
       scope = "s{season}e{episode}"  -> that single episode's files
       scope = "c{season}"            -> that season's combined/batch files
-    If `selected` is set (e.g. "2k"), that button gets a ✅."""
-    return [
-        InlineKeyboardButton(
-            f"✅ {QUALITY_LABELS[q]}" if q == selected else QUALITY_LABELS[q],
-            callback_data=f"qual#{q}#{scope}#{key}#0#{uid}"
-        )
-        for q in QUALITY_ORDER
-    ]
+    If `selected` is set (e.g. "2k"), that button gets a ✅.
+    If `available` is given (a set of quality keys), any quality NOT in
+    it gets a ❌ instead of the plain label, since there's nothing to
+    show for it here."""
+    buttons = []
+    for q in QUALITY_ORDER:
+        if available is not None and q not in available:
+            label = f"❌ {QUALITY_LABELS[q]}"
+        elif q == selected:
+            label = f"✅ {QUALITY_LABELS[q]}"
+        else:
+            label = QUALITY_LABELS[q]
+        buttons.append(InlineKeyboardButton(
+            label, callback_data=f"qual#{q}#{scope}#{key}#0#{uid}"
+        ))
+    return buttons
 
 
 # ===============================
@@ -760,14 +790,13 @@ def build_quality_row(scope, key, uid, selected=None):
 # actually present in that scope's files, so users never see a dead
 # button for a language that isn't available.
 LANGUAGE_DEFS = [
-    ("hin",   "Hindi",      {"hindi", "hin"}),
-    ("eng",   "English",    {"english", "eng"}),
-    ("tam",   "Tamil",      {"tamil", "tam"}),
-    ("tel",   "Telugu",     {"telugu", "tel"}),
-    ("kan",   "Kannada",    {"kannada", "kan"}),
-    ("mal",   "Malayalam",  {"malayalam", "mal"}),
-    ("multi", "Multi Audio", {"multi"}),
-    ("dual",  "Dual Audio",  {"dual"}),
+    ("hin",   "Hindi",       {"hindi", "hin"}),
+    ("eng",   "English",     {"english", "eng"}),
+    ("tam",   "Tamil",       {"tamil", "tam"}),
+    ("tel",   "Telugu",      {"telugu", "tel"}),
+    ("kan",   "Kannada",     {"kannada", "kan"}),
+    ("mal",   "Malayalam",   {"malayalam", "mal"}),
+    ("multi", "Multi Audio", {"multi", "dual"}),
 ]
 LANGUAGE_LABELS = {k: v for k, v, _ in LANGUAGE_DEFS}
 LANGUAGE_TOKENS = {k: t for k, _, t in LANGUAGE_DEFS}
@@ -781,7 +810,8 @@ def get_file_languages(filename: str) -> tuple:
     """Detect which language tags exist in a filename, e.g.
     'Movie.2024.Tam.Tel.Kan.Mal.Eng.WEBRip.mkv' -> ('tam','tel','kan','mal','eng').
     Matches whole tokens only (split on any non-alphanumeric char) so it
-    won't false-positive on tags buried inside other words."""
+    won't false-positive on tags buried inside other words. 'dual' tags
+    are folded into the single 'Multi Audio' bucket."""
     tokens = set(_LANG_TOKEN_SPLIT_RE.split(filename.lower()))
     if not tokens:
         return ()
@@ -809,43 +839,31 @@ def build_language_row(lang_keys, scope, key, uid, selected=None):
     ]
 
 
-LONG_LABEL_CHARS = 8  # labels longer than this (Malayalam, Multi Audio, Dual Audio)
-                       # get their own full-width row so text is never hidden/cramped
-
-
 def _language_menu_rows(available, scope, key, uid, selected=None):
-    """Chunk detected languages 2-per-row. A language whose label is long
-    (e.g. 'Malayalam', 'Multi Audio', 'Dual Audio') gets its own full-width
-    single-button row instead of being squeezed next to another button."""
+    """Chunk detected languages 2-per-row."""
     rows = []
-    buffer = []
-    for lk in available:
-        if len(LANGUAGE_LABELS[lk]) > LONG_LABEL_CHARS:
-            if buffer:
-                rows.append(build_language_row(buffer, scope, key, uid, selected=selected))
-                buffer = []
-            rows.append(build_language_row([lk], scope, key, uid, selected=selected))
-        else:
-            buffer.append(lk)
-            if len(buffer) == 2:
-                rows.append(build_language_row(buffer, scope, key, uid, selected=selected))
-                buffer = []
-    if buffer:
-        rows.append(build_language_row(buffer, scope, key, uid, selected=selected))
+    for i in range(0, len(available), 2):
+        rows.append(build_language_row(available[i:i + 2], scope, key, uid, selected=selected))
     return rows
 
 
-def build_language_quality_row(lkey, scope, key, uid, selected=None):
+def build_language_quality_row(lkey, scope, key, uid, selected=None, available=None):
     """Quality row shown AFTER a language is picked, so the user can
     refine within that language without losing the language filter.
-    Routes through the combined lq# handler, not the plain qual# one."""
-    return [
-        InlineKeyboardButton(
-            f"✅ {QUALITY_LABELS[q]}" if q == selected else QUALITY_LABELS[q],
-            callback_data=f"lq#{lkey}#{q}#{scope}#{key}#0#{uid}"
-        )
-        for q in QUALITY_ORDER
-    ]
+    Routes through the combined lq# handler, not the plain qual# one.
+    `available` (a set of quality keys) marks the missing ones with ❌."""
+    buttons = []
+    for q in QUALITY_ORDER:
+        if available is not None and q not in available:
+            label = f"❌ {QUALITY_LABELS[q]}"
+        elif q == selected:
+            label = f"✅ {QUALITY_LABELS[q]}"
+        else:
+            label = QUALITY_LABELS[q]
+        buttons.append(InlineKeyboardButton(
+            label, callback_data=f"lq#{lkey}#{q}#{scope}#{key}#0#{uid}"
+        ))
+    return buttons
 
 
 def resolve_scope_pool(scope, key, uid, all_files):
@@ -1089,7 +1107,10 @@ async def filter_files(client, query: CallbackQuery):
         ]
 
         # ✅ Quality buttons at the TOP, scoped to just this episode's files
-        btn.append(build_quality_row(f"s{season_no}e{episode_no}", key, uid))
+        btn.append(build_quality_row(
+            f"s{season_no}e{episode_no}", key, uid,
+            available=get_available_qualities(filtered)
+        ))
 
         for f in filtered[start:end]:
             name    = f["file_name"]
@@ -1185,7 +1206,10 @@ async def combined_files(client, query: CallbackQuery):
         ]
 
         # ✅ Quality buttons at the TOP, scoped to just this season's combined files
-        btn.append(build_quality_row(f"c{season_no}", key, uid))
+        btn.append(build_quality_row(
+            f"c{season_no}", key, uid,
+            available=get_available_qualities(combined)
+        ))
 
         for f in combined[start:end]:
             name    = f["file_name"]
@@ -1301,7 +1325,7 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
 
         # ✅ Quality row stays visible (with a ✅ on the active one) so the
         # user can switch quality directly without hitting Back first.
-        btn = [build_quality_row(scope, key, uid, selected=qkey)]
+        btn = [build_quality_row(scope, key, uid, selected=qkey, available=get_available_qualities(pool))]
         btn.append([InlineKeyboardButton(
             f"🎚 {label} — {len(matched)} file(s)", callback_data="ident"
         )])
@@ -1441,7 +1465,7 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         # this language, routed through lq# so the language filter isn't
         # lost) plus a single compact "Change Language" button — instead
         # of repeating the full language menu here.
-        btn = [build_language_quality_row(lkey, scope, key, uid)]
+        btn = [build_language_quality_row(lkey, scope, key, uid, available=get_available_qualities(matched))]
         btn.append([InlineKeyboardButton(
             "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}"
         )])
@@ -1760,7 +1784,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")
             ]
         )
     else:
@@ -1769,7 +1793,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
             [
                 #InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
                 #InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}")
             ]
         )
 
@@ -3375,6 +3399,10 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
     FRESH[key] = search
     SEASON_OWNER[key] = req
     temp.GETALL[key] = files
+    # ✅ Full pool (cached) so the ❌ marks reflect ALL matching files,
+    # not just this page's 8 results.
+    all_files_qc = await get_cached_season_files(message.chat.id, key, search)
+    available_q  = get_available_qualities(all_files_qc)
     if message.from_user:
         temp.SHORT[message.from_user.id] = message.chat.id
     if settings.get("button", False):
@@ -3387,17 +3415,17 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             for file in files
         ]
         btn.insert(0, [
-            InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}"),
+            InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
             build_language_button("all", key, req)[0]
         ])
-        btn.insert(1, build_quality_row("all", key, req))
+        btn.insert(1, build_quality_row("all", key, req, available=available_q))
     else:
         btn = [
             [
-                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}"),
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
                 build_language_button("all", key, req)[0]
             ],
-            build_quality_row("all", key, req)
+            build_quality_row("all", key, req, available=available_q)
         ]
     if offset != "":
         try:
