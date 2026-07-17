@@ -148,14 +148,18 @@ async def next_page(bot, query):
             for file in files
         ]
 
-        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(0, [
+            InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}"),
+            build_language_button("all", key, req)[0]
+        ])
         btn.insert(1, build_quality_row("all", key, req))
-        btn.insert(2, build_language_button("all", key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
-            build_quality_row("all", key, req),
-            build_language_button("all", key, req)
+            [
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}"),
+                build_language_button("all", key, req)[0]
+            ],
+            build_quality_row("all", key, req)
         ]
     try:
         if settings['max_btn']:
@@ -805,13 +809,43 @@ def build_language_row(lang_keys, scope, key, uid, selected=None):
     ]
 
 
+LONG_LABEL_CHARS = 8  # labels longer than this (Malayalam, Multi Audio, Dual Audio)
+                       # get their own full-width row so text is never hidden/cramped
+
+
 def _language_menu_rows(available, scope, key, uid, selected=None):
-    """Chunk detected languages into rows of up to 4 buttons so the
-    keyboard never gets a cramped 8-wide row."""
+    """Chunk detected languages 2-per-row. A language whose label is long
+    (e.g. 'Malayalam', 'Multi Audio', 'Dual Audio') gets its own full-width
+    single-button row instead of being squeezed next to another button."""
     rows = []
-    for i in range(0, len(available), 4):
-        rows.append(build_language_row(available[i:i + 4], scope, key, uid, selected=selected))
+    buffer = []
+    for lk in available:
+        if len(LANGUAGE_LABELS[lk]) > LONG_LABEL_CHARS:
+            if buffer:
+                rows.append(build_language_row(buffer, scope, key, uid, selected=selected))
+                buffer = []
+            rows.append(build_language_row([lk], scope, key, uid, selected=selected))
+        else:
+            buffer.append(lk)
+            if len(buffer) == 2:
+                rows.append(build_language_row(buffer, scope, key, uid, selected=selected))
+                buffer = []
+    if buffer:
+        rows.append(build_language_row(buffer, scope, key, uid, selected=selected))
     return rows
+
+
+def build_language_quality_row(lkey, scope, key, uid, selected=None):
+    """Quality row shown AFTER a language is picked, so the user can
+    refine within that language without losing the language filter.
+    Routes through the combined lq# handler, not the plain qual# one."""
+    return [
+        InlineKeyboardButton(
+            f"✅ {QUALITY_LABELS[q]}" if q == selected else QUALITY_LABELS[q],
+            callback_data=f"lq#{lkey}#{q}#{scope}#{key}#0#{uid}"
+        )
+        for q in QUALITY_ORDER
+    ]
 
 
 def resolve_scope_pool(scope, key, uid, all_files):
@@ -1045,16 +1079,17 @@ async def filter_files(client, query: CallbackQuery):
         end            = start + FILES_PER_PAGE
 
         btn = [
-            [InlineKeyboardButton(
-                f"📁 S{season_no:02d}E{episode_no:02d} — {len(filtered)} file(s)",
-                callback_data="ident"
-            )]
+            [
+                InlineKeyboardButton(
+                    f"📁 S{season_no:02d}E{episode_no:02d} — {len(filtered)} file(s)",
+                    callback_data="ident"
+                ),
+                build_language_button(f"s{season_no}e{episode_no}", key, uid)[0]
+            ]
         ]
 
         # ✅ Quality buttons at the TOP, scoped to just this episode's files
         btn.append(build_quality_row(f"s{season_no}e{episode_no}", key, uid))
-        # 🌐 Language entry button, same scope
-        btn.append(build_language_button(f"s{season_no}e{episode_no}", key, uid))
 
         for f in filtered[start:end]:
             name    = f["file_name"]
@@ -1140,16 +1175,17 @@ async def combined_files(client, query: CallbackQuery):
         end            = start + FILES_PER_PAGE
 
         btn = [
-            [InlineKeyboardButton(
-                f"📦 Season {season_no:02d} — Batch/Complete ({len(combined)} files)",
-                callback_data="ident"
-            )]
+            [
+                InlineKeyboardButton(
+                    f"📦 Season {season_no:02d} — Batch/Complete ({len(combined)} files)",
+                    callback_data="ident"
+                ),
+                build_language_button(f"c{season_no}", key, uid)[0]
+            ]
         ]
 
         # ✅ Quality buttons at the TOP, scoped to just this season's combined files
         btn.append(build_quality_row(f"c{season_no}", key, uid))
-        # 🌐 Language entry button, same scope
-        btn.append(build_language_button(f"c{season_no}", key, uid))
 
         for f in combined[start:end]:
             name    = f["file_name"]
@@ -1401,14 +1437,14 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         start           = page * FILES_PER_PAGE
         end             = start + FILES_PER_PAGE
 
-        # ✅ Keep the language menu visible (✅ on the active one) so the
-        # user can switch language directly without hitting Back first.
-        seen = set()
-        for f in pool:
-            seen.update(get_file_languages(f["file_name"]))
-        available = [k for k in LANGUAGE_ORDER if k in seen]
-
-        btn = _language_menu_rows(available, scope, key, uid, selected=lkey)
+        # ✅ Top of the results now shows a Quality row (to refine within
+        # this language, routed through lq# so the language filter isn't
+        # lost) plus a single compact "Change Language" button — instead
+        # of repeating the full language menu here.
+        btn = [build_language_quality_row(lkey, scope, key, uid)]
+        btn.append([InlineKeyboardButton(
+            "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}"
+        )])
         btn.append([InlineKeyboardButton(
             f"🌐 {label} — {len(matched)} file(s)", callback_data="ident"
         )])
@@ -1438,6 +1474,102 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         # ✅ Back returns to the exact plain screen this was opened from
         btn.append([
             InlineKeyboardButton("↩️ Back", callback_data=back_cb)
+        ])
+
+        try:
+            await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+        except MessageNotModified:
+            pass
+
+        await query.answer()
+
+    except Exception as e:
+        await query.answer(f"❌ Error: {e}", show_alert=True)
+
+
+# ===============================
+# LANGUAGE + QUALITY COMBINED FILTER
+# ===============================
+# Reached by tapping a quality button on top of an already-language-
+# filtered screen. Keeps BOTH filters active at once instead of one
+# overwriting the other.
+@Client.on_callback_query(filters.regex(r"^lq#"))
+async def language_quality_filter_cb_handler(client, query: CallbackQuery):
+    try:
+        _, lkey, qkey, scope, key, page, uid = query.data.split("#")
+        page = int(page)
+
+        if int(uid) != query.from_user.id:
+            return await query.answer(
+                "⚠️ This is not your search. Please search your own.",
+                show_alert=True
+            )
+
+        search  = FRESH.get(key)
+        chat_id = query.message.chat.id
+
+        if not search:
+            return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+
+        lang_label = LANGUAGE_LABELS.get(lkey, lkey)
+        q_label    = QUALITY_LABELS.get(qkey, qkey)
+        lo, hi     = QUALITY_RANGES.get(qkey, (0, float("inf")))
+
+        all_files = await get_cached_season_files(chat_id, key, search)
+        pool, _   = resolve_scope_pool(scope, key, uid, all_files)
+
+        matched = [
+            f for f in pool
+            if lkey in get_file_languages(f["file_name"])
+            and lo <= f.get("file_size", 0) < hi
+        ]
+
+        if not matched:
+            return await query.answer(f"🚫 No {q_label} {lang_label} files found here.", show_alert=True)
+
+        settings = await get_settings(chat_id)
+        pre = 'filep' if settings.get('file_secure', False) else 'file'
+
+        FILES_PER_PAGE = 8
+        total_pages    = max(1, (len(matched) - 1) // FILES_PER_PAGE + 1)
+        page            = max(0, min(page, total_pages - 1))
+        start           = page * FILES_PER_PAGE
+        end             = start + FILES_PER_PAGE
+
+        btn = [build_language_quality_row(lkey, scope, key, uid, selected=qkey)]
+        btn.append([InlineKeyboardButton(
+            "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}"
+        )])
+        btn.append([InlineKeyboardButton(
+            f"🎚 {q_label} · 🌐 {lang_label} — {len(matched)} file(s)", callback_data="ident"
+        )])
+
+        for f in matched[start:end]:
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
+            display = name[:45] + "…" if len(name) > 45 else name
+            btn.append([InlineKeyboardButton(
+                f"[{size}] {display}",
+                callback_data=f'{pre}#{f["file_id"]}'
+            )])
+
+        if total_pages > 1:
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton(
+                    "⬅️ Prev", callback_data=f"lq#{lkey}#{qkey}#{scope}#{key}#{page-1}#{uid}"
+                ))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ident"))
+            if page + 1 < total_pages:
+                nav.append(InlineKeyboardButton(
+                    "Next ➡️", callback_data=f"lq#{lkey}#{qkey}#{scope}#{key}#{page+1}#{uid}"
+                ))
+            btn.append(nav)
+
+        # ✅ Back returns to the language-only filtered list (drops just
+        # the quality refinement, keeps the language filter)
+        btn.append([
+            InlineKeyboardButton("↩️ Back", callback_data=f"lang#{lkey}#{scope}#{key}#0#{uid}")
         ])
 
         try:
@@ -3254,14 +3386,18 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             ]
             for file in files
         ]
-        btn.insert(0, [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")])
+        btn.insert(0, [
+            InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}"),
+            build_language_button("all", key, req)[0]
+        ])
         btn.insert(1, build_quality_row("all", key, req))
-        btn.insert(2, build_language_button("all", key, req))
     else:
         btn = [
-            [InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}")],
-            build_quality_row("all", key, req),
-            build_language_button("all", key, req)
+            [
+                InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ — ᴄʟɪᴄᴋ ʜᴇʀᴇ 🍃", callback_data=f"seasons#{key}"),
+                build_language_button("all", key, req)[0]
+            ],
+            build_quality_row("all", key, req)
         ]
     if offset != "":
         try:
