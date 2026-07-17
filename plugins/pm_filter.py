@@ -138,10 +138,12 @@ async def next_page(bot, query):
     temp.SHORT[query.from_user.id] = query.message.chat.id
     settings = await get_settings(query.message.chat.id)
     pre = 'filep' if settings.get('file_secure', False) else 'file'
-    # ✅ Full pool (cached) so the ❌ marks reflect ALL matching files,
-    # not just this page's 8 results.
-    all_files_qc = await get_cached_season_files(query.message.chat.id, key, search)
-    available_q  = get_available_qualities(all_files_qc)
+    # ✅ Speed: the ❌-availability scan needs the FULL matching pool
+    # (up to 50,000 files), which is what was adding 1.5-2s to every
+    # single search. Don't block the results on it here — fire it off
+    # in the background so SEASON_CACHE is warm by the time the user
+    # taps into a season/episode/quality screen (where ❌ marks do show).
+    asyncio.create_task(get_cached_season_files(query.message.chat.id, key, search))
     if settings.get('button', False):
         btn = [
             [
@@ -156,14 +158,14 @@ async def next_page(bot, query):
             InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
             build_language_button("all", key, req)[0]
         ])
-        btn.insert(1, build_quality_row("all", key, req, available=available_q))
+        btn.insert(1, build_quality_row("all", key, req))
     else:
         btn = [
             [
                 InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
                 build_language_button("all", key, req)[0]
             ],
-            build_quality_row("all", key, req, available=available_q)
+            build_quality_row("all", key, req)
         ]
     try:
         if settings['max_btn']:
@@ -3399,10 +3401,12 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
     FRESH[key] = search
     SEASON_OWNER[key] = req
     temp.GETALL[key] = files
-    # ✅ Full pool (cached) so the ❌ marks reflect ALL matching files,
-    # not just this page's 8 results.
-    all_files_qc = await get_cached_season_files(message.chat.id, key, search)
-    available_q  = get_available_qualities(all_files_qc)
+    # ✅ Speed: the ❌-availability scan needs the FULL matching pool
+    # (up to 50,000 files), which is what was adding 1.5-2s to every
+    # single search. Don't block the results on it here — fire it off
+    # in the background so SEASON_CACHE is warm by the time the user
+    # taps into a season/episode/quality screen (where ❌ marks do show).
+    asyncio.create_task(get_cached_season_files(message.chat.id, key, search))
     if message.from_user:
         temp.SHORT[message.from_user.id] = message.chat.id
     if settings.get("button", False):
@@ -3418,14 +3422,14 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
             build_language_button("all", key, req)[0]
         ])
-        btn.insert(1, build_quality_row("all", key, req, available=available_q))
+        btn.insert(1, build_quality_row("all", key, req))
     else:
         btn = [
             [
                 InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}"),
                 build_language_button("all", key, req)[0]
             ],
-            build_quality_row("all", key, req, available=available_q)
+            build_quality_row("all", key, req)
         ]
     if offset != "":
         try:
