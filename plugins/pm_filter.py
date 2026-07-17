@@ -148,7 +148,7 @@ async def next_page(bot, query):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
@@ -432,7 +432,7 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
@@ -527,7 +527,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
@@ -648,6 +648,18 @@ def clean_name(filename: str) -> str:
     name = STRIP_RE.sub(' ', filename)
     name = re.sub(r'\s+', ' ', name).strip().lower()
     return name
+
+
+def format_file_button_text(file):
+    """File list label — '{size} ▷ [S01E02] Clean Name' for series files,
+    '{size} ▷ Clean Name' for movies (no season/episode = no tag). Same
+    format already used elsewhere in the bot, now shared everywhere."""
+    size = get_size(file['file_size'])
+    name = file['file_name']
+    m = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', name)
+    tag = f"[S{m.group(1).zfill(2)}E{m.group(2).zfill(2)}] " if m else ""
+    clean = re.sub(r'\[.*?\]', '', name).replace("WEBRip", "").strip()
+    return f"{size} ▷ {tag}{clean}"
 
 
 def filter_and_rank(files: list, search: str) -> list:
@@ -1777,7 +1789,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
@@ -3413,7 +3425,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
+                    text=format_file_button_text(file), callback_data=f'{pre}#{file["file_id"]}'
                 ),
             ]
             for file in files
