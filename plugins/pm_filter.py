@@ -685,9 +685,13 @@ def _sync_fetch_known_titles(limit):
     """col/sec_col are plain synchronous PyMongo collections (same as
     col.delete_one() / col.count_documents() used elsewhere in this file
     — no await, no motor). Run with a normal blocking cursor, called via
-    asyncio.to_thread so it doesn't stall the event loop."""
+    asyncio.to_thread so it doesn't stall the event loop.
+    Only touches sec_col when MULTIPLE_DATABASE is on — same rule
+    get_search_results() already follows — so this doesn't hang on a
+    second DB that isn't actually configured for use."""
     titles = set()
-    for collection in (col, sec_col):
+    collections = (col, sec_col) if MULTIPLE_DATABASE else (col,)
+    for collection in collections:
         try:
             cursor = collection.find({}, {"file_name": 1}).limit(limit)
             for doc in cursor:
@@ -709,6 +713,10 @@ def _sync_fetch_known_titles(limit):
                 if len(title) >= 2:
                     titles.add(title)
         except Exception as e:
+            # print() as well as logging — ia_filterdb.py's own save_file()
+            # uses print() for its status messages, so if Koyeb's log view
+            # is tuned to stdout, logging.error() alone might not surface.
+            print(f"[spell-fuzzy] _sync_fetch_known_titles ERROR on {collection}: {e}")
             logging.error(f"_sync_fetch_known_titles error: {e}")
     return titles
 
@@ -720,7 +728,9 @@ async def _get_known_titles():
 
     try:
         titles = await asyncio.to_thread(_sync_fetch_known_titles, _KNOWN_TITLES_LIMIT)
+        print(f"[spell-fuzzy] loaded {len(titles)} known titles for fuzzy suggestions")
     except Exception as e:
+        print(f"[spell-fuzzy] _get_known_titles ERROR: {e}")
         logging.error(f"_get_known_titles error: {e}")
         titles = set()
 
@@ -735,11 +745,13 @@ async def get_similar_titles(query, limit=5):
     is close enough to be a confident suggestion."""
     titles = await _get_known_titles()
     if not titles:
+        print("[spell-fuzzy] no known titles available — can't suggest anything")
         return []
     q = clean_name(query)
     if not q:
         return []
     matches = difflib.get_close_matches(q, titles, n=limit, cutoff=0.6)
+    print(f"[spell-fuzzy] query='{query}' cleaned='{q}' pool_size={len(titles)} matches={matches}")
     return [m.title() for m in matches]
 
 
