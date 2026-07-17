@@ -652,12 +652,16 @@ def clean_name(filename: str) -> str:
 
 def format_file_button_text(file):
     """File list label — '{size} ▷ [S01E02] Clean Name' for series files,
-    '{size} ▷ Clean Name' for movies (no season/episode = no tag). Same
-    format already used elsewhere in the bot, now shared everywhere."""
+    '{size} ▷ Clean Name' for movies (no season/episode = no tag).
+    Uses the same extract_season/extract_episode detectors as the rest of
+    the bot (season lists, episode grouping) so it also catches spaced
+    formats like 'S08 E03', not just tight 'S08E03' — and always renders
+    the tag normalized to the no-space 'S08E03' form either way."""
     size = get_size(file['file_size'])
     name = file['file_name']
-    m = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', name)
-    tag = f"[S{m.group(1).zfill(2)}E{m.group(2).zfill(2)}] " if m else ""
+    season  = extract_season(name)
+    episode = extract_episode(name)
+    tag = f"[S{season:02d}E{episode:02d}] " if season is not None and episode is not None else ""
     clean = re.sub(r'\[.*?\]', '', name).replace("WEBRip", "").strip()
     return f"{size} ▷ {tag}{clean}"
 
