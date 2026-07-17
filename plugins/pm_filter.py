@@ -681,21 +681,26 @@ _KNOWN_TITLES_TTL   = 3600     # refresh once an hour
 _KNOWN_TITLES_LIMIT = 20000    # sample size, not the whole DB — keeps this cheap
 
 
-async def _get_known_titles():
-    now = datetime.now().timestamp()
-    if _KNOWN_TITLES_CACHE["titles"] and (now - _KNOWN_TITLES_CACHE["ts"] < _KNOWN_TITLES_TTL):
-        return _KNOWN_TITLES_CACHE["titles"]
-
+def _sync_fetch_known_titles(limit):
+    """col/sec_col are plain synchronous PyMongo collections (same as
+    col.delete_one() / col.count_documents() used elsewhere in this file
+    — no await, no motor). Run with a normal blocking cursor, called via
+    asyncio.to_thread so it doesn't stall the event loop."""
     titles = set()
-    try:
-        for collection in (col, sec_col):
-            cursor = collection.find({}, {"file_name": 1}).limit(_KNOWN_TITLES_LIMIT)
-            async for doc in cursor:
+    for collection in (col, sec_col):
+        try:
+            cursor = collection.find({}, {"file_name": 1}).limit(limit)
+            for doc in cursor:
                 name = doc.get("file_name")
                 if not name:
                     continue
                 base = clean_name(name)          # strips quality/season/tags, lowercases
-                words = base.split()
+                # Drop stray punctuation-only leftovers (e.g. a lone "."
+                # or "-" where a stripped extension/tag used to be).
+                words = [
+                    w.strip(".-_") for w in base.split()
+                    if any(c.isalnum() for c in w)
+                ]
                 if not words:
                     continue
                 # Cap to first 6 words so long release-group junk after
@@ -703,8 +708,21 @@ async def _get_known_titles():
                 title = " ".join(words[:6]).strip()
                 if len(title) >= 2:
                     titles.add(title)
+        except Exception as e:
+            logging.error(f"_sync_fetch_known_titles error: {e}")
+    return titles
+
+
+async def _get_known_titles():
+    now = datetime.now().timestamp()
+    if _KNOWN_TITLES_CACHE["titles"] and (now - _KNOWN_TITLES_CACHE["ts"] < _KNOWN_TITLES_TTL):
+        return _KNOWN_TITLES_CACHE["titles"]
+
+    try:
+        titles = await asyncio.to_thread(_sync_fetch_known_titles, _KNOWN_TITLES_LIMIT)
     except Exception as e:
         logging.error(f"_get_known_titles error: {e}")
+        titles = set()
 
     _KNOWN_TITLES_CACHE["titles"] = list(titles)
     _KNOWN_TITLES_CACHE["ts"] = now
