@@ -264,7 +264,7 @@ async def advantage_spoll_choker(bot, query):
     if movie_ == "close_spellcheck":
         return await query.message.delete()
     movie = movies[(int(movie_))]
-    movie = re.sub(r"[:\-]", " ", movie)
+    movie = re.sub(r"[:\-()]", " ", movie)
     movie = re.sub(r"\s+", " ", movie).strip()
     await query.answer(script.TOP_ALRT_MSG)
     gl = await global_filters(bot, query.message, text=movie)
@@ -739,6 +739,29 @@ async def _get_known_titles():
     return _KNOWN_TITLES_CACHE["titles"]
 
 
+def _title_similarity(query_clean: str, candidate_clean: str) -> float:
+    """More precise than a raw whole-string difflib ratio:
+    1. Requires the FIRST word to actually resemble the query's first
+       word — real typos essentially never swap out the entire first
+       word, so this alone kills lookalike-but-unrelated titles (e.g.
+       'Cocktaile 2' matching 'Love Mocktail 2020' just because the
+       middle letters happen to overlap).
+    2. Trims the candidate down to roughly the query's own word count
+       (+1 buffer) before scoring, so a short query isn't unfairly
+       diluted by a long padded candidate title (year, "chapter 1", etc)
+       — and a short unrelated candidate doesn't get an inflated ratio
+       just because there's little left to disagree on.
+    """
+    qw, cw = query_clean.split(), candidate_clean.split()
+    if not qw or not cw:
+        return 0.0
+    first_word_ratio = difflib.SequenceMatcher(None, qw[0], cw[0]).ratio()
+    if first_word_ratio < 0.5:
+        return 0.0
+    trimmed = " ".join(cw[:len(qw) + 1])
+    return difflib.SequenceMatcher(None, query_clean, trimmed).ratio()
+
+
 async def get_similar_titles(query, limit=5):
     """Up to `limit` titles from our own DB that closely resemble `query`
     (typo-tolerant). Returns nicely title-cased strings, or [] if nothing
@@ -750,7 +773,10 @@ async def get_similar_titles(query, limit=5):
     q = clean_name(query)
     if not q:
         return []
-    matches = difflib.get_close_matches(q, titles, n=limit, cutoff=0.6)
+    scored = [(_title_similarity(q, t), t) for t in titles]
+    scored = [(s, t) for s, t in scored if s >= 0.6]
+    scored.sort(key=lambda x: -x[0])
+    matches = [t for _, t in scored[:limit]]
     print(f"[spell-fuzzy] query='{query}' cleaned='{q}' pool_size={len(titles)} matches={matches}")
     return [m.title() for m in matches]
 
@@ -3780,18 +3806,10 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
                 text=script.CUDNT_FND.format(mv_rqst),
                 reply_markup=InlineKeyboardMarkup(btn)
             )
-            try:
-                if settings['auto_delete']:
-                    await asyncio.sleep(600)
-                    await spell_check_del.delete()
-            except KeyError:
-                if msg.from_user:
-                    grpid = await active_connection(str(msg.from_user.id))
-                    await save_group_settings(grpid, 'auto_delete', True)
-                    settings = await get_settings(msg.chat.id)
-                    if settings['auto_delete']:
-                        await asyncio.sleep(600)
-                        await spell_check_del.delete()
+            # ✅ Suggestion messages always self-clean after 120s, regardless
+            # of the group's general auto_delete setting.
+            await asyncio.sleep(120)
+            await spell_check_del.delete()
             return
 
         # Truly nothing anywhere (external API AND our own DB) — Google-only
@@ -3843,18 +3861,10 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         text=script.CUDNT_FND.format(mv_rqst),
         reply_markup=InlineKeyboardMarkup(btn)
     )
-    try:
-        if settings['auto_delete']:
-            await asyncio.sleep(600)
-            await spell_check_del.delete()
-    except KeyError:
-        if msg.from_user:
-            grpid = await active_connection(str(msg.from_user.id))
-            await save_group_settings(grpid, 'auto_delete', True)
-            settings = await get_settings(msg.chat.id)
-            if settings['auto_delete']:
-                await asyncio.sleep(600)
-                await spell_check_del.delete()
+    # ✅ Suggestion messages always self-clean after 120s, regardless of
+    # the group's general auto_delete setting.
+    await asyncio.sleep(120)
+    await spell_check_del.delete()
 
 
 async def manual_filters(client, message, text=False):
