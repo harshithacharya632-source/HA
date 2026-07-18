@@ -3799,91 +3799,77 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*w?|kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|with\ssubtitle(s)?)",
         "", msg.text, flags=re.IGNORECASE)  # plis contribute some common words
     query = query.strip() + " movie"
+    async def _build_and_show(labels):
+        SPELL_CHECK[mv_id] = labels
+        btn = [
+            [InlineKeyboardButton(text=t.strip(), callback_data=f"spol#{reqstr1}#{k}")]
+            for k, t in enumerate(labels)
+        ]
+        reqst_gle = urllib.parse.quote_plus(mv_rqst)
+        btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")])
+        btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
+        spell_check_del = await reply_msg.edit_text(
+            text=script.CUDNT_FND.format(mv_rqst),
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
+        # ✅ Suggestion messages always self-clean after 120s, regardless
+        # of the group's general auto_delete setting.
+        await asyncio.sleep(120)
+        await spell_check_del.delete()
+
+    # ✅ 1) Check OUR OWN library FIRST. A match from here is guaranteed
+    # to be a real, clickable, in-stock movie — checking it before the
+    # external API means a loosely-matched external guess (e.g. TMDB
+    # returning some other title for "Durandhar" instead of the real
+    # "Dhurandhar" that's actually sitting in our own DB) never shadows
+    # the better, correct local match.
+    similar = await get_similar_titles(mv_rqst)
+    if similar:
+        await _build_and_show(similar)
+        return
+
+    # 2) Nothing close in our own library — fall back to the external
+    # poster/TMDB lookup. Mainly useful to confirm correct spelling even
+    # for a movie that isn't uploaded yet, so /request gets the right name.
     try:
         movies = await get_poster(mv_rqst, bulk=True)
     except Exception as e:
         logger.exception(e)
         movies = None
 
-    movielist = []
-    if not movies:
-        # ✅ External poster/TMDB lookup found nothing (or the API call
-        # itself failed) — before giving up to a dead Google-only button,
-        # try fuzzy-matching the typo against titles that actually exist
-        # in OUR OWN file database.
-        similar = await get_similar_titles(mv_rqst)
-        if similar:
-            SPELL_CHECK[mv_id] = similar
-            btn = [
-                [InlineKeyboardButton(text=t.strip(), callback_data=f"spol#{reqstr1}#{k}")]
-                for k, t in enumerate(similar)
-            ]
-            reqst_gle = urllib.parse.quote_plus(mv_rqst)
-            btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")])
-            btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
-            spell_check_del = await reply_msg.edit_text(
-                text=script.CUDNT_FND.format(mv_rqst),
-                reply_markup=InlineKeyboardMarkup(btn)
-            )
-            # ✅ Suggestion messages always self-clean after 120s, regardless
-            # of the group's general auto_delete setting.
-            await asyncio.sleep(120)
-            await spell_check_del.delete()
+    if movies:
+        # Deduped, max 5, "Title (Year)" so each button is a distinct,
+        # useful guess instead of the old list which duplicated every
+        # title once plain and once with the year tacked on (unbounded).
+        seen = set()
+        movielist = []
+        for movie in movies:
+            title = (movie.get('title') or '').strip()
+            year  = movie.get('year')
+            if not title:
+                continue
+            label = f"{title} ({year})" if year else title
+            if label.lower() in seen:
+                continue
+            seen.add(label.lower())
+            movielist.append(label)
+            if len(movielist) >= 5:
+                break
+        if movielist:
+            await _build_and_show(movielist)
             return
 
-        # Truly nothing anywhere (external API AND our own DB) — Google-only
-        reqst_gle = urllib.parse.quote_plus(mv_rqst)
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
-
-    # ✅ "Did you mean" suggestions — deduped, max 5, "Title (Year)" so
-    # each button is a distinct, useful guess instead of the old list
-    # which duplicated every title once plain and once with the year
-    # tacked on (unbounded length), and instead of the silent auto-guess
-    # path below always overwriting this with a dead-end Google button.
-    seen = set()
-    for movie in movies:
-        title = (movie.get('title') or '').strip()
-        year  = movie.get('year')
-        if not title:
-            continue
-        label = f"{title} ({year})" if year else title
-        if label.lower() in seen:
-            continue
-        seen.add(label.lower())
-        movielist.append(label)
-        if len(movielist) >= 5:
-            break
-
-    SPELL_CHECK[mv_id] = movielist
-
-    btn = [
-        [
-            InlineKeyboardButton(
-                text=movie_name.strip(),
-                callback_data=f"spol#{reqstr1}#{k}",
-            )
-        ]
-        for k, movie_name in enumerate(movielist)
-    ]
+    # 3) Truly nothing anywhere (our own DB AND the external API) —
+    # Google-only fallback.
     reqst_gle = urllib.parse.quote_plus(mv_rqst)
-    btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")])
-    btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
-    spell_check_del = await reply_msg.edit_text(
-        text=script.CUDNT_FND.format(mv_rqst),
-        reply_markup=InlineKeyboardMarkup(btn)
-    )
-    # ✅ Suggestion messages always self-clean after 120s, regardless of
-    # the group's general auto_delete setting.
-    await asyncio.sleep(120)
-    await spell_check_del.delete()
+    button = [[
+        InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+    ]]
+    if NO_RESULTS_MSG:
+        await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
+    k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+    await asyncio.sleep(30)
+    await k.delete()
 
 
 async def manual_filters(client, message, text=False):
