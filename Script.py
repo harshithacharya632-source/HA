@@ -1,5 +1,3 @@
-
-
 class script(object):
     START_TXT = """<b><blockquote>ʜᴇʟʟᴏ {} 👋,</blockquote>
     
@@ -171,7 +169,8 @@ OTHER DB :-
     LOG_TEXT_G = """#NewGroup
 Gʀᴏᴜᴘ = {}(<code>{}</code>)
 Tᴏᴛᴀʟ Mᴇᴍʙᴇʀs = <code>{}</code>
-Aᴅᴅᴇᴅ Bʏ - {}"""
+Aᴅᴅᴇᴅ Bʏ - {}
+Gʀᴏᴜᴘ Lɪɴᴋ - {}"""
 
     LOG_TEXT_P = """#NewUser
 ID - <code>{}</code>
@@ -756,14 +755,3 @@ Example:- /set_caption 📕 File Name: {filename}
 <i>{plot}</i></blockquote>
 
 🔍 <b>Sᴇᴀʀᴄʜ →</b> @{search_link}"""
-
-
-    
-
-
-
-
-
-
-
-
