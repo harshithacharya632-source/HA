@@ -25,22 +25,37 @@ join_db = JoinReqs
 
 @Client.on_chat_member_updated(filters.group)
 async def bot_added_to_group_log(client, chat_member_updated):
-    """Fires the moment the bot itself is added to a group.
-    Logs who added it and the group's invite link (if the bot has rights)."""
+    """Fires when the bot's own membership in a group changes.
+    - Fresh join -> logs who added it (link included only if already admin).
+    - Later promoted to admin -> sends a follow-up log with the invite link."""
     new_member = chat_member_updated.new_chat_member
     if not new_member or new_member.user.id != client.me.id:
         return
 
     old_status = chat_member_updated.old_chat_member.status if chat_member_updated.old_chat_member else None
     new_status = new_member.status
-
-    # Only trigger on a fresh join (was not already in the group)
-    if old_status in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR]:
-        return
-    if new_status not in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR]:
-        return
-
     chat = chat_member_updated.chat
+
+    was_in_group = old_status in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR]
+    is_in_group = new_status in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR]
+
+    # Case 1: promoted to admin after already being in the group -> send the link now
+    if was_in_group and new_status == enums.ChatMemberStatus.ADMINISTRATOR and old_status != enums.ChatMemberStatus.ADMINISTRATOR:
+        try:
+            invite = await client.create_chat_invite_link(chat.id)
+            group_link = invite.invite_link
+        except Exception as e:
+            group_link = f"Nᴏᴛ Aᴠᴀɪʟᴀʙʟᴇ ({e})"
+        await client.send_message(
+            LOG_CHANNEL,
+            f"#AdminGranted\nGʀᴏᴜᴘ = {chat.title}(<code>{chat.id}</code>)\nI'ᴍ ɴᴏᴡ ᴀᴅᴍɪɴ. Gʀᴏᴜᴘ Lɪɴᴋ - {group_link}"
+        )
+        return
+
+    # Case 2: fresh join (wasn't in the group before)
+    if was_in_group or not is_in_group:
+        return
+
     added_by = chat_member_updated.from_user.mention if chat_member_updated.from_user else "Unknown"
 
     try:
