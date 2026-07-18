@@ -924,7 +924,7 @@ def build_quality_row(scope, key, uid, selected=None, available=None):
         else:
             label = QUALITY_LABELS[q]
         buttons.append(InlineKeyboardButton(
-            label, callback_data=f"qual#{q}#{scope}#{key}#0#{uid}", style=enums.ButtonStyle.PRIMARY
+            label, callback_data=f"qual#{q}#{scope}#{key}#0#{uid}", style=enums.ButtonStyle.SUCCESS
         ))
     return buttons
 
@@ -1014,7 +1014,7 @@ def build_language_quality_row(lkey, scope, key, uid, selected=None, available=N
         else:
             label = QUALITY_LABELS[q]
         buttons.append(InlineKeyboardButton(
-            label, callback_data=f"lq#{lkey}#{q}#{scope}#{key}#0#{uid}", style=enums.ButtonStyle.PRIMARY
+            label, callback_data=f"lq#{lkey}#{q}#{scope}#{key}#0#{uid}", style=enums.ButtonStyle.SUCCESS
         ))
     return buttons
 
@@ -1087,7 +1087,7 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 
         seasons = sorted(season_set)
 
-        btn = [[InlineKeyboardButton("📺 SELECT SEASON", callback_data="ident")]]
+        btn = [[InlineKeyboardButton("📺 SELECT SEASON", callback_data="ident", style=enums.ButtonStyle.PRIMARY)]]
 
         # 2 season buttons per row
         for i in range(0, len(seasons), 2):
@@ -1172,7 +1172,7 @@ async def episode_selector(client, query: CallbackQuery):
             btn.append([
                 InlineKeyboardButton(
                     "📦 COMBAINED FILE ",
-                    callback_data=f"combined#s{season_no}#{key}#0#{uid}"
+                    callback_data=f"combined#s{season_no}#{key}#0#{uid}", style=enums.ButtonStyle.SUCCESS
                 )
             ])
 
@@ -1253,7 +1253,7 @@ async def filter_files(client, query: CallbackQuery):
             [
                 InlineKeyboardButton(
                     f"📁 S{season_no:02d}E{episode_no:02d} — {len(filtered)} file(s)",
-                    callback_data="ident"
+                    callback_data="ident", style=enums.ButtonStyle.SUCCESS
                 ),
                 build_language_button(f"s{season_no}e{episode_no}", key, uid)[0]
             ]
@@ -1620,7 +1620,7 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         # of repeating the full language menu here.
         btn = [build_language_quality_row(lkey, scope, key, uid, available=get_available_qualities(matched))]
         btn.append([InlineKeyboardButton(
-            "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}"
+            "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}", style=enums.ButtonStyle.SUCCESS
         )])
         btn.append([InlineKeyboardButton(
             f"🌐 {label} — {len(matched)} file(s)", callback_data="ident"
@@ -1715,7 +1715,7 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
 
         btn = [build_language_quality_row(lkey, scope, key, uid, selected=qkey)]
         btn.append([InlineKeyboardButton(
-            "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}"
+            "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}", style=enums.ButtonStyle.SUCCESS
         )])
         btn.append([InlineKeyboardButton(
             f"🎚 {q_label} · 🌐 {lang_label} — {len(matched)} file(s)", callback_data="ident"
