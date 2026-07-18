@@ -272,17 +272,23 @@ async def advantage_spoll_choker(bot, query):
         k = await manual_filters(bot, query.message, text=movie)
         if k == False:
             files, offset, total_results = await get_search_results(query.message.chat.id, movie, offset=0, max_results=8, filter=True)
+            # ✅ Close the "Did you mean" suggestion prompt before showing
+            # the fresh search, instead of editing it in place.
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
             if files:
                 k = (movie, files, offset, total_results)
                 ai_search = True
-                reply_msg = await query.message.edit_text(f"<b><i>Searching For {movie} 🔍</i></b>")
+                reply_msg = await bot.send_message(query.message.chat.id, f"<b><i>Searching For {movie} 🔍</i></b>")
                 await auto_filter(bot, movie, query, reply_msg, ai_search, k)
             else:
                 reqstr1 = query.from_user.id if query.from_user else 0
                 reqstr = await bot.get_users(reqstr1)
                 if NO_RESULTS_MSG:
                     await bot.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, movie)))
-                k = await query.message.edit(script.MVE_NT_FND)
+                k = await bot.send_message(query.message.chat.id, script.MVE_NT_FND)
                 await asyncio.sleep(10)
                 await k.delete()
                 
@@ -681,6 +687,21 @@ _KNOWN_TITLES_TTL   = 3600     # refresh once an hour
 _KNOWN_TITLES_LIMIT = 20000    # sample size, not the whole DB — keeps this cheap
 
 
+_YEAR_TOKEN_RE = re.compile(r'^(19|20)\d{2}$')
+
+
+def _extract_title_stem(words):
+    """Everything up to and including the release year IS the movie
+    title; everything after it is almost always source/audio/encoder
+    junk (AMZN, WEB-DL, H264, 6CH, DDP5.1, 60FPS, PAHE, YIFY...) that
+    would otherwise make one movie look like five different suggestions.
+    Falls back to a flat 6-word cap only if no year token is found."""
+    for i, w in enumerate(words):
+        if _YEAR_TOKEN_RE.match(w):
+            return words[:i + 1]
+    return words[:6]
+
+
 def _sync_fetch_known_titles(limit):
     """col/sec_col are plain synchronous PyMongo collections (same as
     col.delete_one() / col.count_documents() used elsewhere in this file
@@ -707,9 +728,7 @@ def _sync_fetch_known_titles(limit):
                 ]
                 if not words:
                     continue
-                # Cap to first 6 words so long release-group junk after
-                # the actual title doesn't dilute the fuzzy match.
-                title = " ".join(words[:6]).strip()
+                title = " ".join(_extract_title_stem(words)).strip()
                 if len(title) >= 2:
                     titles.add(title)
         except Exception as e:
