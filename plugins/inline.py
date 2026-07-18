@@ -3,7 +3,7 @@
 # Ask Doubt on telegram @KingVJ01
 
 import logging
-from pyrogram import Client, emoji, filters
+from pyrogram import Client, filters
 from pyrogram.errors.exceptions.bad_request_400 import QueryIdInvalid
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultCachedDocument, InlineQuery
 from database.ia_filterdb import get_search_results
@@ -83,7 +83,7 @@ async def answer(bot, query):
         )
 
     if results:
-        switch_pm_text = f"{emoji.FILE_FOLDER} Results - {total}"
+        switch_pm_text = f"📁 Results - {total}"
         if string:
             switch_pm_text += f" for {string}"
         try:
@@ -100,7 +100,7 @@ async def answer(bot, query):
         except Exception as e:
             logging.exception(str(e))
     else:
-        switch_pm_text = f'{emoji.CROSS_MARK} No results'
+        switch_pm_text = f'❌ No results'
         if string:
             switch_pm_text += f' for "{string}"'
 
@@ -118,7 +118,3 @@ def get_reply_markup(query):
         InlineKeyboardButton('Search again', switch_inline_query_current_chat=query)
     ]]
     return InlineKeyboardMarkup(buttons)
-
-
-
-

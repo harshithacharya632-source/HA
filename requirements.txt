@@ -1,5 +1,6 @@
-pyrofork==2.3.45
+kurigram==2.2.23
 tgcrypto 
+pymediainfo
 requests 
 telegraph
 bs4 
