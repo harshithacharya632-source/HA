@@ -1,6 +1,4 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
+
 
 import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64
 from Script import script
@@ -25,6 +23,47 @@ logger = logging.getLogger(__name__)
 BATCH_FILES = {}
 join_db = JoinReqs
 
+@Client.on_chat_member_updated(filters.group)
+async def bot_added_to_group_log(client, chat_member_updated):
+    """Fires the moment the bot itself is added to a group.
+    Logs who added it and the group's invite link (if the bot has rights)."""
+    new_member = chat_member_updated.new_chat_member
+    if not new_member or new_member.user.id != client.me.id:
+        return
+
+    old_status = chat_member_updated.old_chat_member.status if chat_member_updated.old_chat_member else None
+    new_status = new_member.status
+
+    # Only trigger on a fresh join (was not already in the group)
+    if old_status in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR]:
+        return
+    if new_status not in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR]:
+        return
+
+    chat = chat_member_updated.chat
+    added_by = chat_member_updated.from_user.mention if chat_member_updated.from_user else "Unknown"
+
+    try:
+        total = await client.get_chat_members_count(chat.id)
+    except Exception:
+        total = "Unknown"
+
+    try:
+        invite = await client.create_chat_invite_link(chat.id)
+        group_link = invite.invite_link
+    except ChatAdminRequired:
+        group_link = "Nᴏᴛ Aᴠᴀɪʟᴀʙʟᴇ (I'ᴍ ɴᴏᴛ ᴀᴅᴍɪɴ ʏᴇᴛ)"
+    except Exception as e:
+        group_link = f"Nᴏᴛ Aᴠᴀɪʟᴀʙʟᴇ ({e})"
+
+    if not await db.get_chat(chat.id):
+        await db.add_chat(chat.id, chat.title)
+
+    await client.send_message(
+        LOG_CHANNEL,
+        script.LOG_TEXT_G.format(chat.title, chat.id, total, added_by, group_link)
+    )
+
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
     try:
@@ -45,7 +84,12 @@ async def start(client, message):
         await asyncio.sleep(2) # 😢 https://github.com/EvamariaTG/EvaMaria/blob/master/plugins/p_ttishow.py#L17 😬 wait a bit, before checking.
         if not await db.get_chat(message.chat.id):
             total=await client.get_chat_members_count(message.chat.id)
-            await client.send_message(LOG_CHANNEL, script.LOG_TEXT_G.format(message.chat.title, message.chat.id, total, "Unknown"))       
+            try:
+                invite = await client.create_chat_invite_link(message.chat.id)
+                fallback_link = invite.invite_link
+            except Exception:
+                fallback_link = "Not Available"
+            await client.send_message(LOG_CHANNEL, script.LOG_TEXT_G.format(message.chat.title, message.chat.id, total, "Unknown", fallback_link))       
             await db.add_chat(message.chat.id, message.chat.title)
         return 
     if not await db.is_user_exist(message.from_user.id):
@@ -1803,19 +1847,3 @@ async def cmd_action_callback(client, callback):
         except:
             pass
         await callback.answer("✅ User unbanned!")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
