@@ -3812,9 +3812,9 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             text=script.CUDNT_FND.format(mv_rqst),
             reply_markup=InlineKeyboardMarkup(btn)
         )
-        # ✅ Suggestion messages always self-clean after 120s, regardless
+        # ✅ Suggestion messages always self-clean after 30s, regardless
         # of the group's general auto_delete setting.
-        await asyncio.sleep(120)
+        await asyncio.sleep(30)
         await spell_check_del.delete()
 
     # ✅ 1) Check OUR OWN library FIRST. A match from here is guaranteed
