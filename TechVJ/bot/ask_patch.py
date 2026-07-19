@@ -62,6 +62,7 @@ def install_ask_patch():
                 raise ContinuePropagation
 
         data["future"].set_result(message)
+        raise StopPropagation
 
     Client.listen = listen
     Client.ask = ask
