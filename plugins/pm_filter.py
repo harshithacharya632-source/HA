@@ -64,7 +64,14 @@ async def give_filter(client, message):
                 if settings['auto_ffilter']:
                     ai_search = True
                     reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
-                    await auto_filter(client, message.text, message, reply_msg, ai_search)
+                    try:
+                        await auto_filter(client, message.text, message, reply_msg, ai_search)
+                    except Exception as e:
+                        logging.error(f"auto_filter (group) failed for query '{message.text}': {e}")
+                        try:
+                            await reply_msg.edit_text("⚠️ <b>Search took too long or failed.</b> Please try again in a moment.")
+                        except Exception:
+                            pass
             except KeyError:
                 grpid = await active_connection(str(message.from_user.id))
                 await save_group_settings(grpid, 'auto_ffilter', True)
@@ -72,7 +79,14 @@ async def give_filter(client, message):
                 if settings['auto_ffilter']:
                     ai_search = True
                     reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
-                    await auto_filter(client, message.text, message, reply_msg, ai_search)
+                    try:
+                        await auto_filter(client, message.text, message, reply_msg, ai_search)
+                    except Exception as e:
+                        logging.error(f"auto_filter (group) failed for query '{message.text}': {e}")
+                        try:
+                            await reply_msg.edit_text("⚠️ <b>Search took too long or failed.</b> Please try again in a moment.")
+                        except Exception:
+                            pass
     else: #a better logic to avoid repeated lines of code in auto_filter function
         search = message.text
         temp_files, temp_offset, total_results = await get_search_results(chat_id=message.chat.id, query=search.lower(), offset=0, filter=True)
@@ -97,7 +111,16 @@ async def pm_text(bot, message):
     if PM_SEARCH == True:
         ai_search = True
         reply_msg = await bot.send_message(message.from_user.id, f"<b><i>Searching For {content} 🔍</i></b>", reply_to_message_id=message.id)
-        await auto_filter(bot, content, message, reply_msg, ai_search)
+        try:
+            await auto_filter(bot, content, message, reply_msg, ai_search)
+        except Exception as e:
+            logging.error(f"auto_filter (PM) failed for query '{content}': {e}")
+            try:
+                await reply_msg.edit_text(
+                    "⚠️ <b>Search took too long or failed.</b> Please try again in a moment."
+                )
+            except Exception:
+                pass
     else:
         await message.reply_text(
             f"👋 <b>Hello {message.from_user.mention}!</b>\n\n"
