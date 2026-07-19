@@ -644,7 +644,9 @@ MAX_EPISODE = 300
 STRIP_RE = re.compile(
     r'[\[\(].*?[\]\)]'
     r'|\b(720p|1080p|480p|2160p|4k|hdrip|webrip|bluray|hdtv|mkv|mp4|avi'
-    r'|hindi|tamil|english|telugu|malayalam|kannada|dubbed|multi|esub'
+    r'|hindi|tamil|english|telugu|malayalam|kannada'
+    r'|chinese|mandarin|cantonese|japanese|gujarati|marathi|bengali|bangla|urdu|tulu'
+    r'|dubbed|multi|esub'
     r'|x264|x265|hevc|avc|aac|dd5|dolby|atmos|hdr|sdr|web|dl|rip'
     r'|season|episode|complete|batch|pack|combined'
     r'|s\d{1,2}e\d{1,3}|s\d{1,2})\b',
@@ -1011,13 +1013,25 @@ def build_quality_row(scope, key, uid, selected=None, available=None):
 # actually present in that scope's files, so users never see a dead
 # button for a language that isn't available.
 LANGUAGE_DEFS = [
-    ("hin",   "Hindi",       {"hindi", "hin"}),
-    ("eng",   "English",     {"english", "eng"}),
-    ("tam",   "Tamil",       {"tamil", "tam"}),
-    ("tel",   "Telugu",      {"telugu", "tel"}),
-    ("kan",   "Kannada",     {"kannada", "kan"}),
-    ("mal",   "Malayalam",   {"malayalam", "mal"}),
-    ("multi", "Multi Audio", {"multi", "dual"}),
+    ("hin",    "Hindi",       {"hindi", "hin"}),
+    ("eng",    "English",     {"english", "eng"}),
+    ("tam",    "Tamil",       {"tamil", "tam"}),
+    ("tel",    "Telugu",      {"telugu", "tel"}),
+    ("kan",    "Kannada",     {"kannada", "kan"}),
+    ("mal",    "Malayalam",   {"malayalam", "mal"}),
+    ("chi",    "Chinese",     {"chinese", "chi", "mandarin", "cantonese"}),
+    ("jap",    "Japanese",    {"japanese", "jap", "jpn"}),
+    ("guj",    "Gujarati",    {"gujarati", "guj"}),
+    ("mar",    "Marathi",     {"marathi", "mar"}),
+    ("ben",    "Bengali",     {"bengali", "ben", "bangla"}),
+    ("urd",    "Urdu",        {"urdu", "urd"}),
+    ("tul",    "Tulu",        {"tulu", "tul"}),
+    ("multi",  "Multi Audio", {"multi", "dual"}),
+    # ✅ Not a real filename tag — matched specially (see file_matches_lang)
+    # for files where get_file_languages() finds nothing at all, so those
+    # files still show up under a "No Lang Tag" button instead of being
+    # invisible in the language menu.
+    ("nolang", "No Lang Tag", set()),
 ]
 LANGUAGE_LABELS = {k: v for k, v, _ in LANGUAGE_DEFS}
 LANGUAGE_TOKENS = {k: t for k, _, t in LANGUAGE_DEFS}
@@ -1041,6 +1055,14 @@ def get_file_languages(filename: str) -> tuple:
         if tokens & LANGUAGE_TOKENS[key]
     )
     return found
+
+
+def file_matches_lang(lkey: str, filename: str) -> bool:
+    """Like `lkey in get_file_languages(filename)`, except lkey == "nolang"
+    matches files where NO language tag was detected at all."""
+    if lkey == "nolang":
+        return not get_file_languages(filename)
+    return lkey in get_file_languages(filename)
 
 
 def build_language_button(scope, key, uid):
@@ -1620,13 +1642,20 @@ async def language_menu_cb_handler(client, query: CallbackQuery):
 
         # ✅ Only show languages that actually exist among these files
         seen = set()
+        has_untagged = False
         for f in pool:
-            seen.update(get_file_languages(f["file_name"]))
+            langs = get_file_languages(f["file_name"])
+            if langs:
+                seen.update(langs)
+            else:
+                has_untagged = True
 
-        if not seen:
-            return await query.answer("🚫 No language tags detected in these files.", show_alert=True)
+        if not seen and not has_untagged:
+            return await query.answer("🚫 No files found here.", show_alert=True)
 
         available = [k for k in LANGUAGE_ORDER if k in seen]
+        if has_untagged:
+            available.append("nolang")
 
         btn = _language_menu_rows(available, scope, key, uid)
         btn.append([InlineKeyboardButton("↩️ Back", callback_data=back_cb)])
@@ -1668,7 +1697,7 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         all_files = await get_cached_season_files(chat_id, key, search)
         pool, back_cb = resolve_scope_pool(scope, key, uid, all_files)
 
-        matched = [f for f in pool if lkey in get_file_languages(f["file_name"])]
+        matched = [f for f in pool if file_matches_lang(lkey, f["file_name"])]
 
         if not matched:
             return await query.answer(f"🚫 No {label} files found here.", show_alert=True)
@@ -1765,7 +1794,7 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
 
         matched = [
             f for f in pool
-            if lkey in get_file_languages(f["file_name"])
+            if file_matches_lang(lkey, f["file_name"])
             and lo <= f.get("file_size", 0) < hi
         ]
 
