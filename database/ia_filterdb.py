@@ -126,8 +126,18 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     # a movie/series name's words weren't stored back-to-back in that order.
     text_filter = {'$text': {'$search': query}}
 
+    # Cap on how many matching docs we pull back to rank. Pagination used to
+    # happen at the MongoDB level (skip/limit) BEFORE any ranking ran, so a
+    # search's true best match could sit on page 6 while low-relevance
+    # 'Pokemon Master Journeys'-style partial matches filled page 1 - our
+    # relevance sort could only reorder whichever page Mongo's insertion
+    # order ($natural) happened to hand it. Fetching all matches up to this
+    # cap (no skip) and ranking BEFORE slicing the page fixes that. 2000 is
+    # comfortably above any real search's result count for this kind of bot.
+    FETCH_CAP = 2000
+
     def _run(collection, mongo_filter):
-        cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
+        cur = collection.find(mongo_filter).sort('$natural', -1).limit(FETCH_CAP)
         return list(cur), collection.count_documents(mongo_filter)
 
     def _run_all_blocking():
@@ -157,12 +167,15 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     # file delivery, not the DB query itself being slow.
     files, total_results = await asyncio.to_thread(_run_all_blocking)
 
-    # Re-rank so an exact/prefix title match (e.g. the real "Master" movie)
-    # is always shown before loosely-matched files, instead of relying on
-    # insertion order ($natural) alone.
+    # Re-rank across the WHOLE fetched set so an exact/prefix title match
+    # (e.g. the real "Master 2021") is always shown on page 1, ahead of
+    # loosely-matched files, instead of relying on insertion order.
     files.sort(key=lambda f: _relevance_key(f.get('file_name', ''), query))
 
-    next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
+    # Paginate AFTER ranking, not before.
+    files = files[offset:offset + max_results]
+
+    next_offset = "" if (offset + max_results) >= min(total_results, FETCH_CAP) else (offset + max_results)
     return files, next_offset, total_results
 
 
