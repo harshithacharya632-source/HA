@@ -64,7 +64,14 @@ async def give_filter(client, message):
                 if settings['auto_ffilter']:
                     ai_search = True
                     reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
-                    await auto_filter(client, message.text, message, reply_msg, ai_search)
+                    try:
+                        await auto_filter(client, message.text, message, reply_msg, ai_search)
+                    except Exception as e:
+                        logging.error(f"auto_filter (group) failed for query '{message.text}': {e}")
+                        try:
+                            await reply_msg.edit_text("⚠️ <b>Search took too long or failed.</b> Please try again in a moment.")
+                        except Exception:
+                            pass
             except KeyError:
                 grpid = await active_connection(str(message.from_user.id))
                 await save_group_settings(grpid, 'auto_ffilter', True)
@@ -72,7 +79,14 @@ async def give_filter(client, message):
                 if settings['auto_ffilter']:
                     ai_search = True
                     reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
-                    await auto_filter(client, message.text, message, reply_msg, ai_search)
+                    try:
+                        await auto_filter(client, message.text, message, reply_msg, ai_search)
+                    except Exception as e:
+                        logging.error(f"auto_filter (group) failed for query '{message.text}': {e}")
+                        try:
+                            await reply_msg.edit_text("⚠️ <b>Search took too long or failed.</b> Please try again in a moment.")
+                        except Exception:
+                            pass
     else: #a better logic to avoid repeated lines of code in auto_filter function
         search = message.text
         temp_files, temp_offset, total_results = await get_search_results(chat_id=message.chat.id, query=search.lower(), offset=0, filter=True)
@@ -97,7 +111,16 @@ async def pm_text(bot, message):
     if PM_SEARCH == True:
         ai_search = True
         reply_msg = await bot.send_message(message.from_user.id, f"<b><i>Searching For {content} 🔍</i></b>", reply_to_message_id=message.id)
-        await auto_filter(bot, content, message, reply_msg, ai_search)
+        try:
+            await auto_filter(bot, content, message, reply_msg, ai_search)
+        except Exception as e:
+            logging.error(f"auto_filter (PM) failed for query '{content}': {e}")
+            try:
+                await reply_msg.edit_text(
+                    "⚠️ <b>Search took too long or failed.</b> Please try again in a moment."
+                )
+            except Exception:
+                pass
     else:
         await message.reply_text(
             f"👋 <b>Hello {message.from_user.mention}!</b>\n\n"
@@ -126,7 +149,7 @@ async def next_page(bot, query):
       #  await query.answer(script.OLD_ALRT_TXT.format(query.from_user.first_name),show_alert=True)
        # return
 
-    files, n_offset, total = await get_search_results(query.message.chat.id, search, offset=offset, max_results=8, filter=True)
+    files, n_offset, total = await get_ranked_page(query.message.chat.id, key, search, offset=offset, max_results=8)
     try:
         n_offset = int(n_offset)
     except:
@@ -177,15 +200,15 @@ async def next_page(bot, query):
                 off_set = offset - 10
             if n_offset == 0:
                 btn.append(
-                    [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages")]
+                    [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS)]
                 )
             elif off_set is None:
-                btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages"), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
+                btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
             else:
                 btn.append(
                     [
                         InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY),
-                        InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages"),
+                        InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS),
                         InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)
                     ],
                 )
@@ -198,15 +221,15 @@ async def next_page(bot, query):
                 off_set = offset - int(MAX_B_TN)
             if n_offset == 0:
                 btn.append(
-                    [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages")]
+                    [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages", style=enums.ButtonStyle.SUCCESS)]
                 )
             elif off_set is None:
-                btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages"), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
+                btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
             else:
                 btn.append(
                     [
                         InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY),
-                        InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages"),
+                        InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages", style=enums.ButtonStyle.SUCCESS),
                         InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)
                     ],
                 )
@@ -220,15 +243,15 @@ async def next_page(bot, query):
             off_set = offset - 10
         if n_offset == 0:
             btn.append(
-                [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages")]
+                [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS)]
             )
         elif off_set is None:
-            btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages"), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
+            btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
         else:
             btn.append(
                 [
                     InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY),
-                    InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages"),
+                    InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS),
                     InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)
                 ],
             )
@@ -271,7 +294,8 @@ async def advantage_spoll_choker(bot, query):
     if gl == False:
         k = await manual_filters(bot, query.message, text=movie)
         if k == False:
-            files, offset, total_results = await get_search_results(query.message.chat.id, movie, offset=0, max_results=8, filter=True)
+            spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}"
+            files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=8)
             # ✅ Close the "Did you mean" suggestion prompt before showing
             # the fresh search, instead of editing it in place.
             try:
@@ -359,17 +383,17 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
         try:
             if settings['max_btn']:
                 btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
     
             else:
                 btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
         except KeyError:
             await save_group_settings(query.message.chat.id, 'max_btn', True)
             btn.append(
-                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
             )
     else:
         btn.append(
@@ -453,17 +477,17 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
         try:
             if settings['max_btn']:
                 btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
     
             else:
                 btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
         except KeyError:
             await save_group_settings(query.message.chat.id, 'max_btn', True)
             btn.append(
-                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
             )
     else:
         btn.append(
@@ -559,17 +583,17 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
         try:
             if settings['max_btn']:
                 btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
     
             else:
                 btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
         except KeyError:
             await save_group_settings(query.message.chat.id, 'max_btn', True)
             btn.append(
-                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
             )
     else:
         btn.append(
@@ -620,7 +644,9 @@ MAX_EPISODE = 300
 STRIP_RE = re.compile(
     r'[\[\(].*?[\]\)]'
     r'|\b(720p|1080p|480p|2160p|4k|hdrip|webrip|bluray|hdtv|mkv|mp4|avi'
-    r'|hindi|tamil|english|telugu|malayalam|kannada|dubbed|multi|esub'
+    r'|hindi|tamil|english|telugu|malayalam|kannada'
+    r'|chinese|mandarin|cantonese|japanese|gujarati|marathi|bengali|bangla|urdu|tulu'
+    r'|dubbed|multi|esub'
     r'|x264|x265|hevc|avc|aac|dd5|dolby|atmos|hdr|sdr|web|dl|rip'
     r'|season|episode|complete|batch|pack|combined'
     r'|s\d{1,2}e\d{1,3}|s\d{1,2})\b',
@@ -804,7 +830,6 @@ def filter_and_rank(files: list, search: str) -> list:
     """
     ✅ Only keep files whose cleaned name STARTS WITH the search term.
     This prevents middle/end matches from polluting season & episode lists.
-
     """
     # Clean the search term too
     search_clean = STRIP_RE.sub(' ', search.lower().strip())
@@ -853,6 +878,51 @@ async def get_cached_season_files(chat_id, key, search):
     files = filter_and_rank(files, search)
     SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
+
+
+# ===============================
+# SPEED FIX #2: SMALLER RANKED POOL FOR THE MAIN RESULTS LIST
+# ===============================
+# get_cached_season_files() fetches + ranks up to 50,000 files, which is
+# correct for the season/episode/quality button pool (it needs full
+# coverage so the ❌-missing-episode marks are accurate) but is overkill
+# — and slow (~1-2s) — for just showing page 1 of the main results.
+# This is a separate, much smaller pool (a few hundred files is plenty
+# to find the true prefix match among), with its own cache, so a fresh
+# search stays fast while the full 50k pool still warms in the background
+# for whenever the user taps into series/season/quality buttons.
+DISPLAY_CACHE = {}          # key -> {"files": [...], "ts": epoch_seconds}
+DISPLAY_CACHE_TTL = 900     # 15 minutes
+DISPLAY_POOL_SIZE = 500     # fetch/rank cap for the main results list
+
+
+async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_SIZE):
+    entry = DISPLAY_CACHE.get(key)
+    if entry and (datetime.now().timestamp() - entry["ts"] < DISPLAY_CACHE_TTL):
+        return entry["files"]
+    files, _, _ = await get_search_results(chat_id, search, max_results=pool_size)
+    files = filter_and_rank(files, search)
+    DISPLAY_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
+    return files
+
+
+async def get_ranked_page(chat_id, key, search, offset=0, max_results=8):
+    """Prefix-ranked, paginated search results for the main results list
+    (page 1 in auto_filter, page N+ in next_page).
+
+    get_search_results() alone sorts by Mongo's '$natural' order (insertion
+    order), not relevance, so a true prefix match like "Master 2021" could
+    land on page 4+ just because some unrelated "... Master 2021 ..." file
+    was inserted into the DB more recently. This pulls from the smaller,
+    fast DISPLAY_CACHE pool (ranked via filter_and_rank) instead of the
+    full 50k season/quality pool, so prefix matches sort to the front
+    without paying the full pool's fetch cost.
+    """
+    all_files = await get_display_ranked_files(chat_id, key, search)
+    total = len(all_files)
+    files = all_files[offset:offset + max_results]
+    next_offset = offset + max_results if (offset + max_results) < total else ""
+    return files, next_offset, total
 
 
 # ===============================
@@ -943,13 +1013,25 @@ def build_quality_row(scope, key, uid, selected=None, available=None):
 # actually present in that scope's files, so users never see a dead
 # button for a language that isn't available.
 LANGUAGE_DEFS = [
-    ("hin",   "Hindi",       {"hindi", "hin"}),
-    ("eng",   "English",     {"english", "eng"}),
-    ("tam",   "Tamil",       {"tamil", "tam"}),
-    ("tel",   "Telugu",      {"telugu", "tel"}),
-    ("kan",   "Kannada",     {"kannada", "kan"}),
-    ("mal",   "Malayalam",   {"malayalam", "mal"}),
-    ("multi", "Multi Audio", {"multi", "dual"}),
+    ("hin",    "Hindi",       {"hindi", "hin"}),
+    ("eng",    "English",     {"english", "eng"}),
+    ("tam",    "Tamil",       {"tamil", "tam"}),
+    ("tel",    "Telugu",      {"telugu", "tel"}),
+    ("kan",    "Kannada",     {"kannada", "kan"}),
+    ("mal",    "Malayalam",   {"malayalam", "mal"}),
+    ("chi",    "Chinese",     {"chinese", "chi", "mandarin", "cantonese"}),
+    ("jap",    "Japanese",    {"japanese", "jap", "jpn"}),
+    ("guj",    "Gujarati",    {"gujarati", "guj"}),
+    ("mar",    "Marathi",     {"marathi", "mar"}),
+    ("ben",    "Bengali",     {"bengali", "ben", "bangla"}),
+    ("urd",    "Urdu",        {"urdu", "urd"}),
+    ("tul",    "Tulu",        {"tulu", "tul"}),
+    ("multi",  "Multi Audio", {"multi", "dual"}),
+    # ✅ Not a real filename tag — matched specially (see file_matches_lang)
+    # for files where get_file_languages() finds nothing at all, so those
+    # files still show up under a "No Lang Tag" button instead of being
+    # invisible in the language menu.
+    ("nolang", "No Lang Tag", set()),
 ]
 LANGUAGE_LABELS = {k: v for k, v, _ in LANGUAGE_DEFS}
 LANGUAGE_TOKENS = {k: t for k, _, t in LANGUAGE_DEFS}
@@ -973,6 +1055,14 @@ def get_file_languages(filename: str) -> tuple:
         if tokens & LANGUAGE_TOKENS[key]
     )
     return found
+
+
+def file_matches_lang(lkey: str, filename: str) -> bool:
+    """Like `lkey in get_file_languages(filename)`, except lkey == "nolang"
+    matches files where NO language tag was detected at all."""
+    if lkey == "nolang":
+        return not get_file_languages(filename)
+    return lkey in get_file_languages(filename)
 
 
 def build_language_button(scope, key, uid):
@@ -1107,7 +1197,7 @@ async def seasons_cb_handler(client, query: CallbackQuery):
             btn.append(row)
 
         btn.append([
-            InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{uid}_{key}_0")
+            InlineKeyboardButton("🏠 Back to Home", callback_data=f"next_{uid}_{key}_0", style=enums.ButtonStyle.DANGER)
         ])
 
         try:
@@ -1253,7 +1343,7 @@ async def filter_files(client, query: CallbackQuery):
             [
                 InlineKeyboardButton(
                     f"📁 S{season_no:02d}E{episode_no:02d} — {len(filtered)} file(s)",
-                    callback_data="ident", style=enums.ButtonStyle.SUCCESS
+                    callback_data="ident", style=enums.ButtonStyle.PRIMARY
                 ),
                 build_language_button(f"s{season_no}e{episode_no}", key, uid)[0]
             ]
@@ -1291,8 +1381,8 @@ async def filter_files(client, query: CallbackQuery):
             btn.append(nav)
 
         btn.append([
-            InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}"),
-            InlineKeyboardButton("🏠 Home",     callback_data=f"next_{uid}_{key}_0")
+            InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}", style=enums.ButtonStyle.DANGER),
+            InlineKeyboardButton("🏠 Home",     callback_data=f"next_{uid}_{key}_0", style=enums.ButtonStyle.DANGER)
         ])
 
         try:
@@ -1389,8 +1479,8 @@ async def combined_files(client, query: CallbackQuery):
             btn.append(nav)
 
         btn.append([
-            InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}"),
-            InlineKeyboardButton("🏠 Home",     callback_data=f"next_{uid}_{key}_0")
+            InlineKeyboardButton("↩️ Episodes", callback_data=f"eps#s{season_no}#{key}#{uid}", style=enums.ButtonStyle.DANGER),
+            InlineKeyboardButton("🏠 Home",     callback_data=f"next_{uid}_{key}_0", style=enums.ButtonStyle.DANGER)
         ])
 
         try:
@@ -1552,13 +1642,20 @@ async def language_menu_cb_handler(client, query: CallbackQuery):
 
         # ✅ Only show languages that actually exist among these files
         seen = set()
+        has_untagged = False
         for f in pool:
-            seen.update(get_file_languages(f["file_name"]))
+            langs = get_file_languages(f["file_name"])
+            if langs:
+                seen.update(langs)
+            else:
+                has_untagged = True
 
-        if not seen:
-            return await query.answer("🚫 No language tags detected in these files.", show_alert=True)
+        if not seen and not has_untagged:
+            return await query.answer("🚫 No files found here.", show_alert=True)
 
         available = [k for k in LANGUAGE_ORDER if k in seen]
+        if has_untagged:
+            available.append("nolang")
 
         btn = _language_menu_rows(available, scope, key, uid)
         btn.append([InlineKeyboardButton("↩️ Back", callback_data=back_cb)])
@@ -1600,7 +1697,7 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         all_files = await get_cached_season_files(chat_id, key, search)
         pool, back_cb = resolve_scope_pool(scope, key, uid, all_files)
 
-        matched = [f for f in pool if lkey in get_file_languages(f["file_name"])]
+        matched = [f for f in pool if file_matches_lang(lkey, f["file_name"])]
 
         if not matched:
             return await query.answer(f"🚫 No {label} files found here.", show_alert=True)
@@ -1697,7 +1794,7 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
 
         matched = [
             f for f in pool
-            if lkey in get_file_languages(f["file_name"])
+            if file_matches_lang(lkey, f["file_name"])
             and lo <= f.get("file_size", 0) < hi
         ]
 
@@ -1954,17 +2051,17 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
         try:
             if settings['max_btn']:
                 btn.append(
-                    [InlineKeyboardButton("ᴘᴀɢᴇ", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="ɴᴇxᴛ ⇛",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("ᴘᴀɢᴇ", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="ɴᴇxᴛ ⇛",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
     
             else:
                 btn.append(
-                    [InlineKeyboardButton("ᴘᴀɢᴇ", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages"), InlineKeyboardButton(text="ɴᴇxᴛ ⇛",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("ᴘᴀɢᴇ", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="ɴᴇxᴛ ⇛",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
         except KeyError:
             await save_group_settings(query.message.chat.id, 'max_btn', True)
             btn.append(
-                [InlineKeyboardButton("ᴘᴀɢᴇ", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="ɴᴇxᴛ ⇛",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                [InlineKeyboardButton("ᴘᴀɢᴇ", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="ɴᴇxᴛ ⇛",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
             )
     else:
         btn.append(
@@ -3492,7 +3589,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             search = search.lower()
             find = search.split(" ")
             search = ""
-            removes = ["in","upload", "series", "full", "horror", "thriller", "mystery", "print", "file"]
+            removes = ["upload", "series", "full", "horror", "thriller", "mystery", "print", "file"]
             for x in find:
                 if x in removes:
                     continue
@@ -3523,7 +3620,8 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                 search, flags=re.IGNORECASE
             )
 
-            files, offset, total_results = await get_search_results(message.chat.id, search, offset=0, max_results=8, filter=True)
+            key = f"{message.chat.id}-{message.id}"
+            files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=8)
             settings = await get_settings(message.chat.id)
             if not files:
                 if settings["spell_check"]:
@@ -3586,16 +3684,16 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
         try:
             if settings['max_btn']:
                 btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
             else:
                 btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
                 )
         except KeyError:
             await save_group_settings(message.chat.id, 'max_btn', True)
             btn.append(
-                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
             )
     else:
         btn.append(
