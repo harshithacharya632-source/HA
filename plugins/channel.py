@@ -1,4 +1,3 @@
-
 import re
 import logging
 import asyncio
@@ -468,10 +467,11 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
 def build_buttons(base_name: str, trailer_url: str = None) -> InlineKeyboardMarkup:
     get_files_btn = InlineKeyboardButton(
         '🎬 ɢᴇᴛ ғɪʟᴇs',
-        url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}"
+        url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}",
+        style=enums.ButtonStyle.PRIMARY
     )
     if trailer_url:
-        trailer_btn = InlineKeyboardButton('▶️ ᴛʀᴀɪʟᴇʀ', url=trailer_url)
+        trailer_btn = InlineKeyboardButton('▶️ ᴛʀᴀɪʟᴇʀ', url=trailer_url, style=enums.ButtonStyle.PRIMARY)
         return InlineKeyboardMarkup([[get_files_btn, trailer_btn]])
     return InlineKeyboardMarkup([[get_files_btn]])
 
