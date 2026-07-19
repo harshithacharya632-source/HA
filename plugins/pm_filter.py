@@ -149,7 +149,7 @@ async def next_page(bot, query):
       #  await query.answer(script.OLD_ALRT_TXT.format(query.from_user.first_name),show_alert=True)
        # return
 
-    files, n_offset, total = await get_search_results(query.message.chat.id, search, offset=offset, max_results=8, filter=True)
+    files, n_offset, total = await get_ranked_page(query.message.chat.id, key, search, offset=offset, max_results=8)
     try:
         n_offset = int(n_offset)
     except:
@@ -294,7 +294,8 @@ async def advantage_spoll_choker(bot, query):
     if gl == False:
         k = await manual_filters(bot, query.message, text=movie)
         if k == False:
-            files, offset, total_results = await get_search_results(query.message.chat.id, movie, offset=0, max_results=8, filter=True)
+            spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}"
+            files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=8)
             # ✅ Close the "Did you mean" suggestion prompt before showing
             # the fresh search, instead of editing it in place.
             try:
@@ -891,6 +892,26 @@ async def get_cached_season_files(chat_id, key, search):
     files = filter_and_rank(files, search)
     SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
+
+
+async def get_ranked_page(chat_id, key, search, offset=0, max_results=8):
+    """Prefix-ranked, paginated search results for the main results list
+    (page 1 in auto_filter, page N+ in next_page).
+
+    get_search_results() alone sorts by Mongo's '$natural' order (insertion
+    order), not relevance, so a true prefix match like "Master 2021" could
+    land on page 4+ just because some unrelated "... Master 2021 ..." file
+    was inserted into the DB more recently. This reuses the same
+    filter_and_rank() scoring (and the same SEASON_CACHE) already used for
+    the season/language/quality button pool, so prefix matches always sort
+    to the front, and pagination just slices that ranked list instead of
+    trusting DB insertion order.
+    """
+    all_files = await get_cached_season_files(chat_id, key, search)
+    total = len(all_files)
+    files = all_files[offset:offset + max_results]
+    next_offset = offset + max_results if (offset + max_results) < total else ""
+    return files, next_offset, total
 
 
 # ===============================
@@ -3561,7 +3582,8 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                 search, flags=re.IGNORECASE
             )
 
-            files, offset, total_results = await get_search_results(message.chat.id, search, offset=0, max_results=8, filter=True)
+            key = f"{message.chat.id}-{message.id}"
+            files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=8)
             settings = await get_settings(message.chat.id)
             if not files:
                 if settings["spell_check"]:
