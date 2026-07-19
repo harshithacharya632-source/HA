@@ -634,12 +634,7 @@ from pyrogram.errors import MessageNotModified
 # ===============================
 
 SEASON_RE = re.compile(r"(?<![A-Za-z0-9])(?:season\s*|s)(\d{1,2})(?=e\d|$|\D)", re.IGNORECASE)
-# Recognizes E01, Ep01, Ep.01, Ep_01, Ep 01, Episode01, Episode 01, and x01/1x01 —
-# not just a bare 'e'/'x' touching the digits. Common tags like "S01 EP01" or
-# "Episode 01" were previously invisible to this regex, so extract_episode()
-# returned None for them and those files silently dropped out of the episode
-# list even though their season was detected correctly.
-EPISODE_RE = re.compile(r"(?:s\d{1,2}[\s\.\-_]*)?(?:ep(?:isode)?|e|x)[\s\.\-_]*(\d{1,3})(?!\d)", re.IGNORECASE)
+EPISODE_RE = re.compile(r"(?:s\d{1,2})?[ex](\d{1,3})(?!\d)", re.IGNORECASE)
 RANGE_EP_RE = re.compile(r"[ex]\d{1,3}\s*-\s*[ex]\d{1,3}", re.IGNORECASE)
 
 MAX_SEASON  = 30
@@ -831,40 +826,29 @@ async def get_similar_titles(query, limit=5):
 
 def filter_and_rank(files: list, search: str) -> list:
     """
-    Keep files whose cleaned name contains every word of the search term
-    (in any order/position), then RANK true prefix/exact matches first.
-
-    Previously this required cleaned_name.startswith(search_clean) exactly,
-    which meant a single missing/extra/reordered word (e.g. the user typing
-    "master" while the stored title is "Master 2024 Vijay" or has any tag
-    clean_name() didn't strip identically) threw the file out entirely.
-    Since this pool feeds the series/language/quality buttons, an empty
-    pool is exactly what made those buttons look "not working" even though
-    the main search found the file just fine.
+    ✅ Only keep files whose cleaned name STARTS WITH the search term.
+    This prevents middle/end matches from polluting season & episode lists.
     """
     # Clean the search term too
     search_clean = STRIP_RE.sub(' ', search.lower().strip())
     search_clean = re.sub(r'\s+', ' ', search_clean).strip()
     search_lower = search.lower().strip()
-    search_words = [w for w in search_clean.split() if w]
-
-    if not search_words:
-        return list(files)
 
     scored = []
     for f in files:
         name = f["file_name"]
         cleaned = clean_name(name)
-        name_lower = name.lower()
 
-        if cleaned.startswith(search_clean):
-            score = 0 if name_lower.startswith(search_lower) else 1
-        elif all(w in cleaned for w in search_words):
-            # every searched word is present somewhere, just not as a
-            # clean leading prefix (order/spacing/tag differences)
-            score = 2
-        else:
+        # ✅ PREFIX MATCH ONLY — must start with search name
+        if not cleaned.startswith(search_clean):
             continue
+
+        # Rank: exact prefix > contains
+        name_lower = name.lower()
+        if name_lower.startswith(search_lower):
+            score = 0
+        else:
+            score = 1
 
         scored.append((score, f))
 
