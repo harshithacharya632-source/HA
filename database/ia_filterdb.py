@@ -1,4 +1,5 @@
 
+
 import re, base64, json
 from struct import pack
 from pyrogram.file_id import FileId
@@ -84,39 +85,51 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     elif ' ' not in query:
         raw_pattern = r'(\b|[\.\+\-_])' + query + r'(\b|[\.\+\-_])'
     else:
-        raw_pattern = query.replace(' ', r'.*[\s\.\+\-_]') 
+        raw_pattern = query.replace(' ', r'.*[\s\.\+\-_]')
     try:
         regex = re.compile(raw_pattern, flags=re.IGNORECASE)
     except:
         regex = query
-    filter = {'file_name': regex}
+    regex_filter = {'file_name': regex}
+    # Phrase search on the text index (fast + gives an exact, indexed count).
+    # Quoting the whole query makes Mongo require the words as a phrase,
+    # matching the old regex's "words in order" behaviour.
+    text_filter = {'$text': {'$search': f'"{query}"'}}
+
+    def _run(collection, mongo_filter):
+        cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
+        return list(cur), collection.count_documents(mongo_filter)
+
     files = []
-    # Fetch one extra document to detect whether a next page exists, instead
-    # of running a separate count_documents() call. Since the regex above
-    # isn't left-anchored, Mongo can't use an index for it and count_documents()
-    # was forcing a full collection scan on every single search (this was the
-    # main cause of multi-second search delays).
-    fetch_limit = max_results + 1
-    if MULTIPLE_DATABASE:
-        cursor1 = col.find(filter).sort('$natural', -1).skip(offset).limit(fetch_limit)
-        cursor2 = sec_col.find(filter).sort('$natural', -1).skip(offset).limit(fetch_limit)
+    total_results = 0
+    collections = [col, sec_col] if MULTIPLE_DATABASE else [col]
 
-        for file in cursor1:
-            files.append(file)
-        for file in cursor2:
-            files.append(file)
-    else:
-        cursor = col.find(filter).sort('$natural', -1).skip(offset).limit(fetch_limit)
+    for collection in collections:
+        try:
+            # Requires a text index on file_name - see create_search_index()
+            # below / the one-time setup note. Falls back to the regex scan
+            # automatically if that index doesn't exist yet, so search never
+            # breaks - it's just slower until the index is created.
+            found, count = _run(collection, text_filter)
+        except Exception:
+            found, count = _run(collection, regex_filter)
+        files.extend(found)
+        total_results += count
 
-        for file in cursor:
-            files.append(file)
-
-    has_more = len(files) > max_results
-    files = files[:max_results]
-    next_offset = (offset + max_results) if has_more else ""
-    total_results = len(files)  # count for this batch, not an exact global total (see note below)
-
+    next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
     return files, next_offset, total_results
+
+
+def create_search_index():
+    """One-time setup: create a text index on file_name so get_search_results()
+    can use fast, indexed $text search instead of a full collection scan.
+    Safe to call anytime - creating an index that already exists is a no-op."""
+    for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
+        try:
+            collection.create_index([('file_name', 'text')], name='file_name_text')
+            print(f"Text index ready on {collection.full_name}")
+        except Exception as e:
+            print(f"Could not create text index on {collection.full_name}: {e}")
 
 async def get_bad_files(query, file_type=None, use_filter=False):
     """For given query return (results, next_offset)"""
