@@ -18,7 +18,7 @@
 import asyncio
 import logging
 
-from pyrogram import Client, ContinuePropagation
+from pyrogram import Client, ContinuePropagation, StopPropagation
 from pyrogram.handlers import MessageHandler
 
 logger = logging.getLogger(__name__)
