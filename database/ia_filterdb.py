@@ -1,6 +1,3 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
 
 import re, base64, json
 from struct import pack
@@ -78,7 +75,7 @@ def is_file_already_saved(file_id, file_name):
     return False
 
 async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False):
-    """For given query return (results, next_offset)"""
+    """For given query return (results, next_offset, total_results)."""
     if not query:
         return [], "", 0
     query = query.strip()
@@ -94,22 +91,30 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
         regex = query
     filter = {'file_name': regex}
     files = []
+    # Fetch one extra document to detect whether a next page exists, instead
+    # of running a separate count_documents() call. Since the regex above
+    # isn't left-anchored, Mongo can't use an index for it and count_documents()
+    # was forcing a full collection scan on every single search (this was the
+    # main cause of multi-second search delays).
+    fetch_limit = max_results + 1
     if MULTIPLE_DATABASE:
-        cursor1 = col.find(filter).sort('$natural', -1).skip(offset).limit(max_results)
-        cursor2 = sec_col.find(filter).sort('$natural', -1).skip(offset).limit(max_results)
-        
+        cursor1 = col.find(filter).sort('$natural', -1).skip(offset).limit(fetch_limit)
+        cursor2 = sec_col.find(filter).sort('$natural', -1).skip(offset).limit(fetch_limit)
+
         for file in cursor1:
             files.append(file)
         for file in cursor2:
             files.append(file)
     else:
-        cursor = col.find(filter).sort('$natural', -1).skip(offset).limit(max_results)
-        
+        cursor = col.find(filter).sort('$natural', -1).skip(offset).limit(fetch_limit)
+
         for file in cursor:
             files.append(file)
 
-    total_results = col.count_documents(filter) if not MULTIPLE_DATABASE else (col.count_documents(filter) + sec_col.count_documents(filter))
-    next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
+    has_more = len(files) > max_results
+    files = files[:max_results]
+    next_offset = (offset + max_results) if has_more else ""
+    total_results = len(files)  # count for this batch, not an exact global total (see note below)
 
     return files, next_offset, total_results
 
@@ -174,4 +179,3 @@ def unpack_new_file_id(new_file_id):
         )
     )
     return file_id
-    
