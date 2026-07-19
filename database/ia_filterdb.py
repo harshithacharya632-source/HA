@@ -129,16 +129,19 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     # Cap on how many matching docs we pull back to rank. Pagination used to
     # happen at the MongoDB level (skip/limit) BEFORE any ranking ran, so a
     # search's true best match could sit on page 6 while low-relevance
-    # 'Pokemon Master Journeys'-style partial matches filled page 1 - our
-    # relevance sort could only reorder whichever page Mongo's insertion
-    # order ($natural) happened to hand it. Fetching all matches up to this
-    # cap (no skip) and ranking BEFORE slicing the page fixes that. 2000 is
-    # comfortably above any real search's result count for this kind of bot.
-    FETCH_CAP = 2000
+    # partial matches filled page 1. Fetching all matches up to this cap (no
+    # skip) and ranking BEFORE slicing the page fixes that.
+    # Kept modest (not thousands) because a slow/throttled DB connection can
+    # make a much bigger fetch take so long it effectively hangs the search.
+    FETCH_CAP = 300
+    # Hard timeout so a slow/stuck query fails fast (raises an exception we
+    # can fall back from / report) instead of hanging forever with no
+    # response and no error in the logs.
+    MAX_TIME_MS = 8000
 
     def _run(collection, mongo_filter):
-        cur = collection.find(mongo_filter).sort('$natural', -1).limit(FETCH_CAP)
-        return list(cur), collection.count_documents(mongo_filter)
+        cur = collection.find(mongo_filter).sort('$natural', -1).limit(FETCH_CAP).max_time_ms(MAX_TIME_MS)
+        return list(cur), collection.count_documents(mongo_filter, maxTimeMS=MAX_TIME_MS)
 
     def _run_all_blocking():
         # All the actual pymongo work (synchronous/blocking network calls)
