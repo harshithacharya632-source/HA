@@ -1,4 +1,4 @@
-import re, base64, json, asyncio, threading
+import re, base64, json, asyncio
 from struct import pack
 from pyrogram.file_id import FileId
 from pymongo import MongoClient
@@ -73,85 +73,30 @@ def is_file_already_saved(file_id, file_name):
             
     return False
 
-def _build_regex(query):
-    """Build a regex that matches all words of the query anywhere in the
-    file_name, in ANY order/position (not just back-to-back in the order the
-    user typed them). Using lookaheads instead of a single 'word1...word2'
-    chain means a query like 'War Master' still matches 'Master.of.War.2023'
-    and nothing gets dropped just because the words are separated or
-    reordered in the real filename."""
-    words = query.split()
-    if not words:
-        return re.compile('.', flags=re.IGNORECASE)
-    parts = [r'(?=.*(?:\b|[\.\+\-_])' + re.escape(w) + r'(?:\b|[\.\+\-_]))' for w in words]
-    raw_pattern = ''.join(parts) + '.'
-    return re.compile(raw_pattern, flags=re.IGNORECASE)
-
-
-def _relevance_key(file_name, query):
-    """Lower score = should rank first. Prefers the file whose title actually
-    starts with / equals the query (e.g. 'Master') over one that merely
-    contains a loosely related word (e.g. 'Mast...') buried inside it."""
-    name = (file_name or '').lower()
-    q = query.lower().strip()
-    words = q.split()
-
-    if name == q:
-        return 0
-    if name.startswith(q):
-        return 1
-    # query words appear together, in order, as a contiguous phrase
-    if re.search(r'\b' + r'[\s\.\+\-_]+'.join(re.escape(w) for w in words) + r'\b', name):
-        return 2
-    # each word appears as its own token, but not necessarily contiguous/ordered
-    if all(re.search(r'(?:\b|[\.\+\-_])' + re.escape(w) + r'(?:\b|[\.\+\-_])', name) for w in words):
-        return 3
-    return 4
-
-
 async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False):
     """For given query return (results, next_offset, total_results)."""
     if not query:
         return [], "", 0
     query = query.strip()
     if not query:
-        regex = re.compile('.', flags=re.IGNORECASE)
+        raw_pattern = '.'
+    elif ' ' not in query:
+        raw_pattern = r'(\b|[\.\+\-_])' + query + r'(\b|[\.\+\-_])'
     else:
-        regex = _build_regex(query)
+        raw_pattern = query.replace(' ', r'.*[\s\.\+\-_]')
+    try:
+        regex = re.compile(raw_pattern, flags=re.IGNORECASE)
+    except:
+        regex = query
     regex_filter = {'file_name': regex}
-    # Unquoted (no phrase-quotes) text search: Mongo's $text tokenizes the
-    # query into individual words and matches documents containing them
-    # regardless of order, instead of requiring one exact phrase - that
-    # phrase requirement was the earlier cause of "missing" results whenever
-    # a movie/series name's words weren't stored back-to-back in that order.
-    text_filter = {'$text': {'$search': query}}
-
-    # Cap on how many matching docs we pull back to rank. Pagination used to
-    # happen at the MongoDB level (skip/limit) BEFORE any ranking ran, so a
-    # search's true best match could sit on page 6 while low-relevance
-    # partial matches filled page 1. Fetching all matches up to this cap (no
-    # skip) and ranking BEFORE slicing the page fixes that.
-    # Kept modest (not thousands) because a slow/throttled DB connection can
-    # make a much bigger fetch take so long it effectively hangs the search.
-    FETCH_CAP = 300
-    # Hard timeout so a slow/stuck query fails fast (raises an exception we
-    # can fall back from / report) instead of hanging forever with no
-    # response and no error in the logs.
-    MAX_TIME_MS = 15000
+    # Phrase search on the text index (fast + gives an exact, indexed count).
+    # Quoting the whole query makes Mongo require the words as a phrase,
+    # matching the old regex's "words in order" behaviour.
+    text_filter = {'$text': {'$search': f'"{query}"'}}
 
     def _run(collection, mongo_filter):
-        cur = collection.find(mongo_filter).sort('$natural', -1).limit(FETCH_CAP).max_time_ms(MAX_TIME_MS)
-        # count_documents() with NO limit forces Mongo to scan/count EVERY
-        # matching document across the whole collection just to report a
-        # total - at 800k+ docs that alone can take longer than any
-        # reasonable timeout, even with the file_name text index in place
-        # (the index helps find results fast, it doesn't make counting all
-        # of them free). Capping the count at FETCH_CAP makes this bounded
-        # and cheap; the total/page-count shown to the user is then "at
-        # least this many" rather than a always-exact figure, which is a
-        # fine trade-off for actually getting a response back.
-        count = collection.count_documents(mongo_filter, limit=FETCH_CAP, maxTimeMS=MAX_TIME_MS)
-        return list(cur), count
+        cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
+        return list(cur), collection.count_documents(mongo_filter)
 
     def _run_all_blocking():
         # All the actual pymongo work (synchronous/blocking network calls)
@@ -167,14 +112,7 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
                 # breaks - it's just slower until the index is created.
                 found, count = _run(collection, text_filter)
             except Exception:
-                try:
-                    found, count = _run(collection, regex_filter)
-                except Exception:
-                    # Both the indexed text search AND the unindexed regex
-                    # scan failed/timed out for this collection - skip it
-                    # rather than letting one bad collection kill the whole
-                    # search (the other collection, if any, can still work).
-                    found, count = [], 0
+                found, count = _run(collection, regex_filter)
             files_.extend(found)
             total_ += count
         return files_, total_
@@ -187,15 +125,7 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     # file delivery, not the DB query itself being slow.
     files, total_results = await asyncio.to_thread(_run_all_blocking)
 
-    # Re-rank across the WHOLE fetched set so an exact/prefix title match
-    # (e.g. the real "Master 2021") is always shown on page 1, ahead of
-    # loosely-matched files, instead of relying on insertion order.
-    files.sort(key=lambda f: _relevance_key(f.get('file_name', ''), query))
-
-    # Paginate AFTER ranking, not before.
-    files = files[offset:offset + max_results]
-
-    next_offset = "" if (offset + max_results) >= min(total_results, FETCH_CAP) else (offset + max_results)
+    next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
     return files, next_offset, total_results
 
 
@@ -209,18 +139,6 @@ def create_search_index():
             print(f"Text index ready on {collection.full_name}")
         except Exception as e:
             print(f"Could not create text index on {collection.full_name}: {e}")
-
-
-# Build the text index automatically as soon as this module is imported,
-# instead of relying on someone remembering to run build_search_index.py
-# separately. Without this index every search falls back to an unindexed
-# regex scan of the WHOLE collection, which is what was causing 8+ second
-# timeouts ("Search took too long or failed") on every query. Building an
-# index is a one-time, idempotent operation (safe to attempt on every
-# startup), and it's kicked off in a background thread so it never blocks
-# the bot from starting up while a large first-time index build finishes.
-threading.Thread(target=create_search_index, daemon=True).start()
-
 
 async def get_bad_files(query, file_type=None, use_filter=False):
     """For given query return (results, next_offset)"""
