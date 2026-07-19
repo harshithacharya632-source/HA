@@ -1,12 +1,10 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
 
 from pyrogram import Client, types
 from info import *
 from utils import temp
 from typing import Union, Optional, AsyncGenerator
 from aiohttp import web
+from TechVJ.bot.ask_patch import attach_listener
 
 
 class TechVJXBot(Client):
@@ -65,6 +63,7 @@ class TechVJXBot(Client):
                 current += 1
       
 TechVJBot = TechVJXBot()
+attach_listener(TechVJBot)
 
 multi_clients = {}
 work_loads = {}
