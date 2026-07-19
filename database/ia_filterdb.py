@@ -1,4 +1,4 @@
-import re, base64, json, asyncio
+import re, base64, json, asyncio, threading
 from struct import pack
 from pyrogram.file_id import FileId
 from pymongo import MongoClient
@@ -137,7 +137,7 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     # Hard timeout so a slow/stuck query fails fast (raises an exception we
     # can fall back from / report) instead of hanging forever with no
     # response and no error in the logs.
-    MAX_TIME_MS = 8000
+    MAX_TIME_MS = 15000
 
     def _run(collection, mongo_filter):
         cur = collection.find(mongo_filter).sort('$natural', -1).limit(FETCH_CAP).max_time_ms(MAX_TIME_MS)
@@ -192,6 +192,18 @@ def create_search_index():
             print(f"Text index ready on {collection.full_name}")
         except Exception as e:
             print(f"Could not create text index on {collection.full_name}: {e}")
+
+
+# Build the text index automatically as soon as this module is imported,
+# instead of relying on someone remembering to run build_search_index.py
+# separately. Without this index every search falls back to an unindexed
+# regex scan of the WHOLE collection, which is what was causing 8+ second
+# timeouts ("Search took too long or failed") on every query. Building an
+# index is a one-time, idempotent operation (safe to attempt on every
+# startup), and it's kicked off in a background thread so it never blocks
+# the bot from starting up while a large first-time index build finishes.
+threading.Thread(target=create_search_index, daemon=True).start()
+
 
 async def get_bad_files(query, file_type=None, use_filter=False):
     """For given query return (results, next_offset)"""
