@@ -73,26 +73,58 @@ def is_file_already_saved(file_id, file_name):
             
     return False
 
+def _build_regex(query):
+    """Build a regex that matches all words of the query anywhere in the
+    file_name, in ANY order/position (not just back-to-back in the order the
+    user typed them). Using lookaheads instead of a single 'word1...word2'
+    chain means a query like 'War Master' still matches 'Master.of.War.2023'
+    and nothing gets dropped just because the words are separated or
+    reordered in the real filename."""
+    words = query.split()
+    if not words:
+        return re.compile('.', flags=re.IGNORECASE)
+    parts = [r'(?=.*(?:\b|[\.\+\-_])' + re.escape(w) + r'(?:\b|[\.\+\-_]))' for w in words]
+    raw_pattern = ''.join(parts) + '.'
+    return re.compile(raw_pattern, flags=re.IGNORECASE)
+
+
+def _relevance_key(file_name, query):
+    """Lower score = should rank first. Prefers the file whose title actually
+    starts with / equals the query (e.g. 'Master') over one that merely
+    contains a loosely related word (e.g. 'Mast...') buried inside it."""
+    name = (file_name or '').lower()
+    q = query.lower().strip()
+    words = q.split()
+
+    if name == q:
+        return 0
+    if name.startswith(q):
+        return 1
+    # query words appear together, in order, as a contiguous phrase
+    if re.search(r'\b' + r'[\s\.\+\-_]+'.join(re.escape(w) for w in words) + r'\b', name):
+        return 2
+    # each word appears as its own token, but not necessarily contiguous/ordered
+    if all(re.search(r'(?:\b|[\.\+\-_])' + re.escape(w) + r'(?:\b|[\.\+\-_])', name) for w in words):
+        return 3
+    return 4
+
+
 async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False):
     """For given query return (results, next_offset, total_results)."""
     if not query:
         return [], "", 0
     query = query.strip()
     if not query:
-        raw_pattern = '.'
-    elif ' ' not in query:
-        raw_pattern = r'(\b|[\.\+\-_])' + query + r'(\b|[\.\+\-_])'
+        regex = re.compile('.', flags=re.IGNORECASE)
     else:
-        raw_pattern = query.replace(' ', r'.*[\s\.\+\-_]')
-    try:
-        regex = re.compile(raw_pattern, flags=re.IGNORECASE)
-    except:
-        regex = query
+        regex = _build_regex(query)
     regex_filter = {'file_name': regex}
-    # Phrase search on the text index (fast + gives an exact, indexed count).
-    # Quoting the whole query makes Mongo require the words as a phrase,
-    # matching the old regex's "words in order" behaviour.
-    text_filter = {'$text': {'$search': f'"{query}"'}}
+    # Unquoted (no phrase-quotes) text search: Mongo's $text tokenizes the
+    # query into individual words and matches documents containing them
+    # regardless of order, instead of requiring one exact phrase - that
+    # phrase requirement was the earlier cause of "missing" results whenever
+    # a movie/series name's words weren't stored back-to-back in that order.
+    text_filter = {'$text': {'$search': query}}
 
     def _run(collection, mongo_filter):
         cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
@@ -124,6 +156,11 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     # it. That's what was causing the multi-second lag on both search and
     # file delivery, not the DB query itself being slow.
     files, total_results = await asyncio.to_thread(_run_all_blocking)
+
+    # Re-rank so an exact/prefix title match (e.g. the real "Master" movie)
+    # is always shown before loosely-matched files, instead of relying on
+    # insertion order ($natural) alone.
+    files.sort(key=lambda f: _relevance_key(f.get('file_name', ''), query))
 
     next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
     return files, next_offset, total_results
