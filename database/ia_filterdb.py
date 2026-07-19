@@ -141,7 +141,17 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
 
     def _run(collection, mongo_filter):
         cur = collection.find(mongo_filter).sort('$natural', -1).limit(FETCH_CAP).max_time_ms(MAX_TIME_MS)
-        return list(cur), collection.count_documents(mongo_filter, maxTimeMS=MAX_TIME_MS)
+        # count_documents() with NO limit forces Mongo to scan/count EVERY
+        # matching document across the whole collection just to report a
+        # total - at 800k+ docs that alone can take longer than any
+        # reasonable timeout, even with the file_name text index in place
+        # (the index helps find results fast, it doesn't make counting all
+        # of them free). Capping the count at FETCH_CAP makes this bounded
+        # and cheap; the total/page-count shown to the user is then "at
+        # least this many" rather than a always-exact figure, which is a
+        # fine trade-off for actually getting a response back.
+        count = collection.count_documents(mongo_filter, limit=FETCH_CAP, maxTimeMS=MAX_TIME_MS)
+        return list(cur), count
 
     def _run_all_blocking():
         # All the actual pymongo work (synchronous/blocking network calls)
@@ -157,7 +167,14 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
                 # breaks - it's just slower until the index is created.
                 found, count = _run(collection, text_filter)
             except Exception:
-                found, count = _run(collection, regex_filter)
+                try:
+                    found, count = _run(collection, regex_filter)
+                except Exception:
+                    # Both the indexed text search AND the unindexed regex
+                    # scan failed/timed out for this collection - skip it
+                    # rather than letting one bad collection kill the whole
+                    # search (the other collection, if any, can still work).
+                    found, count = [], 0
             files_.extend(found)
             total_ += count
         return files_, total_
