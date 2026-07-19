@@ -1,6 +1,4 @@
-
-
-import re, base64, json
+import re, base64, json, asyncio
 from struct import pack
 from pyrogram.file_id import FileId
 from pymongo import MongoClient
@@ -100,21 +98,32 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
         cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
         return list(cur), collection.count_documents(mongo_filter)
 
-    files = []
-    total_results = 0
-    collections = [col, sec_col] if MULTIPLE_DATABASE else [col]
+    def _run_all_blocking():
+        # All the actual pymongo work (synchronous/blocking network calls)
+        # happens here, inside one function, so it can be handed to a worker
+        # thread as a single unit below.
+        files_ = []
+        total_ = 0
+        for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
+            try:
+                # Requires a text index on file_name - see create_search_index()
+                # below / the one-time setup note. Falls back to the regex scan
+                # automatically if that index doesn't exist yet, so search never
+                # breaks - it's just slower until the index is created.
+                found, count = _run(collection, text_filter)
+            except Exception:
+                found, count = _run(collection, regex_filter)
+            files_.extend(found)
+            total_ += count
+        return files_, total_
 
-    for collection in collections:
-        try:
-            # Requires a text index on file_name - see create_search_index()
-            # below / the one-time setup note. Falls back to the regex scan
-            # automatically if that index doesn't exist yet, so search never
-            # breaks - it's just slower until the index is created.
-            found, count = _run(collection, text_filter)
-        except Exception:
-            found, count = _run(collection, regex_filter)
-        files.extend(found)
-        total_results += count
+    # Run all the blocking pymongo calls in a worker thread instead of
+    # directly in this async function. Without this, every search froze the
+    # ENTIRE bot's event loop for the duration of the DB round trip - meaning
+    # other users' searches AND the file-send callbacks all queued up behind
+    # it. That's what was causing the multi-second lag on both search and
+    # file delivery, not the DB query itself being slow.
+    files, total_results = await asyncio.to_thread(_run_all_blocking)
 
     next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
     return files, next_offset, total_results
@@ -164,7 +173,9 @@ async def get_bad_files(query, file_type=None, use_filter=False):
     return files, total_results
 
 async def get_file_details(query):
-    return col.find_one({'file_id': query}) or sec_col.find_one({'file_id': query})
+    def _lookup():
+        return col.find_one({'file_id': query}) or sec_col.find_one({'file_id': query})
+    return await asyncio.to_thread(_lookup)
 
 def encode_file_id(s: bytes) -> str:
     r = b""
