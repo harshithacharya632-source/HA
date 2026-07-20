@@ -446,8 +446,14 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             if movie_doc:
                 if any(f["filename"] == filename for f in movie_doc["files"]):
                     return
+                is_new_episode = (
+                    media_info["tag"] == "#SERIES"
+                    and media_info["season"] is not None
+                    and (media_info["season"], media_info["episode"])
+                        != (movie_doc.get("latest_season"), movie_doc.get("latest_episode"))
+                )
                 update_fields = {"$push": {"files": file_data}}
-                if media_info["tag"] == "#SERIES":
+                if is_new_episode:
                     update_fields["$set"] = {
                         "message_id": None,
                         "is_photo": False,
@@ -459,18 +465,19 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
     else:
         if any(f["filename"] == filename for f in movie_doc["files"]):
             return
-        # SERIES: reset message_id (and record the new episode) so
-        # update_movie_message() sends a BRAND-NEW post — fresh poster,
-        # full details, Get Files/Trailer buttons — for the new episode,
-        # instead of silently editing the caption of the very first post.
-        # Previously both branches here called schedule_update()
-        # identically without ever resetting message_id, so a new
-        # episode never actually got its own post despite the comment
-        # in update_movie_message() promising exactly that.
-        # MOVIE: movies don't have new episodes — just refresh the
-        # existing post's caption (e.g. a better-quality re-upload).
+        # Only a genuinely NEW episode should get a brand-new post.
+        # A same-episode re-upload (different quality/size) must NOT
+        # trigger another post — it should just be added quietly to the
+        # existing one. media_info["season"] is not None guards against
+        # a failed season/episode parse being mistaken for "new episode".
+        is_new_episode = (
+            media_info["tag"] == "#SERIES"
+            and media_info["season"] is not None
+            and (media_info["season"], media_info["episode"])
+                != (movie_doc.get("latest_season"), movie_doc.get("latest_episode"))
+        )
         update_fields = {"$push": {"files": file_data}}
-        if media_info["tag"] == "#SERIES":
+        if is_new_episode:
             update_fields["$set"] = {
                 "message_id": None,
                 "is_photo": False,
