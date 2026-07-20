@@ -129,6 +129,34 @@ def extract_season_episode(filename: str) -> Tuple[Optional[int], Optional[str]]
     return None, None
 
 
+def _episode_max_num(episode) -> int:
+    """Pulls the highest number out of an episode value. Handles plain
+    episodes ('4'), ranges ('3-5' -> 5), or None (-> 0)."""
+    if not episode:
+        return 0
+    parts = re.findall(r'\d+', str(episode))
+    return max((int(p) for p in parts), default=0)
+
+
+def _is_newer_episode(latest_season, latest_episode, new_season, new_episode) -> bool:
+    """True only when this file represents real progress — a new season,
+    or a higher episode number than what's already posted. False for a
+    re-upload of an already-posted episode (different quality/language)
+    or a backfilled earlier episode. Those should just update the
+    existing post instead of spawning a fresh one — that's what was
+    causing the same poster to be posted multiple times."""
+    if new_season is None:
+        return False
+    if latest_season is None:
+        return True
+    try:
+        if int(new_season) != int(latest_season):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return _episode_max_num(new_episode) > _episode_max_num(latest_episode)
+
+
 def schedule_update(bot, base_name, delay=5):
     if handle := pending_updates.get(base_name):
         if not handle.cancelled():
@@ -502,7 +530,10 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
                 if any(f["filename"] == filename for f in movie_doc["files"]):
                     return
                 update_fields = {"$push": {"files": file_data}}
-                if media_info["tag"] == "#SERIES":
+                if media_info["tag"] == "#SERIES" and _is_newer_episode(
+                    movie_doc.get("latest_season"), movie_doc.get("latest_episode"),
+                    media_info["season"], media_info["episode"]
+                ):
                     update_fields["$set"] = {
                         "message_id": None,
                         "is_photo": False,
@@ -515,18 +546,22 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
     else:
         if any(f["filename"] == filename for f in movie_doc["files"]):
             return
-        # SERIES: reset message_id (and record the new episode) so
-        # update_movie_message() sends a BRAND-NEW post — fresh poster,
-        # full details, Get Files/Trailer buttons — for the new episode,
-        # instead of silently editing the caption of the very first post.
-        # Previously both branches here called schedule_update()
-        # identically without ever resetting message_id, so a new
-        # episode never actually got its own post despite the comment
-        # in update_movie_message() promising exactly that.
+        # SERIES: one post covers a whole season. We only reset message_id
+        # (forcing a BRAND-NEW post — fresh poster, full details, Get
+        # Files/Trailer buttons) when this file is genuine progress: a new
+        # season, or an episode number higher than the one already posted
+        # (e.g. S03E03 -> S03E04 next day). A re-upload of an episode
+        # that's already posted (better quality, extra language, same day
+        # or a day later) just edits the existing post instead of spawning
+        # a duplicate — that duplicate-poster spam was the bug: every file,
+        # including repeats of the same episode, used to reset message_id.
         # MOVIE: movies don't have new episodes — just refresh the
         # existing post's caption (e.g. a better-quality re-upload).
         update_fields = {"$push": {"files": file_data}}
-        if media_info["tag"] == "#SERIES":
+        if media_info["tag"] == "#SERIES" and _is_newer_episode(
+            movie_doc.get("latest_season"), movie_doc.get("latest_episode"),
+            media_info["season"], media_info["episode"]
+        ):
             update_fields["$set"] = {
                 "message_id": None,
                 "is_photo": False,
