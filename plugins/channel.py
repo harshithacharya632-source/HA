@@ -434,7 +434,9 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             "trailer_url": trailer_url,
             "message_id": None,
             "is_photo": False,
-            "is_backdrop": bool(LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url and not imdb_poster)
+            "is_backdrop": bool(LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url and not imdb_poster),
+            "latest_season": media_info["season"],
+            "latest_episode": media_info["episode"]
         }
         try:
             await db.movie_updates.insert_one(movie_doc)
@@ -444,30 +446,54 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             if movie_doc:
                 if any(f["filename"] == filename for f in movie_doc["files"]):
                     return
-                await db.movie_updates.update_one(
-                    {"_id": base_name},
-                    {"$push": {"files": file_data}}
-                )
+                update_fields = {"$push": {"files": file_data}}
+                if media_info["tag"] == "#SERIES":
+                    update_fields["$set"] = {
+                        "message_id": None,
+                        "is_photo": False,
+                        "latest_season": media_info["season"],
+                        "latest_episode": media_info["episode"]
+                    }
+                await db.movie_updates.update_one({"_id": base_name}, update_fields)
                 schedule_update(bot, base_name, delay=5)
     else:
         if any(f["filename"] == filename for f in movie_doc["files"]):
             return
-        await db.movie_updates.update_one(
-            {"_id": base_name},
-            {"$push": {"files": file_data}}
-        )
-        # SERIES: send fresh post for new episode
-        # MOVIE: just update caption (movies don't have new episodes)
+        # SERIES: reset message_id (and record the new episode) so
+        # update_movie_message() sends a BRAND-NEW post — fresh poster,
+        # full details, Get Files/Trailer buttons — for the new episode,
+        # instead of silently editing the caption of the very first post.
+        # Previously both branches here called schedule_update()
+        # identically without ever resetting message_id, so a new
+        # episode never actually got its own post despite the comment
+        # in update_movie_message() promising exactly that.
+        # MOVIE: movies don't have new episodes — just refresh the
+        # existing post's caption (e.g. a better-quality re-upload).
+        update_fields = {"$push": {"files": file_data}}
         if media_info["tag"] == "#SERIES":
-            schedule_update(bot, base_name, delay=5)
-        else:
-            schedule_update(bot, base_name, delay=5)
+            update_fields["$set"] = {
+                "message_id": None,
+                "is_photo": False,
+                "latest_season": media_info["season"],
+                "latest_episode": media_info["episode"]
+            }
+        await db.movie_updates.update_one({"_id": base_name}, update_fields)
+        schedule_update(bot, base_name, delay=5)
 
 
-def build_buttons(base_name: str, trailer_url: str = None) -> InlineKeyboardMarkup:
+def build_buttons(base_name: str, trailer_url: str = None, season=None, episode=None) -> InlineKeyboardMarkup:
+    # Episode-specific deep link when we know which episode this post is
+    # for (skip it for range files like "07-08" — those aren't a single
+    # episode, so just search the series like before).
+    getfile_target = base_name
+    if season is not None and episode is not None and "-" not in str(episode):
+        try:
+            getfile_target = f"{base_name} S{int(season):02d}E{int(episode):02d}"
+        except (TypeError, ValueError):
+            pass
     get_files_btn = InlineKeyboardButton(
         '🎬 ɢᴇᴛ ғɪʟᴇs',
-        url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}",
+        url=f"https://t.me/{temp.U_NAME}?start=getfile-{getfile_target.replace(' ', '-')}",
         style=enums.ButtonStyle.PRIMARY
     )
     if trailer_url:
@@ -485,7 +511,7 @@ async def send_movie_update(bot, base_name):
                 return None
 
             text = generate_movie_message(movie_doc, base_name)
-            buttons = build_buttons(base_name, movie_doc.get("trailer_url"))
+            buttons = build_buttons(base_name, movie_doc.get("trailer_url"), movie_doc.get("latest_season"), movie_doc.get("latest_episode"))
             size = (2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and movie_doc.get("is_backdrop") else (853, 1280)
 
             DEFAULT_POSTER_URL = "https://files.catbox.moe/4u8skn.jpg"
@@ -551,7 +577,7 @@ async def update_movie_message(bot, base_name):
             return
 
         text = generate_movie_message(movie_doc, base_name)
-        buttons = build_buttons(base_name, movie_doc.get("trailer_url"))
+        buttons = build_buttons(base_name, movie_doc.get("trailer_url"), movie_doc.get("latest_season"), movie_doc.get("latest_episode"))
 
         message_id = movie_doc.get("message_id")
         is_photo = movie_doc.get("is_photo", False)
