@@ -3584,14 +3584,20 @@ async def cb_handler(client: Client, query: CallbackQuery):
     except QueryIdInvalid:
         pass
 
-async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
+async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from_deeplink=False):
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     if not spoll:
         message = msg
-        if message.text.startswith("/"): return  # ignore commands
-        if re.findall("((^\/|^,|^!|^\.|^[\U0001F600-\U000E007F]).*)", message.text):
-            return
-        if len(message.text) < 100:
+        # from_deeplink=True is used by the "GET FILES" channel button
+        # (/start getfile-<name>), where msg.text is the /start command
+        # itself, not the search text — the two guards below exist to
+        # ignore stray commands/stickers typed in a live group chat and
+        # don't apply here, so they're skipped in that case.
+        if not from_deeplink:
+            if message.text.startswith("/"): return  # ignore commands
+            if re.findall("((^\/|^,|^!|^\.|^[\U0001F600-\U000E007F]).*)", message.text):
+                return
+        if from_deeplink or len(message.text) < 100:
             search = name
             search = search.lower()
             find = search.split(" ")
