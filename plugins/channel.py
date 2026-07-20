@@ -3,7 +3,7 @@ import logging
 import asyncio
 from datetime import datetime
 from collections import defaultdict
-from plugins.Dreamxfutures.Imdbposter import fetch_image, get_movie_details, get_movie_detailsx
+from plugins.Dreamxfutures.Imdbposter import fetch_image, get_movie_details, get_movie_detailsx, get_session, search_youtube_trailer
 from database.users_chats_db import db
 from pyrogram import Client, filters, enums
 from info import (
@@ -309,6 +309,43 @@ async def process_and_send_update(bot, filename, caption):
         logger.exception(f"Processing failed in process_and_send_update: {e}")
 
 
+async def _refresh_group_metadata(movie_doc: dict, media_info: dict, base_name: str, update_fields: dict):
+    """Every file that lands on an already-existing movie/series group used to
+    be stuck with whatever trailer/language the very first file found — if
+    that first lookup missed, it missed forever. This merges in any new
+    language the latest file carries, and retries the trailer lookup if the
+    group still doesn't have one."""
+    set_fields = update_fields.setdefault("$set", {})
+
+    new_lang = media_info.get("language")
+    if new_lang and new_lang != "N/A":
+        existing = set(
+            l.strip() for l in (movie_doc.get("language") or "").split(",")
+            if l.strip() and l.strip() != "N/A"
+        )
+        existing.update(l.strip() for l in new_lang.split(",") if l.strip())
+        if existing:
+            merged = ", ".join(sorted(existing))
+            if merged != movie_doc.get("language"):
+                set_fields["language"] = merged
+
+    if not movie_doc.get("trailer_url"):
+        try:
+            tmdb_retry = await get_movie_detailsx(base_name)
+            trailer_url = (tmdb_retry or {}).get("trailer_url")
+            if not trailer_url:
+                session = await get_session()
+                trailer_url = await search_youtube_trailer(session, base_name, movie_doc.get("year"))
+            if trailer_url:
+                set_fields["trailer_url"] = trailer_url
+                logger.info(f"Trailer retry succeeded for existing group '{base_name}': {trailer_url}")
+        except Exception as e:
+            logger.warning(f"Trailer retry failed for existing group '{base_name}': {e}")
+
+    if not set_fields:
+        update_fields.pop("$set", None)
+
+
 async def _process_with_lock(bot, filename, caption, media_info, base_name, processed):
     if not hasattr(db, 'movie_updates'):
         db.movie_updates = db.db.movie_updates
@@ -360,6 +397,24 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             f"url={imdb_data.get('url')!r} "
             f"lang={imdb_data.get('languages')!r}"
         )
+
+        # ── TRAILER: TMDB primary, YouTube-search fallback when TMDB has no match ──
+        # get_movie_detailsx() already tries a YouTube search when TMDB *finds*
+        # the title but has no trailer video attached. But if TMDB can't match
+        # the title at all, tmdb_data_full is None and trailer_url never gets
+        # a chance — so retry here using the IMDB title/year instead.
+        if not trailer_url:
+            try:
+                fallback_title = imdb_data.get("title") or base_name
+                fallback_year = imdb_data.get("year") or media_info["year"]
+                session = await get_session()
+                trailer_url = await search_youtube_trailer(
+                    session, fallback_title, int(fallback_year) if fallback_year else None
+                )
+                if trailer_url:
+                    logger.info(f"YouTube fallback trailer (TMDB miss) for '{base_name}': {trailer_url}")
+            except Exception as e:
+                logger.warning(f"Trailer fallback search failed for '{base_name}': {e}")
 
         # ── POSTER: IMDB primary, TMDB fallback ──
         DEFAULT_POSTER = "https://files.catbox.moe/4u8skn.jpg"
@@ -446,44 +501,39 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             if movie_doc:
                 if any(f["filename"] == filename for f in movie_doc["files"]):
                     return
-                is_new_episode = (
-                    media_info["tag"] == "#SERIES"
-                    and media_info["season"] is not None
-                    and (media_info["season"], media_info["episode"])
-                        != (movie_doc.get("latest_season"), movie_doc.get("latest_episode"))
-                )
                 update_fields = {"$push": {"files": file_data}}
-                if is_new_episode:
+                if media_info["tag"] == "#SERIES":
                     update_fields["$set"] = {
                         "message_id": None,
                         "is_photo": False,
                         "latest_season": media_info["season"],
                         "latest_episode": media_info["episode"]
                     }
+                await _refresh_group_metadata(movie_doc, media_info, base_name, update_fields)
                 await db.movie_updates.update_one({"_id": base_name}, update_fields)
                 schedule_update(bot, base_name, delay=5)
     else:
         if any(f["filename"] == filename for f in movie_doc["files"]):
             return
-        # Only a genuinely NEW episode should get a brand-new post.
-        # A same-episode re-upload (different quality/size) must NOT
-        # trigger another post — it should just be added quietly to the
-        # existing one. media_info["season"] is not None guards against
-        # a failed season/episode parse being mistaken for "new episode".
-        is_new_episode = (
-            media_info["tag"] == "#SERIES"
-            and media_info["season"] is not None
-            and (media_info["season"], media_info["episode"])
-                != (movie_doc.get("latest_season"), movie_doc.get("latest_episode"))
-        )
+        # SERIES: reset message_id (and record the new episode) so
+        # update_movie_message() sends a BRAND-NEW post — fresh poster,
+        # full details, Get Files/Trailer buttons — for the new episode,
+        # instead of silently editing the caption of the very first post.
+        # Previously both branches here called schedule_update()
+        # identically without ever resetting message_id, so a new
+        # episode never actually got its own post despite the comment
+        # in update_movie_message() promising exactly that.
+        # MOVIE: movies don't have new episodes — just refresh the
+        # existing post's caption (e.g. a better-quality re-upload).
         update_fields = {"$push": {"files": file_data}}
-        if is_new_episode:
+        if media_info["tag"] == "#SERIES":
             update_fields["$set"] = {
                 "message_id": None,
                 "is_photo": False,
                 "latest_season": media_info["season"],
                 "latest_episode": media_info["episode"]
             }
+        await _refresh_group_metadata(movie_doc, media_info, base_name, update_fields)
         await db.movie_updates.update_one({"_id": base_name}, update_fields)
         schedule_update(bot, base_name, delay=5)
 
