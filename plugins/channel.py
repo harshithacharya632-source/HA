@@ -482,13 +482,14 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
 
 
 def build_buttons(base_name: str, trailer_url: str = None, season=None, episode=None) -> InlineKeyboardMarkup:
-    # Episode-specific deep link when we know which episode this post is
-    # for (skip it for range files like "07-08" — those aren't a single
-    # episode, so just search the series like before).
+    # Season-only deep link when we know the season this post is for —
+    # searches "ShowName S03" (all episodes of that season), not the
+    # specific episode. `episode` is accepted for backwards compatibility
+    # but no longer used here.
     getfile_target = base_name
-    if season is not None and episode is not None and "-" not in str(episode):
+    if season is not None:
         try:
-            getfile_target = f"{base_name} S{int(season):02d}E{int(episode):02d}"
+            getfile_target = f"{base_name} S{int(season):02d}"
         except (TypeError, ValueError):
             pass
     get_files_btn = InlineKeyboardButton(
