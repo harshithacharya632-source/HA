@@ -1131,7 +1131,7 @@ async def requests(bot, message):
                     success = True
             else:
                 if len(content) < 3:
-                    await message.reply_text("<b>You must type about your request [Minimum 3 Characters]. Requests can't be empty.</b>")
+                    await message.reply_text("<b>You must type about your request [Minimum 3 Characters]. Requests can't be empty.</b>\n\n<b>Example:</b> /request kantara")
             if len(content) < 3:
                 success = False
         except Exception as e:
@@ -1172,7 +1172,7 @@ async def requests(bot, message):
                     success = True
             else:
                 if len(content) < 3:
-                    await message.reply_text("<b>You must type about your request [Minimum 3 Characters]. Requests can't be empty.</b>")
+                    await message.reply_text("<b>You must type about your request [Minimum 3 Characters]. Requests can't be empty.</b>\n\n<b>Example:</b> /request kantara")
             if len(content) < 3:
                 success = False
         except Exception as e:
