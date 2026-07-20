@@ -357,17 +357,7 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=(
-                        f"{get_size(file['file_size'])} ▷ "
-                        + (
-                            f"[S{m.group(1).zfill(2)}E{m.group(2).zfill(2)}] "
-                            if (m := re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', file['file_name']))
-                            else ""
-                        )
-                        + re.sub(r'\[.*?\]', '', file['file_name'])
-                            .replace("WEBRip", "")
-                            .strip()
-                    ),
+                    text=format_file_button_text(file),
                     callback_data=f'{pre}#{file["file_id"]}'
                 )
             ]
@@ -634,8 +624,24 @@ from pyrogram.errors import MessageNotModified
 # ===============================
 
 SEASON_RE = re.compile(r"(?<![A-Za-z0-9])(?:season\s*|s)(\d{1,2})(?=e\d|$|\D)", re.IGNORECASE)
-EPISODE_RE = re.compile(r"(?:s\d{1,2})?[ex](\d{1,3})(?!\d)", re.IGNORECASE)
+EPISODE_RE = re.compile(r"(?:s\d{1,2}[.\s_-]*)?(?:episode|ep|e)[.\s_-]*(\d{1,3})(?!\d)", re.IGNORECASE)
 RANGE_EP_RE = re.compile(r"[ex]\d{1,3}\s*-\s*[ex]\d{1,3}", re.IGNORECASE)
+
+# Rewrites any season+episode marker actually present in a filename to the
+# canonical no-space "S03E04" form for on-screen display — so "S03EP04",
+# "S03 EP 04", "S03.Episode.04" etc. all show up as "S03E04" wherever a
+# filename is shown to the user, instead of leaving the original "EP04"
+# spelling sitting there next to the already-normalized [S03E04] tag.
+_EPTAG_DISPLAY_RE = re.compile(
+    r"(?<![A-Za-z0-9])s(\d{1,2})[.\s_-]*(?:episode|ep|e)[.\s_-]*(\d{1,3})(?!\d)",
+    re.IGNORECASE,
+)
+
+
+def normalize_episode_marker(name: str) -> str:
+    return _EPTAG_DISPLAY_RE.sub(
+        lambda m: f"S{int(m.group(1)):02d}E{int(m.group(2)):02d}", name
+    )
 
 MAX_SEASON  = 30
 MAX_EPISODE = 300
@@ -649,7 +655,7 @@ STRIP_RE = re.compile(
     r'|dubbed|multi|esub'
     r'|x264|x265|hevc|avc|aac|dd5|dolby|atmos|hdr|sdr|web|dl|rip'
     r'|season|episode|complete|batch|pack|combined'
-    r'|s\d{1,2}e\d{1,3}|s\d{1,2})\b',
+    r'|s\d{1,2}ep\d{1,3}|s\d{1,2}e\d{1,3}|ep\d{1,3}|s\d{1,2})\b',
     re.IGNORECASE
 )
 
@@ -695,6 +701,7 @@ def format_file_button_text(file):
     episode = extract_episode(name)
     tag = f"[S{season:02d}E{episode:02d}] " if season is not None and episode is not None else ""
     clean = re.sub(r'\[.*?\]', '', name).replace("WEBRip", "").strip()
+    clean = normalize_episode_marker(clean)
     return f"{size} ▷ {tag}{clean}"
 
 
@@ -3742,7 +3749,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
         if not settings["button"]:
             cap += "<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n"
             for file in files:
-                cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}</a></b>\n"
+                cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
     else:
         user_mention = message.from_user.mention if message.from_user else "Anonymous"
         if settings["button"]:
@@ -3751,7 +3758,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             cap = f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
             cap += "<b><u>🍿 Your Movie Files 👇</u></b>\n"
             for file in files:
-                cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}</a></b>\n"
+                cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
 
     if imdb and imdb.get('poster'):
         try:
@@ -3825,7 +3832,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         logger.exception(e)
         reqst_gle = mv_rqst.replace(" ", "+")
         button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
         ]]
         if NO_RESULTS_MSG:
             await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
@@ -3837,7 +3844,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     if not movies:
         reqst_gle = mv_rqst.replace(" ", "+")
         button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
         ]]
         if NO_RESULTS_MSG:
             await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
@@ -3863,7 +3870,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
                 break
         reqst_gle = mv_rqst.replace(" ", "+")
         button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
         ]]
         if NO_RESULTS_MSG:
             await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
@@ -3904,7 +3911,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             for k, t in enumerate(labels)
         ]
         reqst_gle = urllib.parse.quote_plus(mv_rqst)
-        btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")])
+        btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)])
         btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
         spell_check_del = await reply_msg.edit_text(
             text=script.CUDNT_FND.format(mv_rqst),
@@ -3961,7 +3968,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     # Google-only fallback.
     reqst_gle = urllib.parse.quote_plus(mv_rqst)
     button = [[
-        InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+        InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
     ]]
     if NO_RESULTS_MSG:
         await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
