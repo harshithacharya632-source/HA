@@ -157,6 +157,37 @@ def _is_newer_episode(latest_season, latest_episode, new_season, new_episode) ->
     return _episode_max_num(new_episode) > _episode_max_num(latest_episode)
 
 
+def _series_set_fields(movie_doc: dict, media_info: dict) -> dict:
+    """Decides what (if anything) to $set on a SERIES doc for an incoming
+    file. Two separate things can be true independently:
+      - is this episode actually newer than what we already have?
+      - if so, has a calendar day already passed since we last posted?
+    A brand-new post (poster reset) only happens when BOTH are true — a
+    real new episode AND it's a new day. A newer episode arriving minutes
+    after the last one (same upload batch) still updates latest_season/
+    latest_episode so the group stays accurate, but reuses the existing
+    post (edited in place) instead of spawning another one — that's what
+    was causing episode 5 and episode 6 to post minutes apart with the
+    same poster. A same-episode re-upload (any day) never resets the post.
+    """
+    if not _is_newer_episode(
+        movie_doc.get("latest_season"), movie_doc.get("latest_episode"),
+        media_info["season"], media_info["episode"]
+    ):
+        return {}
+
+    set_fields = {
+        "latest_season": media_info["season"],
+        "latest_episode": media_info["episode"]
+    }
+    today = datetime.now().date().isoformat()
+    if movie_doc.get("last_post_date") != today:
+        set_fields["message_id"] = None
+        set_fields["is_photo"] = False
+        set_fields["last_post_date"] = today
+    return set_fields
+
+
 def schedule_update(bot, base_name, delay=5):
     if handle := pending_updates.get(base_name):
         if not handle.cancelled():
@@ -519,7 +550,8 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             "is_photo": False,
             "is_backdrop": bool(LANDSCAPE_POSTER and TMDB_POSTER and backdrop_url and not imdb_poster),
             "latest_season": media_info["season"],
-            "latest_episode": media_info["episode"]
+            "latest_episode": media_info["episode"],
+            "last_post_date": datetime.now().date().isoformat()
         }
         try:
             await db.movie_updates.insert_one(movie_doc)
@@ -530,44 +562,33 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
                 if any(f["filename"] == filename for f in movie_doc["files"]):
                     return
                 update_fields = {"$push": {"files": file_data}}
-                if media_info["tag"] == "#SERIES" and _is_newer_episode(
-                    movie_doc.get("latest_season"), movie_doc.get("latest_episode"),
-                    media_info["season"], media_info["episode"]
-                ):
-                    update_fields["$set"] = {
-                        "message_id": None,
-                        "is_photo": False,
-                        "latest_season": media_info["season"],
-                        "latest_episode": media_info["episode"]
-                    }
+                if media_info["tag"] == "#SERIES":
+                    set_fields = _series_set_fields(movie_doc, media_info)
+                    if set_fields:
+                        update_fields["$set"] = set_fields
                 await _refresh_group_metadata(movie_doc, media_info, base_name, update_fields)
                 await db.movie_updates.update_one({"_id": base_name}, update_fields)
                 schedule_update(bot, base_name, delay=5)
     else:
         if any(f["filename"] == filename for f in movie_doc["files"]):
             return
-        # SERIES: one post covers a whole season. We only reset message_id
-        # (forcing a BRAND-NEW post — fresh poster, full details, Get
-        # Files/Trailer buttons) when this file is genuine progress: a new
-        # season, or an episode number higher than the one already posted
-        # (e.g. S03E03 -> S03E04 next day). A re-upload of an episode
-        # that's already posted (better quality, extra language, same day
-        # or a day later) just edits the existing post instead of spawning
-        # a duplicate — that duplicate-poster spam was the bug: every file,
-        # including repeats of the same episode, used to reset message_id.
+        # SERIES: one post covers a whole season, edited in place as files
+        # come in. A BRAND-NEW post (fresh poster, full details, Get
+        # Files/Trailer buttons) only goes out when there's a genuinely
+        # new episode/season AND it's a new calendar day since the last
+        # post — see _series_set_fields. That day-boundary check matters:
+        # without it, episode 5 then episode 6 landing minutes apart (same
+        # upload batch) each reset message_id and posted the same poster
+        # twice in a row. Now a same-day episode bump just updates
+        # latest_season/latest_episode and edits the existing post; a
+        # same-episode re-upload (any day) never resets it either way.
         # MOVIE: movies don't have new episodes — just refresh the
         # existing post's caption (e.g. a better-quality re-upload).
         update_fields = {"$push": {"files": file_data}}
-        if media_info["tag"] == "#SERIES" and _is_newer_episode(
-            movie_doc.get("latest_season"), movie_doc.get("latest_episode"),
-            media_info["season"], media_info["episode"]
-        ):
-            update_fields["$set"] = {
-                "message_id": None,
-                "is_photo": False,
-                "latest_season": media_info["season"],
-                "latest_episode": media_info["episode"]
-            }
+        if media_info["tag"] == "#SERIES":
+            set_fields = _series_set_fields(movie_doc, media_info)
+            if set_fields:
+                update_fields["$set"] = set_fields
         await _refresh_group_metadata(movie_doc, media_info, base_name, update_fields)
         await db.movie_updates.update_one({"_id": base_name}, update_fields)
         schedule_update(bot, base_name, delay=5)
