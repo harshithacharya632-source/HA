@@ -1,5 +1,3 @@
-
-
 import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64
 from Script import script
 from pyrogram.errors import MediaEmpty
@@ -18,6 +16,7 @@ from database.guard_db import reset_warns, remove_ban_log, get_settings
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results
+from plugins.pm_filter import auto_filter
 logger = logging.getLogger(__name__)
 
 BATCH_FILES = {}
@@ -300,35 +299,15 @@ async def start(client, message):
         pre = ""
     if data.startswith("getfile-"):
         query = data.replace("getfile-", "").replace("-", " ").strip()
-        grpid = await active_connection(str(message.from_user.id))
-        if not grpid:
-            grpid = -1001785738964
         reply_msg = await message.reply_text(f"<b><i>Searching For {query} 🔍</i></b>")
-        search = query.lower()
-        files, next_offset, total_results = await get_search_results(grpid, search, offset=0, max_results=8, filter=True)
-        if not files:
-            return await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {query}**")
-        settings = await get_settings(grpid)
-        pre = 'filep' if settings.get('file_secure', False) else 'file'
-        btn = []
-        for file in files:
-            btn.append([
-                InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}",
-                    callback_data=f'{pre}#{file["file_id"]}'
-                )
-            ])
-        nav = []
-        if next_offset:
-            nav.append(InlineKeyboardButton("NEXT ➡️", callback_data=f"gfnext#{query}#{grpid}#{next_offset}"))
-        if nav:
-            btn.append(nav)
-        k = await reply_msg.edit_text(
-            f"<b>Here are the results for <i>{query}</i> :\n\nTotal: {total_results} files found</b>",
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
-        await asyncio.sleep(300)
-        await k.delete()
+        try:
+            await auto_filter(client, query, message, reply_msg, ai_search=True, from_deeplink=True)
+        except Exception as e:
+            logger.error(f"auto_filter (getfile deeplink) failed for query '{query}': {e}")
+            try:
+                await reply_msg.edit_text("⚠️ <b>Search took too long or failed.</b> Please try again in a moment.")
+            except Exception:
+                pass
         return
     if data.split("-", 1)[0] == "BATCH":
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
