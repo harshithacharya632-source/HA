@@ -735,6 +735,23 @@ def _extract_title_stem(words):
     return words[:6]
 
 
+def _series_title_from_raw(name: str):
+    """For a series file, everything BEFORE the season/episode marker
+    (S01E02, Season 3, ...) in the ORIGINAL filename IS the title —
+    quality/audio/codec/release-group junk (10bit, DDP5.1, AMZN, H265,
+    2CH, EON, or whatever a new group tags its files with) always comes
+    AFTER that marker. Cutting there gives one clean, stable title no
+    matter how the trailing junk varies from file to file, instead of
+    relying on STRIP_RE ever covering every possible tag (it can't) or
+    a flat word-count cap (which lets leftover junk words sneak into the
+    stem when the real title is short, e.g. 'House Of The Dragon').
+    Returns None if this doesn't look like a series file at all."""
+    m = SEASON_RE.search(name)
+    if not m:
+        return None
+    return name[:m.start()]
+
+
 def _sync_fetch_known_titles(limit):
     """col/sec_col are plain synchronous PyMongo collections (same as
     col.delete_one() / col.count_documents() used elsewhere in this file
@@ -752,7 +769,9 @@ def _sync_fetch_known_titles(limit):
                 name = doc.get("file_name")
                 if not name:
                     continue
-                base = clean_name(name)          # strips quality/season/tags, lowercases
+
+                series_raw = _series_title_from_raw(name)
+                base = clean_name(series_raw if series_raw is not None else name)
                 # Drop stray punctuation-only leftovers (e.g. a lone "."
                 # or "-" where a stripped extension/tag used to be).
                 words = [
@@ -761,7 +780,15 @@ def _sync_fetch_known_titles(limit):
                 ]
                 if not words:
                     continue
-                title = " ".join(_extract_title_stem(words)).strip()
+
+                if series_raw is not None:
+                    # Already cut at the season/episode marker — no
+                    # trailing junk possible, so keep every word as-is
+                    # (don't run the movie-only 6-word/year cap on it).
+                    title = " ".join(words).strip()
+                else:
+                    title = " ".join(_extract_title_stem(words)).strip()
+
                 if len(title) >= 2:
                     titles.add(title)
         except Exception as e:
