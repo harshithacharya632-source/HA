@@ -2695,7 +2695,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                  InlineKeyboardButton("Vɪᴇᴡ Sᴛᴀᴛᴜs", url=f"{query.message.link}")
                ]]
         if query.from_user.id in ADMINS:
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             reply_markup = InlineKeyboardMarkup(btn)
             await query.message.edit_reply_markup(reply_markup)
             await query.answer("Hᴇʀᴇ ᴀʀᴇ ᴛʜᴇ ᴏᴘᴛɪᴏɴs !")
@@ -2712,7 +2712,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                  InlineKeyboardButton("Vɪᴇᴡ Sᴛᴀᴛᴜs", url=f"{query.message.link}")
                ]]
         if query.from_user.id in ADMINS:
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             reply_markup = InlineKeyboardMarkup(btn)
             content = query.message.text
             await query.message.edit_text(f"<b><strike>{content}</strike></b>")
@@ -2738,7 +2738,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                  InlineKeyboardButton("Rᴇᴏ̨ᴜᴇsᴛ Gʀᴏᴜᴘ Lɪɴᴋ", url="https://t.me/gofixmovie")
                ]]
         if query.from_user.id in ADMINS:
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             reply_markup = InlineKeyboardMarkup(btn)
             content = query.message.text
             await query.message.edit_text(f"<b><strike>{content}</strike></b>")
@@ -2763,7 +2763,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             InlineKeyboardButton("Rᴇᴏ̨ᴜᴇsᴛ Gʀᴏᴜᴘ Lɪɴᴋ", url="https://t.me/gofixmovie")
         ]]
         if query.from_user.id in ADMINS:
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             reply_markup = InlineKeyboardMarkup(btn)
             content = query.message.text
             await query.message.edit_text(f"<b><strike>{content}</strike></b>")
@@ -2779,7 +2779,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data.startswith("alalert"):
         ident, from_user = query.data.split("#")
         if int(query.from_user.id) == int(from_user):
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             await query.answer(f"Hᴇʏ {user.first_name}, Yᴏᴜʀ Rᴇᴏ̨ᴜᴇsᴛ ɪs Aʟʀᴇᴀᴅʏ Aᴠᴀɪʟᴀʙʟᴇ !", show_alert=True)
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
@@ -2787,7 +2787,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data.startswith("upalert"):
         ident, from_user = query.data.split("#")
         if int(query.from_user.id) == int(from_user):
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             await query.answer(f"Hᴇʏ {user.first_name}, Yᴏᴜʀ Rᴇᴏ̨ᴜᴇsᴛ ɪs Uᴘʟᴏᴀᴅᴇᴅ !", show_alert=True)
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
@@ -2795,7 +2795,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data.startswith("unalert"):
         ident, from_user = query.data.split("#")
         if int(query.from_user.id) == int(from_user):
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             await query.answer(f"Hᴇʏ {user.first_name}, Yᴏᴜʀ Rᴇᴏ̨ᴜᴇsᴛ ɪs Uɴᴀᴠᴀɪʟᴀʙʟᴇ !", show_alert=True)
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
