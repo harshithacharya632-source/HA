@@ -294,7 +294,15 @@ async def advantage_spoll_choker(bot, query):
     if gl == False:
         k = await manual_filters(bot, query.message, text=movie)
         if k == False:
-            spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}"
+            # ⚠️ Must NOT reuse the original message's key here. auto_filter()
+            # already cached an EMPTY result under "{chat_id}-{original_msg_id}"
+            # for the misspelled query (that's WHY this suggestion screen showed
+            # up at all) — reusing that same key just returns the stale empty
+            # cache hit instead of actually searching for the corrected name,
+            # so the button looked like it did nothing / said "not found" even
+            # though the corrected name is right. A key unique to this specific
+            # suggestion click guarantees a fresh search.
+            spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}-spol-{movie_}"
             files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=8)
             # ✅ Close the "Did you mean" suggestion prompt before showing
             # the fresh search, instead of editing it in place.
@@ -303,7 +311,7 @@ async def advantage_spoll_choker(bot, query):
             except Exception:
                 pass
             if files:
-                k = (movie, files, offset, total_results)
+                k = (spoll_key, movie, files, offset, total_results)
                 ai_search = True
                 reply_msg = await bot.send_message(query.message.chat.id, f"<b><i>Searching For {movie} 🔍</i></b>")
                 await auto_filter(bot, movie, query, reply_msg, ai_search, k)
@@ -3681,11 +3689,14 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
             return
     else:
         message = msg.message.reply_to_message  # msg will be callback query
-        search, files, offset, total_results = spoll
+        key_from_spoll, search, files, offset, total_results = spoll
         settings = await get_settings(message.chat.id)
         await msg.message.delete()
     pre = 'filep' if settings.get('file_secure', False) else 'file'
-    key = f"{message.chat.id}-{message.id}"
+    # spoll uses its own unique key (set in advantage_spoll_choker) so the
+    # corrected-name search never collides with the cache entry the original
+    # misspelled search already left behind under the plain message key.
+    key = key_from_spoll if spoll else f"{message.chat.id}-{message.id}"
     req = message.from_user.id if message.from_user else 0
     FRESH[key] = search
     SEASON_OWNER[key] = req
