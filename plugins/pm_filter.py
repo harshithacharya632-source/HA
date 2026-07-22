@@ -294,7 +294,15 @@ async def advantage_spoll_choker(bot, query):
     if gl == False:
         k = await manual_filters(bot, query.message, text=movie)
         if k == False:
-            spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}"
+            # ⚠️ Must NOT reuse the original message's key here. auto_filter()
+            # already cached an EMPTY result under "{chat_id}-{original_msg_id}"
+            # for the misspelled query (that's WHY this suggestion screen showed
+            # up at all) — reusing that same key just returns the stale empty
+            # cache hit instead of actually searching for the corrected name,
+            # so the button looked like it did nothing / said "not found" even
+            # though the corrected name is right. A key unique to this specific
+            # suggestion click guarantees a fresh search.
+            spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}-spol-{movie_}"
             files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=8)
             # ✅ Close the "Did you mean" suggestion prompt before showing
             # the fresh search, instead of editing it in place.
@@ -303,7 +311,7 @@ async def advantage_spoll_choker(bot, query):
             except Exception:
                 pass
             if files:
-                k = (movie, files, offset, total_results)
+                k = (spoll_key, movie, files, offset, total_results)
                 ai_search = True
                 reply_msg = await bot.send_message(query.message.chat.id, f"<b><i>Searching For {movie} 🔍</i></b>")
                 await auto_filter(bot, movie, query, reply_msg, ai_search, k)
@@ -735,6 +743,23 @@ def _extract_title_stem(words):
     return words[:6]
 
 
+def _series_title_from_raw(name: str):
+    """For a series file, everything BEFORE the season/episode marker
+    (S01E02, Season 3, ...) in the ORIGINAL filename IS the title —
+    quality/audio/codec/release-group junk (10bit, DDP5.1, AMZN, H265,
+    2CH, EON, or whatever a new group tags its files with) always comes
+    AFTER that marker. Cutting there gives one clean, stable title no
+    matter how the trailing junk varies from file to file, instead of
+    relying on STRIP_RE ever covering every possible tag (it can't) or
+    a flat word-count cap (which lets leftover junk words sneak into the
+    stem when the real title is short, e.g. 'House Of The Dragon').
+    Returns None if this doesn't look like a series file at all."""
+    m = SEASON_RE.search(name)
+    if not m:
+        return None
+    return name[:m.start()]
+
+
 def _sync_fetch_known_titles(limit):
     """col/sec_col are plain synchronous PyMongo collections (same as
     col.delete_one() / col.count_documents() used elsewhere in this file
@@ -752,7 +777,9 @@ def _sync_fetch_known_titles(limit):
                 name = doc.get("file_name")
                 if not name:
                     continue
-                base = clean_name(name)          # strips quality/season/tags, lowercases
+
+                series_raw = _series_title_from_raw(name)
+                base = clean_name(series_raw if series_raw is not None else name)
                 # Drop stray punctuation-only leftovers (e.g. a lone "."
                 # or "-" where a stripped extension/tag used to be).
                 words = [
@@ -761,7 +788,15 @@ def _sync_fetch_known_titles(limit):
                 ]
                 if not words:
                     continue
-                title = " ".join(_extract_title_stem(words)).strip()
+
+                if series_raw is not None:
+                    # Already cut at the season/episode marker — no
+                    # trailing junk possible, so keep every word as-is
+                    # (don't run the movie-only 6-word/year cap on it).
+                    title = " ".join(words).strip()
+                else:
+                    title = " ".join(_extract_title_stem(words)).strip()
+
                 if len(title) >= 2:
                     titles.add(title)
         except Exception as e:
@@ -2695,7 +2730,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                  InlineKeyboardButton("Vɪᴇᴡ Sᴛᴀᴛᴜs", url=f"{query.message.link}")
                ]]
         if query.from_user.id in ADMINS:
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             reply_markup = InlineKeyboardMarkup(btn)
             await query.message.edit_reply_markup(reply_markup)
             await query.answer("Hᴇʀᴇ ᴀʀᴇ ᴛʜᴇ ᴏᴘᴛɪᴏɴs !")
@@ -2712,7 +2747,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                  InlineKeyboardButton("Vɪᴇᴡ Sᴛᴀᴛᴜs", url=f"{query.message.link}")
                ]]
         if query.from_user.id in ADMINS:
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             reply_markup = InlineKeyboardMarkup(btn)
             content = query.message.text
             await query.message.edit_text(f"<b><strike>{content}</strike></b>")
@@ -2738,7 +2773,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                  InlineKeyboardButton("Rᴇᴏ̨ᴜᴇsᴛ Gʀᴏᴜᴘ Lɪɴᴋ", url="https://t.me/gofixmovie")
                ]]
         if query.from_user.id in ADMINS:
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             reply_markup = InlineKeyboardMarkup(btn)
             content = query.message.text
             await query.message.edit_text(f"<b><strike>{content}</strike></b>")
@@ -2763,7 +2798,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             InlineKeyboardButton("Rᴇᴏ̨ᴜᴇsᴛ Gʀᴏᴜᴘ Lɪɴᴋ", url="https://t.me/gofixmovie")
         ]]
         if query.from_user.id in ADMINS:
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             reply_markup = InlineKeyboardMarkup(btn)
             content = query.message.text
             await query.message.edit_text(f"<b><strike>{content}</strike></b>")
@@ -2779,7 +2814,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data.startswith("alalert"):
         ident, from_user = query.data.split("#")
         if int(query.from_user.id) == int(from_user):
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             await query.answer(f"Hᴇʏ {user.first_name}, Yᴏᴜʀ Rᴇᴏ̨ᴜᴇsᴛ ɪs Aʟʀᴇᴀᴅʏ Aᴠᴀɪʟᴀʙʟᴇ !", show_alert=True)
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
@@ -2787,7 +2822,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data.startswith("upalert"):
         ident, from_user = query.data.split("#")
         if int(query.from_user.id) == int(from_user):
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             await query.answer(f"Hᴇʏ {user.first_name}, Yᴏᴜʀ Rᴇᴏ̨ᴜᴇsᴛ ɪs Uᴘʟᴏᴀᴅᴇᴅ !", show_alert=True)
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
@@ -2795,7 +2830,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data.startswith("unalert"):
         ident, from_user = query.data.split("#")
         if int(query.from_user.id) == int(from_user):
-            user = await client.get_users(from_user)
+            user = await client.get_users(int(from_user))
             await query.answer(f"Hᴇʏ {user.first_name}, Yᴏᴜʀ Rᴇᴏ̨ᴜᴇsᴛ ɪs Uɴᴀᴠᴀɪʟᴀʙʟᴇ !", show_alert=True)
         else:
             await query.answer("Yᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ sᴜғғɪᴄɪᴀɴᴛ ʀɪɢᴛs ᴛᴏ ᴅᴏ ᴛʜɪs !", show_alert=True)
@@ -3654,11 +3689,14 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
             return
     else:
         message = msg.message.reply_to_message  # msg will be callback query
-        search, files, offset, total_results = spoll
+        key_from_spoll, search, files, offset, total_results = spoll
         settings = await get_settings(message.chat.id)
         await msg.message.delete()
     pre = 'filep' if settings.get('file_secure', False) else 'file'
-    key = f"{message.chat.id}-{message.id}"
+    # spoll uses its own unique key (set in advantage_spoll_choker) so the
+    # corrected-name search never collides with the cache entry the original
+    # misspelled search already left behind under the plain message key.
+    key = key_from_spoll if spoll else f"{message.chat.id}-{message.id}"
     req = message.from_user.id if message.from_user else 0
     FRESH[key] = search
     SEASON_OWNER[key] = req

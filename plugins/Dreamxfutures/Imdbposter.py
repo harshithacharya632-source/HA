@@ -193,7 +193,7 @@ async def get_movie_details(query, id=False, file=None):
         logger.exception(f"An error occurred in get_movie_details: {e}")
         return None
 
-async def _search_youtube_trailer(session: aiohttp.ClientSession, title: str, year: int = None) -> str:
+async def search_youtube_trailer(session: aiohttp.ClientSession, title: str, year: int = None) -> str:
     """Search YouTube for trailer using scraping — no API key needed."""
     try:
         import urllib.parse
@@ -305,7 +305,7 @@ async def get_movie_detailsx(query, id=False, file=None):
 
             # Fallback: YouTube search if TMDB has no trailer
             if not trailer_url:
-                trailer_url = await _search_youtube_trailer(session, title, int(year) if year else None)
+                trailer_url = await search_youtube_trailer(session, title, int(year) if year else None)
                 if trailer_url:
                     logger.info(f"YouTube search fallback trailer for '{title}': {trailer_url}")
 

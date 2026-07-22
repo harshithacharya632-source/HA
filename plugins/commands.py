@@ -1115,18 +1115,18 @@ async def requests(bot, message):
         content = message.reply_to_message.text
         try:
             if REQST_CHANNEL is not None:
-                btn = [[
-                    InlineKeyboardButton('View Request', url=f"{message.reply_to_message.link}"),
-                    InlineKeyboardButton('Show Options', callback_data=f'show_option#{reporter}')
-                ]]
+                btn_row = [InlineKeyboardButton('Show Options', callback_data=f'show_option#{reporter}')]
+                if message.reply_to_message.link:
+                    btn_row.insert(0, InlineKeyboardButton('View Request', url=message.reply_to_message.link))
+                btn = [btn_row]
                 reported_post = await bot.send_message(chat_id=REQST_CHANNEL, text=f"<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
                 success = True
             elif len(content) >= 3:
                 for admin in ADMINS:
-                    btn = [[
-                        InlineKeyboardButton('View Request', url=f"{message.reply_to_message.link}"),
-                        InlineKeyboardButton('Show Options', callback_data=f'show_option#{reporter}')
-                    ]]
+                    btn_row = [InlineKeyboardButton('Show Options', callback_data=f'show_option#{reporter}')]
+                    if message.reply_to_message.link:
+                        btn_row.insert(0, InlineKeyboardButton('View Request', url=message.reply_to_message.link))
+                    btn = [btn_row]
                     reported_post = await bot.send_message(chat_id=admin, text=f"<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
                     success = True
             else:
@@ -1156,18 +1156,18 @@ async def requests(bot, message):
         content = re.sub(rf"@{re.escape(bot_username)}", "", content, flags=re.IGNORECASE).strip()
         try:
             if REQST_CHANNEL is not None and len(content) >= 3:
-                btn = [[
-                    InlineKeyboardButton('View Request', url=f"{message.link}"),
-                    InlineKeyboardButton('Show Options', callback_data=f'show_option#{reporter}')
-                ]]
+                btn_row = [InlineKeyboardButton('Show Options', callback_data=f'show_option#{reporter}')]
+                if message.link:
+                    btn_row.insert(0, InlineKeyboardButton('View Request', url=message.link))
+                btn = [btn_row]
                 reported_post = await bot.send_message(chat_id=REQST_CHANNEL, text=f"<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
                 success = True
             elif len(content) >= 3:
                 for admin in ADMINS:
-                    btn = [[
-                        InlineKeyboardButton('View Request', url=f"{message.link}"),
-                        InlineKeyboardButton('Show Options', callback_data=f'show_option#{reporter}')
-                    ]]
+                    btn_row = [InlineKeyboardButton('Show Options', callback_data=f'show_option#{reporter}')]
+                    if message.link:
+                        btn_row.insert(0, InlineKeyboardButton('View Request', url=message.link))
+                    btn = [btn_row]
                     reported_post = await bot.send_message(chat_id=admin, text=f"<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
                     success = True
             else:
@@ -1184,10 +1184,10 @@ async def requests(bot, message):
     
     if success:
         link = await bot.create_chat_invite_link(int(REQST_CHANNEL))
-        btn = [[
-            InlineKeyboardButton('Join Channel', url=link.invite_link),
-            InlineKeyboardButton('View Request', url=f"{reported_post.link}")
-        ]]
+        btn_row = [InlineKeyboardButton('Join Channel', url=link.invite_link)]
+        if reported_post.link:
+            btn_row.append(InlineKeyboardButton('View Request', url=reported_post.link))
+        btn = [btn_row]
         await message.reply_text("<b>Your request has been added! Please wait for some time.\n\nJoin Channel First & View Request</b>", reply_markup=InlineKeyboardMarkup(btn))
     
 @Client.on_message(filters.command("send") & filters.user(ADMINS))
