@@ -623,6 +623,12 @@ async def verify_user(bot, userid, token):
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
     VERIFIED[user.id] = str(today)
+    # Persist to DB too, so verification survives a bot restart/redeploy —
+    # the in-memory VERIFIED dict alone is wiped whenever the process restarts.
+    try:
+        await db.set_verified(user.id, str(today))
+    except Exception as e:
+        logger.warning(f"[VERIFY] Failed to persist verification to DB for {user.id}: {e}")
     return PENDING.pop(user.id, None)
 
 
@@ -640,12 +646,19 @@ async def check_verification(bot, userid):
         EXP = VERIFIED[user.id]
         years, month, day = EXP.split('-')
         comp = date(int(years), int(month), int(day))
-        if comp < today:
-            return False
-        else:
+        if comp >= today:
             return True
-    else:
-        return False
+        else:
+            return False
+    # Not in the in-memory cache (most likely the bot restarted and lost it) —
+    # fall back to the persistent DB record before concluding "not verified".
+    try:
+        if await db.is_verified_today(user.id):
+            VERIFIED[user.id] = str(today)  # repopulate the fast in-memory cache
+            return True
+    except Exception as e:
+        logger.warning(f"[VERIFY] DB fallback check failed for {user.id}: {e}")
+    return False
 
 # ================== [PREMIUM FEATURE GATE] ==================
 # Master switch: PREMIUM_AND_REFERAL_MODE (info.py / env var).
