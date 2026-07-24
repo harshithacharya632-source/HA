@@ -6,7 +6,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerIdInvalid, QueryIdInvalid, MessageIdInvalid
 from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
-from utils import get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap
+from utils import get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap, is_premium_user
 from database.users_chats_db import db
 from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files
 from database.filters_mdb import del_all, find_filter, get_filters
@@ -28,6 +28,17 @@ BUTTONS0 = {}
 BUTTONS1 = {}
 BUTTONS2 = {}
 SPELL_CHECK = {}
+
+async def build_searching_text(message):
+    """Searching... placeholder text, with an extra-attention premium badge
+    on top when the searcher is a premium user."""
+    if message.from_user and await is_premium_user(message.from_user.id):
+        return (
+            f"👑 <b>PREMIUM USER SEARCH</b> 👑\n"
+            f"⭐ {message.from_user.mention} ⭐\n\n"
+            f"<b><i>Searching For {message.text} 🔍</i></b>"
+        )
+    return f"<b><i>Searching For {message.text} 🔍</i></b>"
 
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
@@ -63,7 +74,7 @@ async def give_filter(client, message):
             try:
                 if settings['auto_ffilter']:
                     ai_search = True
-                    reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
+                    reply_msg = await message.reply_text(await build_searching_text(message))
                     try:
                         await auto_filter(client, message.text, message, reply_msg, ai_search)
                     except Exception as e:
@@ -78,7 +89,7 @@ async def give_filter(client, message):
                 settings = await get_settings(message.chat.id)
                 if settings['auto_ffilter']:
                     ai_search = True
-                    reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
+                    reply_msg = await message.reply_text(await build_searching_text(message))
                     try:
                         await auto_filter(client, message.text, message, reply_msg, ai_search)
                     except Exception as e:
@@ -107,10 +118,21 @@ async def pm_text(bot, message):
     content = message.text
     user = message.from_user.first_name
     user_id = message.from_user.id
-    if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags 
-    if PM_SEARCH == True:
+    if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
+
+    # PM search rule:
+    #  - PREMIUM_AND_REFERAL_MODE == False -> legacy behaviour, PM_SEARCH toggle
+    #    decides for everyone (unchanged from before).
+    #  - PREMIUM_AND_REFERAL_MODE == True  -> only premium users can search in
+    #    PM. Verified (VERIFY-passed) but non-premium users must search in group.
+    if PREMIUM_AND_REFERAL_MODE:
+        pm_search_allowed = await is_premium_user(user_id)
+    else:
+        pm_search_allowed = PM_SEARCH
+
+    if pm_search_allowed:
         ai_search = True
-        reply_msg = await bot.send_message(message.from_user.id, f"<b><i>Searching For {content} 🔍</i></b>", reply_to_message_id=message.id)
+        reply_msg = await bot.send_message(message.from_user.id, await build_searching_text(message), reply_to_message_id=message.id)
         try:
             await auto_filter(bot, content, message, reply_msg, ai_search)
         except Exception as e:
@@ -121,6 +143,16 @@ async def pm_text(bot, message):
                 )
             except Exception:
                 pass
+    elif PREMIUM_AND_REFERAL_MODE:
+        await message.reply_text(
+            f"🔒 <b>PM Search Is A Premium Feature</b>\n\n"
+            f"ʜᴇʏ {message.from_user.mention}, sᴇᴀʀᴄʜɪɴɢ ɪɴ ᴘᴍ ɪs ᴏɴʟʏ ᴀᴠᴀɪʟᴀʙʟᴇ ғᴏʀ ᴘʀᴇᴍɪᴜᴍ ᴜsᴇʀs.\n\n"
+            f"➜ Search in our group instead, or buy premium with /plan to unlock PM search.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 Search In Group", url=GRP_LNK)],
+                [InlineKeyboardButton("ᯓ★ Get Premium ★ᯓ", callback_data="subscription")]
+            ])
+        )
     else:
         await message.reply_text(
             f"👋 <b>Hello {message.from_user.mention}!</b>\n\n"
@@ -2837,7 +2869,14 @@ async def cb_handler(client: Client, query: CallbackQuery):
 # START HERE
     elif query.data.startswith("generate_stream_link"):
         _, file_id = query.data.split(":", 1)
-    
+
+        if not await is_premium_user(query.from_user.id):
+            await query.answer(
+                "🔒 Stream & Download link is a Premium-only feature.\n\nBuy premium with /plan to unlock it.",
+                show_alert=True
+            )
+            return
+
         try:
             log_msg = await client.send_cached_media(
                 chat_id=LOG_CHANNEL,
@@ -3751,12 +3790,14 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
             [InlineKeyboardButton(text="𝐍𝐎 𝐌𝐎𝐑𝐄 𝐏𝐀𝐆𝐄𝐒 𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄",callback_data="pages")]
         )
     imdb = await get_poster(search, file=(files[0])['file_name']) if settings["imdb"] else None
+    requester_is_premium = bool(message.from_user) and await is_premium_user(message.from_user.id)
+    premium_badge = "👑 <u>ᴘʀᴇᴍɪᴜᴍ ᴜsᴇʀ ʀᴇǫᴜᴇsᴛ</u> 👑\n" if requester_is_premium else ""
     cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
     remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
     TEMPLATE = script.IMDB_TEMPLATE_TXT
     if imdb:
-        cap = TEMPLATE.format(
+        cap = premium_badge + TEMPLATE.format(
             qurey=search,
             title=imdb['title'],
             votes=imdb['votes'],
@@ -3797,9 +3838,9 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
     else:
         user_mention = message.from_user.mention if message.from_user else "Anonymous"
         if settings["button"]:
-            cap = f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
+            cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
         else:
-            cap = f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
+            cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
             cap += "<b><u>🍿 Your Movie Files 👇</u></b>\n"
             for file in files:
                 cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
