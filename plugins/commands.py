@@ -25,12 +25,12 @@ join_db = JoinReqs
 
 async def build_stream_reply_markup(user_id, file_id):
     """Stream/Watch button + Audio & Subs Info button.
-    Premium-only feature (see PREMIUM_AND_REFERAL_MODE in info.py).
-    Returns None if STREAM_MODE is off, or if the user isn't premium
-    while PREMIUM_AND_REFERAL_MODE is True."""
+    The buttons are always shown to everyone (as long as STREAM_MODE is on) —
+    the premium check happens when the button is actually TAPPED, inside the
+    generate_stream_link (plugins/pm_filter.py) and extract_data
+    (plugins/extract.py) callback handlers, which alert non-premium users
+    that it's a premium-only feature."""
     if not STREAM_MODE:
-        return None
-    if not await is_premium_user(user_id):
         return None
     button = [
         [InlineKeyboardButton(
@@ -489,10 +489,22 @@ async def start(client, message):
             if PREMIUM_AND_REFERAL_MODE == True:
                 text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"           
             await message.reply_text(text=text.format(message.from_user.mention), protect_content=True)
+            resume_data = None
             try:
-                await verify_user(client, userid, token)
+                resume_data = await verify_user(client, userid, token)
             except Exception as e:
                 logger.error(f"verify_user failed for user {userid}: {e}")
+            if resume_data:
+                try:
+                    await client.send_message(
+                        chat_id=message.from_user.id,
+                        text="<b>📥 Here's the file you requested:</b>",
+                        reply_markup=InlineKeyboardMarkup(
+                            [[InlineKeyboardButton("✅ ɢᴇᴛ ʏᴏᴜʀ ғɪʟᴇ", url=f"https://telegram.me/{temp.U_NAME}?start={resume_data}")]]
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send resume-file button for user {userid}: {e}")
         else:
             return await message.reply_text(text="<b>ɪɴᴠᴀʟɪᴅ ʟɪɴᴋ ᴏʀ ᴇxᴘɪʀᴇᴅ ʟɪɴᴋ</b>", protect_content=True)
             
@@ -556,7 +568,7 @@ async def start(client, message):
             if not await db.has_premium_access(message.from_user.id):
                 if not await check_verification(client, message.from_user.id) and VERIFY == True:
                     btn = [[
-                        InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                        InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", pending_data=data))
                     ],[
                         InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
                     ]]
@@ -620,7 +632,7 @@ async def start(client, message):
             if not await db.has_premium_access(message.from_user.id):
                 if not await check_verification(client, message.from_user.id) and VERIFY == True:
                     btn = [[
-                        InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                        InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", pending_data=data))
                     ],[
                         InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
                     ]]
@@ -676,7 +688,7 @@ async def start(client, message):
     if not await db.has_premium_access(message.from_user.id):
         if not await check_verification(client, message.from_user.id) and VERIFY == True:
             btn = [[
-                InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", pending_data=data))
             ],[
                 InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
             ]]
