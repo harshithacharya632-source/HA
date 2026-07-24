@@ -177,9 +177,12 @@ async def next_page(bot, query):
     except:
         offset = 0
     search = FRESH.get(key)
-   # if not search:
-      #  await query.answer(script.OLD_ALRT_TXT.format(query.from_user.first_name),show_alert=True)
-       # return
+    if not search:
+        try:
+            await query.answer("⚠️ This search has expired. Please search again.", show_alert=True)
+        except Exception:
+            pass
+        return
 
     files, n_offset, total = await get_ranked_page(query.message.chat.id, key, search, offset=offset, max_results=8)
     try:
