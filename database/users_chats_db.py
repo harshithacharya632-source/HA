@@ -279,6 +279,31 @@ class Database:
         })
         return count
 
+    # ================== [PERSISTENT DAILY VERIFICATION] ==================
+    # These mirror the free-trial/premium pattern above but store the
+    # "verified until" date in Mongo instead of an in-memory dict, so
+    # verification status survives bot restarts/redeploys.
+    async def set_verified(self, user_id, expiry_date_str):
+        await self.users.update_one(
+            {"id": user_id},
+            {"$set": {"verified_until": expiry_date_str}},
+            upsert=True
+        )
+
+    async def is_verified_today(self, user_id):
+        user_data = await self.get_user(user_id)
+        if not user_data:
+            return False
+        expiry_date_str = user_data.get("verified_until")
+        if not expiry_date_str:
+            return False
+        try:
+            years, month, day = expiry_date_str.split('-')
+            comp = datetime.date(int(years), int(month), int(day))
+        except Exception:
+            return False
+        return comp >= datetime.date.today()
+
     async def set_thumbnail(self, id, file_id):
         await self.col.update_one({'id': int(id)}, {'$set': {'file_id': file_id}})
 
