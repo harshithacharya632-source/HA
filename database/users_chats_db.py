@@ -279,6 +279,23 @@ class Database:
         })
         return count
 
+    async def extend_all_premium_users(self, days):
+        """Extend expiry_time by `days` for every user with CURRENTLY ACTIVE
+        premium (used for e.g. compensating users after server downtime).
+        Returns the list of user ids that were extended."""
+        now = datetime.datetime.now()
+        extended_ids = []
+        cursor = self.users.find({"expiry_time": {"$gt": now}})
+        async for user_data in cursor:
+            uid = user_data["id"]
+            old_expiry = user_data.get("expiry_time")
+            if not isinstance(old_expiry, datetime.datetime):
+                continue
+            new_expiry = old_expiry + datetime.timedelta(days=days)
+            await self.users.update_one({"id": uid}, {"$set": {"expiry_time": new_expiry}})
+            extended_ids.append(uid)
+        return extended_ids
+
     # ================== [PERSISTENT DAILY VERIFICATION] ==================
     # These mirror the free-trial/premium pattern above but store the
     # "verified until" date in Mongo instead of an in-memory dict, so
