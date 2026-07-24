@@ -45,7 +45,7 @@ def format_track(lang: str | None, title: str | None) -> str:
     return "und"
 
 
-@Client.on_callback_query(filters.regex(r"^extract_data"), group=2)
+@Client.on_callback_query(filters.regex(r"^extract_data"), group=0)
 async def extract_data_handler(client: Client, query: CallbackQuery):
     if not await is_premium_user(query.from_user.id):
         try:
