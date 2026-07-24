@@ -8,7 +8,7 @@ from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file
 from database.users_chats_db import db, delete_all_referal_users, get_referal_users_count, get_referal_all_users, referal_add_user
 from database.join_reqs import JoinReqs
 from info import CLONE_MODE, OWNER_LNK, REACTIONS, CHANNELS, REQUEST_TO_JOIN_MODE, TRY_AGAIN_BTN, ADMINS, SHORTLINK_MODE, PREMIUM_AND_REFERAL_MODE, STREAM_MODE, AUTH_CHANNEL, REFERAL_PREMEIUM_TIME, REFERAL_COUNT, PAYMENT_TEXT, PAYMENT_QR, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, CHNL_LNK, GRP_LNK, REQST_CHANNEL, SUPPORT_CHAT, MAX_B_TN, VERIFY, SHORTLINK_API, SHORTLINK_URL, TUTORIAL, VERIFY_TUTORIAL, IS_TUTORIAL, URL
-from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds
+from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds, is_premium_user
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
 from database.users_chats_db import db
@@ -21,6 +21,28 @@ logger = logging.getLogger(__name__)
 
 BATCH_FILES = {}
 join_db = JoinReqs
+
+
+async def build_stream_reply_markup(user_id, file_id):
+    """Stream/Watch button + Audio & Subs Info button.
+    Premium-only feature (see PREMIUM_AND_REFERAL_MODE in info.py).
+    Returns None if STREAM_MODE is off, or if the user isn't premium
+    while PREMIUM_AND_REFERAL_MODE is True."""
+    if not STREAM_MODE:
+        return None
+    if not await is_premium_user(user_id):
+        return None
+    button = [
+        [InlineKeyboardButton(
+            'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+            callback_data=f'generate_stream_link:{file_id}'
+        )],
+        [InlineKeyboardButton(
+            'ℹ️ AUDIO & SUBS INFO',
+            callback_data=f'extract_data:{file_id}'
+        )]
+    ]
+    return InlineKeyboardMarkup(button)
 
 @Client.on_chat_member_updated(filters.group)
 async def bot_added_to_group_log(client, chat_member_updated):
@@ -337,13 +359,13 @@ async def start(client, message):
             if f_caption is None:
                 f_caption = f"{title}"
             try:
-                if STREAM_MODE == True:
+                user_is_premium = await is_premium_user(message.from_user.id)
+                if STREAM_MODE == True and user_is_premium:
                     log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=msg.get("file_id"))
                     fileName = {quote_plus(get_name(log_msg))}
                     stream = f"{URL}/watch/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
                     download = f"{URL}/download/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
 
-                if STREAM_MODE == True:
                     button = [[
                         InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
                         InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
@@ -409,13 +431,13 @@ async def start(client, message):
                     except:
                         f_caption = getattr(msg, 'caption', '')
                 file_id = file.file_id
-                if STREAM_MODE == True:
+                user_is_premium = await is_premium_user(message.from_user.id)
+                if STREAM_MODE == True and user_is_premium:
                     log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
                     fileName = {quote_plus(get_name(log_msg))}
                     stream = f"{URL}/watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
                     download = f"{URL}/download/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
- 
-                if STREAM_MODE == True:
+
                     button = [[
                         InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
                         InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
@@ -541,22 +563,7 @@ async def start(client, message):
                     )
                     return
                     
-            if STREAM_MODE == True:
-                button = [
-                    [InlineKeyboardButton(
-                        'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-                        callback_data=f'generate_stream_link:{file_id}'
-                    )],
-                    [InlineKeyboardButton(
-                        'ℹ️ AUDIO & SUBS INFO',
-                        callback_data=f'extract_data:{file_id}'
-                    )]
-                ]
-                
-                reply_markup = InlineKeyboardMarkup(button)
-####
-            else:
-                reply_markup = None
+            reply_markup = await build_stream_reply_markup(message.from_user.id, file_id)
 
             msg = await client.send_cached_media(
                 chat_id=message.from_user.id,
@@ -620,23 +627,7 @@ async def start(client, message):
                     )
                     return
                    
-            if STREAM_MODE == True:
-                button = [
-                    [InlineKeyboardButton(
-                        'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-                        callback_data=f'generate_stream_link:{file_id}'
-                    )],
-                    [InlineKeyboardButton(
-                        'ℹ️ AUDIO & SUBS INFO',
-                        callback_data=f'extract_data:{file_id}'
-                    )]
-                ]
-                
-                reply_markup = InlineKeyboardMarkup(button)
-
-
-            else:
-                reply_markup = None
+            reply_markup = await build_stream_reply_markup(message.from_user.id, file_id)
 
             msg = await client.send_cached_media(
                 chat_id=message.from_user.id,
@@ -692,23 +683,7 @@ async def start(client, message):
             )
             return
             
-    if STREAM_MODE == True:
-        button = [
-            [InlineKeyboardButton(
-                'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-                callback_data=f'generate_stream_link:{file_id}'
-            )],
-            [InlineKeyboardButton(
-                'ℹ️ AUDIO & SUBS INFO',
-                callback_data=f'extract_data:{file_id}'
-            )]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(button)
-
-
-    else:
-        reply_markup = None
+    reply_markup = await build_stream_reply_markup(message.from_user.id, file_id)
 
     try:
         msg = await client.send_cached_media(
@@ -1107,6 +1082,8 @@ async def save_template(client, message):
 @Client.on_message((filters.command(["request", "Request"]) | filters.regex("#request") | filters.regex("#Request")) & (filters.group | filters.private))
 async def requests(bot, message):
     if REQST_CHANNEL is None: return # Must add REQST_CHANNEL to use this feature
+    requester_is_premium = await is_premium_user(message.from_user.id)
+    request_prefix = "🌟🔥 <u><b>PREMIUM USER REQUEST — HANDLE FAST</b></u> 🔥🌟\n\n" if requester_is_premium else ""
     if message.reply_to_message:
         chat_id = message.chat.id
         reporter = str(message.from_user.id)
@@ -1119,7 +1096,12 @@ async def requests(bot, message):
                 if message.reply_to_message.link:
                     btn_row.insert(0, InlineKeyboardButton('View Request', url=message.reply_to_message.link))
                 btn = [btn_row]
-                reported_post = await bot.send_message(chat_id=REQST_CHANNEL, text=f"<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
+                reported_post = await bot.send_message(chat_id=REQST_CHANNEL, text=f"{request_prefix}<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
+                if requester_is_premium:
+                    try:
+                        await bot.pin_chat_message(REQST_CHANNEL, reported_post.id, disable_notification=False)
+                    except Exception:
+                        pass
                 success = True
             elif len(content) >= 3:
                 for admin in ADMINS:
@@ -1127,7 +1109,7 @@ async def requests(bot, message):
                     if message.reply_to_message.link:
                         btn_row.insert(0, InlineKeyboardButton('View Request', url=message.reply_to_message.link))
                     btn = [btn_row]
-                    reported_post = await bot.send_message(chat_id=admin, text=f"<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
+                    reported_post = await bot.send_message(chat_id=admin, text=f"{request_prefix}<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
                     success = True
             else:
                 if len(content) < 3:
@@ -1160,7 +1142,12 @@ async def requests(bot, message):
                 if message.link:
                     btn_row.insert(0, InlineKeyboardButton('View Request', url=message.link))
                 btn = [btn_row]
-                reported_post = await bot.send_message(chat_id=REQST_CHANNEL, text=f"<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
+                reported_post = await bot.send_message(chat_id=REQST_CHANNEL, text=f"{request_prefix}<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
+                if requester_is_premium:
+                    try:
+                        await bot.pin_chat_message(REQST_CHANNEL, reported_post.id, disable_notification=False)
+                    except Exception:
+                        pass
                 success = True
             elif len(content) >= 3:
                 for admin in ADMINS:
@@ -1168,7 +1155,7 @@ async def requests(bot, message):
                     if message.link:
                         btn_row.insert(0, InlineKeyboardButton('View Request', url=message.link))
                     btn = [btn_row]
-                    reported_post = await bot.send_message(chat_id=admin, text=f"<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
+                    reported_post = await bot.send_message(chat_id=admin, text=f"{request_prefix}<b>𝖱𝖾𝗉𝗈𝗋𝗍𝖾𝗋 : {mention} ({reporter})\n\n𝖬𝖾𝗌𝗌𝖺𝗀𝖾 : {content}</b>", reply_markup=InlineKeyboardMarkup(btn))
                     success = True
             else:
                 if len(content) < 3:
@@ -1188,7 +1175,12 @@ async def requests(bot, message):
         if reported_post.link:
             btn_row.append(InlineKeyboardButton('View Request', url=reported_post.link))
         btn = [btn_row]
-        await message.reply_text("<b>Your request has been added! Please wait for some time.\n\nJoin Channel First & View Request</b>", reply_markup=InlineKeyboardMarkup(btn))
+        confirm_text = (
+            "<b>🌟 Your PREMIUM request has been fast-tracked & pinned! Our team will handle it on priority.\n\nJoin Channel First & View Request</b>"
+            if requester_is_premium else
+            "<b>Your request has been added! Please wait for some time.\n\nJoin Channel First & View Request</b>"
+        )
+        await message.reply_text(confirm_text, reply_markup=InlineKeyboardMarkup(btn))
     
 @Client.on_message(filters.command("send") & filters.user(ADMINS))
 async def send_msg(bot, message):
