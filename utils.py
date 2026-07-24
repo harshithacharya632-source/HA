@@ -605,6 +605,23 @@ async def check_verification(bot, userid):
             return True
     else:
         return False
+
+# ================== [PREMIUM FEATURE GATE] ==================
+# Master switch: PREMIUM_AND_REFERAL_MODE (info.py / env var).
+#
+#   PREMIUM_AND_REFERAL_MODE = False -> premium system is OFF completely.
+#       Every premium-only feature (stream button, audio/subs info,
+#       PM search, request priority) behaves as if EVERY user is
+#       premium, i.e. it works the same for all users.
+#
+#   PREMIUM_AND_REFERAL_MODE = True -> premium system is ON.
+#       Only users with an active premium subscription (db.has_premium_access)
+#       get the premium-only features; everyone else is treated as a normal user.
+async def is_premium_user(user_id):
+    if not PREMIUM_AND_REFERAL_MODE:
+        return True
+    return await db.has_premium_access(user_id)
+
 # ================== [FILE SHORTENER — INDIAEARNX] ==================
 
 async def shorten_with_shrinkme(link):
