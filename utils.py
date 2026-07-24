@@ -544,11 +544,35 @@ async def get_verify_shorted_link(link, url, api):
 
 # ================== [VERIFICATION SYSTEM] ==================
 
+class _FallbackUser:
+    """Minimal stand-in for a Pyrogram User when bot.get_users() can't
+    resolve the peer (e.g. Telegram raises BOT_METHOD_INVALID /
+    'Phone number not found' for peers the bot hasn't cached yet).
+    Only `.id`, `.first_name` and `.mention` are used by the verification
+    functions below, so this is enough to keep verification working even
+    when the live lookup fails."""
+    def __init__(self, uid):
+        self.id = int(uid)
+        self.first_name = "User"
+        self.mention = f"[User](tg://user?id={self.id})"
+
+
+async def _resolve_user(bot, userid):
+    try:
+        return await bot.get_users(userid)
+    except Exception as e:
+        logger.warning(f"[VERIFY] bot.get_users({userid}) failed ({e}); using fallback user object.")
+        return _FallbackUser(userid)
+
+
 async def check_token(bot, userid, token):
-    user = await bot.get_users(userid)
+    user = await _resolve_user(bot, userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        try:
+            await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        except Exception:
+            pass
     if user.id in TOKENS.keys():
         TKN = TOKENS[user.id]
         if token in TKN.keys():
@@ -562,10 +586,13 @@ async def check_token(bot, userid, token):
 
 
 async def get_token(bot, userid, link):
-    user = await bot.get_users(userid)
+    user = await _resolve_user(bot, userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        try:
+            await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        except Exception:
+            pass
     token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
     TOKENS[user.id] = {token: False}
     link = f"{link}verify-{user.id}-{token}"
@@ -578,10 +605,13 @@ async def get_token(bot, userid, link):
 
 
 async def verify_user(bot, userid, token):
-    user = await bot.get_users(userid)
+    user = await _resolve_user(bot, userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        try:
+            await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        except Exception:
+            pass
     TOKENS[user.id] = {token: True}
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
@@ -589,10 +619,13 @@ async def verify_user(bot, userid, token):
 
 
 async def check_verification(bot, userid):
-    user = await bot.get_users(userid)
+    user = await _resolve_user(bot, userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
-        await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        try:
+            await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
+        except Exception:
+            pass
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
     if user.id in VERIFIED.keys():
