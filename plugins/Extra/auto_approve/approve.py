@@ -7,7 +7,7 @@ from database.ia_filterdb import get_file_details, unpack_new_file_id, get_bad_f
 from database.users_chats_db import db, delete_all_referal_users, get_referal_users_count, get_referal_all_users, referal_add_user
 from database.join_reqs import JoinReqs
 from info import *
-from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds
+from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds, is_premium_user
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
@@ -15,6 +15,16 @@ logger = logging.getLogger(__name__)
 
 BATCH_FILES = {}
 join_db = JoinReqs
+
+
+async def build_stream_reply_markup(user_id, file_id):
+    """Same premium-gated stream button used in plugins/commands.py."""
+    if not STREAM_MODE:
+        return None
+    if not await is_premium_user(user_id):
+        return None
+    button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id}')]]
+    return InlineKeyboardMarkup(button)
 
 @Client.on_chat_join_request((filters.group | filters.channel))
 async def auto_approve(client, message: ChatJoinRequest):
@@ -136,7 +146,7 @@ async def auto_approve(client, message: ChatJoinRequest):
             if f_caption is None:
                 f_caption = f"{title}"
             try:
-                if STREAM_MODE:
+                if STREAM_MODE and await is_premium_user(message.from_user.id):
                     # Send file to log channel
                     log_msg = await client.send_cached_media(
                         chat_id=LOG_CHANNEL,
@@ -230,13 +240,13 @@ async def auto_approve(client, message: ChatJoinRequest):
                     except:
                         f_caption = getattr(msg, 'caption', '')
                 file_id = file.file_id
-                if STREAM_MODE == True:
+                user_is_premium = await is_premium_user(message.from_user.id)
+                if STREAM_MODE == True and user_is_premium:
                     log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
                     fileName = {quote_plus(get_name(log_msg))}
                     stream = f"{URL}/watch/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
                     download = f"{URL}/download/{str(log_msg.chat.id)}/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
- 
-                if STREAM_MODE == True:
+
                     button = [[
                         InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
                         InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
@@ -360,11 +370,7 @@ async def auto_approve(client, message: ChatJoinRequest):
                         reply_markup=InlineKeyboardMarkup(btn)
                     )
                     return
-            if STREAM_MODE == True:
-                button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id}')]]
-                reply_markup=InlineKeyboardMarkup(button)
-            else:
-                reply_markup = None
+            reply_markup = await build_stream_reply_markup(message.from_user.id, file_id)
             msg = await client.send_cached_media(
                 chat_id=message.from_user.id,
                 file_id=file_id,
@@ -424,11 +430,7 @@ async def auto_approve(client, message: ChatJoinRequest):
                         reply_markup=InlineKeyboardMarkup(btn)
                     )
                     return
-            if STREAM_MODE == True:
-                button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id}')]]
-                reply_markup=InlineKeyboardMarkup(button)
-            else:
-                reply_markup = None
+            reply_markup = await build_stream_reply_markup(message.from_user.id, file_id)
             msg = await client.send_cached_media(
                 chat_id=message.from_user.id,
                 file_id=file_id,
@@ -483,11 +485,7 @@ async def auto_approve(client, message: ChatJoinRequest):
                 reply_markup=InlineKeyboardMarkup(btn)
             )
             return
-    if STREAM_MODE == True:
-        button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id}')]]
-        reply_markup=InlineKeyboardMarkup(button)
-    else:
-        reply_markup = None
+    reply_markup = await build_stream_reply_markup(message.from_user.id, file_id)
     msg = await client.send_cached_media(
         chat_id=message.from_user.id,
         file_id=file_id,
@@ -500,4 +498,4 @@ async def auto_approve(client, message: ChatJoinRequest):
     await asyncio.sleep(60)
     await msg.delete()
     await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>",reply_markup=InlineKeyboardMarkup(btn))
-    return   
+    return
