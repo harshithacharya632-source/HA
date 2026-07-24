@@ -852,6 +852,68 @@ async def set_movie_update_notification(client, message):
 #end here 
 
 
+@Client.on_message(filters.command('extend_premium') & filters.user(ADMINS))
+async def extend_premium_cmd(client, message):
+    """Extend EVERY currently-active premium user's expiry by N days, and DM
+    each of them a notice — with a reason line only if one was given.
+
+    Usage:
+      /extend_premium 2                         -> extends 2 days, no reason shown
+      /extend_premium 2 Server was down today   -> extends 2 days, shows the reason
+      /extend_premium 1day Server down          -> "1day" also works
+    """
+    if len(message.command) < 2:
+        return await message.reply_text(
+            "<b>Usage:</b> <code>/extend_premium 2 [reason]</code>\n\n"
+            "Extends every currently-active premium user's expiry by that many days.\n"
+            "The reason is optional — if you don't add one, no reason line is shown to users."
+        )
+
+    days_match = re.search(r'\d+', message.command[1])
+    if not days_match:
+        return await message.reply_text(
+            "<b>❌ Please specify a valid number of days.</b>\n\nExample: <code>/extend_premium 2 Server down for maintenance</code>"
+        )
+    days = int(days_match.group())
+    if days <= 0:
+        return await message.reply_text("<b>❌ Days must be a positive number.</b>")
+
+    reason = ""
+    if len(message.command) > 2:
+        reason = " ".join(message.command[2:]).strip()
+
+    sts = await message.reply_text(f"<b>⏳ Extending premium by {days} day(s) for all premium users...</b>")
+
+    try:
+        extended_ids = await db.extend_all_premium_users(days)
+    except Exception as e:
+        logger.error(f"extend_all_premium_users failed: {e}")
+        return await sts.edit_text("<b>❌ Something went wrong while extending premium. Check the logs.</b>")
+
+    if not extended_ids:
+        return await sts.edit_text("<b>ℹ️ No active premium users found to extend.</b>")
+
+    day_word = "day" if days == 1 else "days"
+    notice = f"<b>🎉 Your premium has been extended by {days} {day_word}!</b>"
+    if reason:
+        notice += f"\n\n<b>Reason:</b> {reason}"
+
+    sent = failed = 0
+    for uid in extended_ids:
+        try:
+            await client.send_message(uid, notice)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)  # gentle pacing to avoid flood-wait
+
+    await sts.edit_text(
+        f"<b>✅ Extended premium by {days} {day_word} for {len(extended_ids)} user(s).</b>\n\n"
+        f"📨 Notified: {sent}\n"
+        f"⚠️ Failed to notify (blocked bot etc.): {failed}"
+    )
+
+
 @Client.on_message(filters.command('logs') & filters.user(ADMINS))
 async def log_file(bot, message):
     try:
