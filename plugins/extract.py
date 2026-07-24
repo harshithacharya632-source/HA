@@ -14,6 +14,7 @@ from pymediainfo import MediaInfo
 
 from database.ia_filterdb import get_file_details
 from info import LOG_CHANNEL
+from utils import is_premium_user
 
 print("extract.py loaded")
 
@@ -46,6 +47,16 @@ def format_track(lang: str | None, title: str | None) -> str:
 
 @Client.on_callback_query(filters.regex(r"^extract_data"), group=2)
 async def extract_data_handler(client: Client, query: CallbackQuery):
+    if not await is_premium_user(query.from_user.id):
+        try:
+            await query.answer(
+                "🔒 Audio & Subs Info is a Premium-only feature.\n\nBuy premium with /plan to unlock it.",
+                show_alert=True
+            )
+        except Exception:
+            pass
+        return
+
     try:
         await query.answer("Fetching Details...", show_alert=False)
     except Exception:
