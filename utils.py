@@ -24,6 +24,11 @@ BTN_URL_REGEX = re.compile(r"(([^\[]+?) $$$$ (buttonurl|buttonalert):(?:/{0,2})(
 imdb = Cinemagoer(accessSystem="https")
 TOKENS = {}
 VERIFIED = {}
+# Remembers the deep-link payload (e.g. "file_XXXX") a user was trying to
+# open right before they got sent to verify. So once verification succeeds,
+# the bot can auto-resume delivering that exact file instead of leaving the
+# user with nothing but a "verification complete" message.
+PENDING = {}
 BANNED = {}
 SECOND_SHORTENER = {}
 SMART_OPEN = '“'
@@ -585,7 +590,7 @@ async def check_token(bot, userid, token):
         return False
 
 
-async def get_token(bot, userid, link):
+async def get_token(bot, userid, link, pending_data=None):
     user = await _resolve_user(bot, userid)
     if not await db.is_user_exist(user.id):
         await db.add_user(user.id, user.first_name)
@@ -593,6 +598,8 @@ async def get_token(bot, userid, link):
             await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
         except Exception:
             pass
+    if pending_data:
+        PENDING[user.id] = pending_data
     token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
     TOKENS[user.id] = {token: False}
     link = f"{link}verify-{user.id}-{token}"
@@ -616,6 +623,7 @@ async def verify_user(bot, userid, token):
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
     VERIFIED[user.id] = str(today)
+    return PENDING.pop(user.id, None)
 
 
 async def check_verification(bot, userid):
