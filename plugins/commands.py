@@ -19,6 +19,51 @@ from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file
 from plugins.pm_filter import auto_filter
 logger = logging.getLogger(__name__)
 
+async def deliver_resolved_file(client, chat_id, pre, file_id):
+    """Directly deliver an already-resolved (pre, file_id) to chat_id, with
+    no further deep-link round trip. Used to auto-resume a file right after
+    verification succeeds — this is what used to be a 'Get Your File' button
+    that re-parsed the original link and could fail with
+    'File not found or link is invalid'."""
+    files_ = await get_file_details(file_id)
+    if not files_:
+        await client.send_message(chat_id, "<b>❌ Sorry, that file could no longer be found. Please search again.</b>")
+        return
+    files = files_
+    title = files["file_name"]
+    size = get_size(files["file_size"])
+    f_caption = files["caption"]
+    if CUSTOM_FILE_CAPTION:
+        try:
+            f_caption = CUSTOM_FILE_CAPTION.format(
+                file_name='' if title is None else title,
+                file_size='' if size is None else size,
+                file_caption='' if f_caption is None else f_caption
+            )
+        except Exception:
+            pass
+    if f_caption is None:
+        f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files['file_name'].split()))}"
+
+    reply_markup = await build_stream_reply_markup(chat_id, file_id)
+    try:
+        msg = await client.send_cached_media(
+            chat_id=chat_id,
+            file_id=file_id,
+            caption=f_caption,
+            protect_content=True if pre == 'filep' else False,
+            reply_markup=reply_markup
+        )
+    except MediaEmpty:
+        await client.send_message(chat_id, "❌ <b>File is no longer available.</b> The source file may have been deleted from the database channel.")
+        return
+    btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
+    k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
+    await asyncio.sleep(60)
+    await msg.delete()
+    await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>", reply_markup=InlineKeyboardMarkup(btn))
+
+
 BATCH_FILES = {}
 join_db = JoinReqs
 
@@ -496,15 +541,25 @@ async def start(client, message):
                 logger.error(f"verify_user failed for user {userid}: {e}")
             if resume_data:
                 try:
-                    await client.send_message(
-                        chat_id=message.from_user.id,
-                        text="<b>📥 Here's the file you requested:</b>",
-                        reply_markup=InlineKeyboardMarkup(
-                            [[InlineKeyboardButton("✅ ɢᴇᴛ ʏᴏᴜʀ ғɪʟᴇ", url=f"https://telegram.me/{temp.U_NAME}?start={resume_data}")]]
+                    r_pre, r_file_id = resume_data.split('_', 1)
+                except ValueError:
+                    r_pre, r_file_id = "", resume_data
+                try:
+                    if r_pre in ("file", "filep"):
+                        # Deliver directly — no extra click, no deep-link round trip.
+                        await deliver_resolved_file(client, message.from_user.id, r_pre, r_file_id)
+                    else:
+                        # Batch / shortlink-gated formats genuinely need another
+                        # step (e.g. a fresh ad-shortlink), so fall back to a button.
+                        await client.send_message(
+                            chat_id=message.from_user.id,
+                            text="<b>📥 Here's the file you requested:</b>",
+                            reply_markup=InlineKeyboardMarkup(
+                                [[InlineKeyboardButton("✅ ɢᴇᴛ ʏᴏᴜʀ ғɪʟᴇ", url=f"https://telegram.me/{temp.U_NAME}?start={resume_data}")]]
+                            )
                         )
-                    )
                 except Exception as e:
-                    logger.error(f"Failed to send resume-file button for user {userid}: {e}")
+                    logger.error(f"Failed to auto-resume file for user {userid}: {e}")
         else:
             return await message.reply_text(text="<b>ɪɴᴠᴀʟɪᴅ ʟɪɴᴋ ᴏʀ ᴇxᴘɪʀᴇᴅ ʟɪɴᴋ</b>", protect_content=True)
             
