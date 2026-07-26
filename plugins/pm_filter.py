@@ -807,7 +807,15 @@ def _sync_fetch_known_titles(limit):
     collections = (col, sec_col) if MULTIPLE_DATABASE else (col,)
     for collection in collections:
         try:
-            cursor = collection.find({}, {"file_name": 1}).limit(limit)
+            # Newest-first: without a sort, Mongo returns natural/insertion
+            # order, which on a library bigger than `limit` silently cuts
+            # off recently-added titles (e.g. a brand-new release like
+            # "Dhurandhar" never making it into the sample at all — no
+            # amount of fuzzy-matching helps if the title isn't even in
+            # the pool). Sorting by _id descending guarantees the newest
+            # additions are always included, which is exactly what users
+            # are most likely to be typo-searching for.
+            cursor = collection.find({}, {"file_name": 1}).sort("_id", -1).limit(limit)
             for doc in cursor:
                 name = doc.get("file_name")
                 if not name:
@@ -843,14 +851,14 @@ def _sync_fetch_known_titles(limit):
     return titles
 
 
-async def _get_known_titles():
+async def _get_known_titles(force_refresh=False):
     now = datetime.now().timestamp()
-    if _KNOWN_TITLES_CACHE["titles"] and (now - _KNOWN_TITLES_CACHE["ts"] < _KNOWN_TITLES_TTL):
+    if not force_refresh and _KNOWN_TITLES_CACHE["titles"] and (now - _KNOWN_TITLES_CACHE["ts"] < _KNOWN_TITLES_TTL):
         return _KNOWN_TITLES_CACHE["titles"]
 
     try:
         titles = await asyncio.to_thread(_sync_fetch_known_titles, _KNOWN_TITLES_LIMIT)
-        print(f"[spell-fuzzy] loaded {len(titles)} known titles for fuzzy suggestions")
+        print(f"[spell-fuzzy] loaded {len(titles)} known titles for fuzzy suggestions (force_refresh={force_refresh})")
     except Exception as e:
         print(f"[spell-fuzzy] _get_known_titles ERROR: {e}")
         logging.error(f"_get_known_titles error: {e}")
@@ -888,17 +896,33 @@ async def get_similar_titles(query, limit=5):
     """Up to `limit` titles from our own DB that closely resemble `query`
     (typo-tolerant). Returns nicely title-cased strings, or [] if nothing
     is close enough to be a confident suggestion."""
+    q = clean_name(query)
+    if not q:
+        return []
+
+    def _score(titles):
+        scored = [(_title_similarity(q, t), t) for t in titles]
+        scored = [(s, t) for s, t in scored if s >= 0.6]
+        scored.sort(key=lambda x: -x[0])
+        return [t for _, t in scored[:limit]]
+
     titles = await _get_known_titles()
     if not titles:
         print("[spell-fuzzy] no known titles available — can't suggest anything")
         return []
-    q = clean_name(query)
-    if not q:
-        return []
-    scored = [(_title_similarity(q, t), t) for t in titles]
-    scored = [(s, t) for s, t in scored if s >= 0.6]
-    scored.sort(key=lambda x: -x[0])
-    matches = [t for _, t in scored[:limit]]
+
+    matches = _score(titles)
+    if not matches:
+        # Nothing in the (possibly stale, up to an hour old) cached pool —
+        # before giving up, force one fresh reload straight from the DB.
+        # This is what makes a movie uploaded 5 minutes ago still
+        # suggestible immediately, instead of waiting for the hourly
+        # cache refresh to happen to pick it up.
+        fresh_titles = await _get_known_titles(force_refresh=True)
+        if fresh_titles is not titles:
+            matches = _score(fresh_titles)
+            titles = fresh_titles
+
     print(f"[spell-fuzzy] query='{query}' cleaned='{q}' pool_size={len(titles)} matches={matches}")
     return [m.title() for m in matches]
 
@@ -1433,11 +1457,8 @@ async def filter_files(client, query: CallbackQuery):
         ))
 
         for f in filtered[start:end]:
-            name    = f["file_name"]
-            size    = get_size(f["file_size"])
-            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                f"[{size}] {display}",
+                format_file_button_text(f),
                 callback_data=f"file#{f['file_id']}"
             )])
 
@@ -1532,11 +1553,8 @@ async def combined_files(client, query: CallbackQuery):
         ))
 
         for f in combined[start:end]:
-            name    = f["file_name"]
-            size    = get_size(f["file_size"])
-            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                f"[{size}] {display}",
+                format_file_button_text(f),
                 callback_data=f"file#{f['file_id']}"
             )])
 
@@ -1651,11 +1669,8 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         )])
 
         for f in matched[start:end]:
-            name    = f["file_name"]
-            size    = get_size(f["file_size"])
-            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                f"[{size}] {display}",
+                format_file_button_text(f),
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -1801,11 +1816,8 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         )])
 
         for f in matched[start:end]:
-            name    = f["file_name"]
-            size    = get_size(f["file_size"])
-            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                f"[{size}] {display}",
+                format_file_button_text(f),
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -1896,11 +1908,8 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
         )])
 
         for f in matched[start:end]:
-            name    = f["file_name"]
-            size    = get_size(f["file_size"])
-            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                f"[{size}] {display}",
+                format_file_button_text(f),
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -3663,6 +3672,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
 async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from_deeplink=False):
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
+    _t0 = time.monotonic()  # ⏱ speed diagnostics — see the [speed] log lines
     if not spoll:
         message = msg
         # from_deeplink=True is used by the "GET FILES" channel button
@@ -3712,6 +3722,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
 
             key = f"{message.chat.id}-{message.id}"
             files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=8)
+            print(f"[speed] DB search+rank took {time.monotonic() - _t0:.3f}s for query '{search}'")
             settings = await get_settings(message.chat.id)
             if not files:
                 if settings["spell_check"]:
@@ -3792,15 +3803,61 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
         btn.append(
             [InlineKeyboardButton(text="𝐍𝐎 𝐌𝐎𝐑𝐄 𝐏𝐀𝐆𝐄𝐒 𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄",callback_data="pages")]
         )
-    imdb = await get_poster(search, file=(files[0])['file_name']) if settings["imdb"] else None
     requester_is_premium = bool(message.from_user) and await is_premium_user(message.from_user.id)
     premium_badge = "👑 <u>ᴘʀᴇᴍɪᴜᴍ ᴜsᴇʀ ʀᴇǫᴜᴇsᴛ</u> 👑\n" if requester_is_premium else ""
     cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
     remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
     TEMPLATE = script.IMDB_TEMPLATE_TXT
-    if imdb:
-        cap = premium_badge + TEMPLATE.format(
+
+    # ✅ SPEED: show the plain-text results IMMEDIATELY — this no longer
+    # waits on get_poster() (a live IMDb web lookup that was adding the
+    # 1-1.7s delay to every single search). If IMDb info is enabled for
+    # this group, it's fetched in the BACKGROUND afterward and the message
+    # gets upgraded in place with the poster/plot/cast once it's ready —
+    # so the user sees results almost instantly either way.
+    user_mention = message.from_user.mention if message.from_user else "Anonymous"
+    if settings["button"]:
+        cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
+    else:
+        cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
+        cap += "<b><u>🍿 Your Movie Files 👇</u></b>\n"
+        for file in files:
+            cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
+
+    fuk = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
+    print(f"[speed] fast results shown after {time.monotonic() - _t0:.3f}s total (before any IMDb lookup)")
+
+    async def _auto_delete(sent_msg):
+        try:
+            if settings['auto_delete']:
+                await asyncio.sleep(300)
+                await sent_msg.delete()
+                await message.delete()
+        except KeyError:
+            await save_group_settings(message.chat.id, 'auto_delete', True)
+            await asyncio.sleep(300)
+            await sent_msg.delete()
+            await message.delete()
+        except Exception:
+            pass
+
+    async def _upgrade_with_imdb():
+        """Runs AFTER the fast plain-text results are already on screen.
+        Fetches the (slow) IMDb poster/plot/cast and, if found, replaces
+        the plain-text message with the richer poster+caption version —
+        exactly the same content as before, just delivered a moment later
+        instead of delaying the whole search."""
+        try:
+            imdb = await get_poster(search, file=(files[0])['file_name'])
+        except Exception as e:
+            logger.exception(e)
+            imdb = None
+        if not imdb:
+            await _auto_delete(fuk)
+            return
+
+        upgraded_cap = premium_badge + TEMPLATE.format(
             qurey=search,
             title=imdb['title'],
             votes=imdb['votes'],
@@ -3829,81 +3886,47 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
             plot=imdb['plot'],
             rating=imdb['rating'],
             url=imdb['url'],
-            **locals()
+            search=search, files=files, settings=settings,
+            remaining_seconds=remaining_seconds, message=message,
         )
-
         if message.from_user:
-            temp.IMDB_CAP[message.from_user.id] = cap
+            temp.IMDB_CAP[message.from_user.id] = upgraded_cap
         if not settings["button"]:
-            cap += "<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n"
+            upgraded_cap += "<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n"
             for file in files:
-                cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
-    else:
-        user_mention = message.from_user.mention if message.from_user else "Anonymous"
-        if settings["button"]:
-            cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
-        else:
-            cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
-            cap += "<b><u>🍿 Your Movie Files 👇</u></b>\n"
-            for file in files:
-                cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
+                upgraded_cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
 
-    if imdb and imdb.get('poster'):
-        try:
-            hehe = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=InlineKeyboardMarkup(btn))
-            await reply_msg.delete()
+        if imdb.get('poster'):
             try:
-                if settings['auto_delete']:
-                    await asyncio.sleep(300)
-                    await hehe.delete()
-                    await message.delete()
-            except KeyError:
-                await save_group_settings(message.chat.id, 'auto_delete', True)
-                await asyncio.sleep(300)
-                await hehe.delete()
-                await message.delete()
-        except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
-            pic = imdb.get('poster')
-            poster = pic.replace('.jpg', "._V1_UX360.jpg") 
-            hmm = await message.reply_photo(photo=poster, caption=cap, reply_markup=InlineKeyboardMarkup(btn))
-            await reply_msg.delete()
-            try:
-               if settings['auto_delete']:
-                    await asyncio.sleep(300)
-                    await hmm.delete()
-                    await message.delete()
-            except KeyError:
-                await save_group_settings(message.chat.id, 'auto_delete', True)
-                await asyncio.sleep(300)
-                await hmm.delete()
-                await message.delete()
-        except Exception as e:
-            logger.exception(e) 
-            fek = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn))
-            try:
-                if settings['auto_delete']:
-                    await asyncio.sleep(300)
-                    await fek.delete()
-                    await message.delete()
-            except KeyError:
-                await save_group_settings(message.chat.id, 'auto_delete', True)
-                await asyncio.sleep(300)
-                await fek.delete()
-                await message.delete()
-    else:
-        fuk = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
-        
-        try:
-            if settings['auto_delete']:
-                await asyncio.sleep(300)
+                hehe = await message.reply_photo(photo=imdb.get('poster'), caption=upgraded_cap, reply_markup=InlineKeyboardMarkup(btn))
                 await fuk.delete()
-                await message.delete()
-        except KeyError:
-            await save_group_settings(message.chat.id, 'auto_delete', True)
-            await asyncio.sleep(300)
-            await fuk.delete()
-            await message.delete()
-    
+                await _auto_delete(hehe)
+                return
+            except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
+                try:
+                    poster = imdb.get('poster').replace('.jpg', "._V1_UX360.jpg")
+                    hmm = await message.reply_photo(photo=poster, caption=upgraded_cap, reply_markup=InlineKeyboardMarkup(btn))
+                    await fuk.delete()
+                    await _auto_delete(hmm)
+                    return
+                except Exception as e:
+                    logger.exception(e)
+            except Exception as e:
+                logger.exception(e)
+        # No usable poster (or sending it failed) — just upgrade the text in place.
+        try:
+            fek = await fuk.edit_text(text=upgraded_cap, reply_markup=InlineKeyboardMarkup(btn))
+            await _auto_delete(fek)
+        except Exception as e:
+            logger.exception(e)
+            await _auto_delete(fuk)
+
+    if settings["imdb"]:
+        asyncio.create_task(_upgrade_with_imdb())
+    else:
+        asyncio.create_task(_auto_delete(fuk))
+
+
 async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
     mv_rqst = name
