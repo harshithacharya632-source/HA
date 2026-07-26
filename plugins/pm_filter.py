@@ -869,27 +869,67 @@ async def _get_known_titles(force_refresh=False):
     return _KNOWN_TITLES_CACHE["titles"]
 
 
+def _edit_distance(a: str, b: str) -> int:
+    """Standard Levenshtein distance (insertions/deletions/substitutions).
+    Used so a single missing/extra/wrong LETTER is judged by how many edits
+    it actually takes to fix — not by a ratio that unfairly punishes short
+    words (a 1-letter typo in a 4-letter word tanks a similarity ratio far
+    more than the same typo in a 10-letter word, even though both are
+    equally "one small typo" to a human)."""
+    if a == b:
+        return 0
+    if len(a) < len(b):
+        a, b = b, a
+    if not b:
+        return len(a)
+    previous_row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        current_row = [i]
+        for j, cb in enumerate(b, 1):
+            insertions = previous_row[j] + 1
+            deletions = current_row[j - 1] + 1
+            substitutions = previous_row[j - 1] + (ca != cb)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+
 def _title_similarity(query_clean: str, candidate_clean: str) -> float:
     """More precise than a raw whole-string difflib ratio:
     1. Requires the FIRST word to actually resemble the query's first
        word — real typos essentially never swap out the entire first
        word, so this alone kills lookalike-but-unrelated titles (e.g.
        'Cocktaile 2' matching 'Love Mocktail 2020' just because the
-       middle letters happen to overlap).
+       middle letters happen to overlap). The gate itself is edit-distance
+       based (<=2 edits) rather than a plain ratio cutoff, so a single
+       missing/extra/wrong letter reliably passes even on SHORT first
+       words (e.g. 'ntara' -> 'kantara' is a 2-edit fix but ratio alone
+       can dip it below a fixed 0.5 cutoff).
     2. Trims the candidate down to roughly the query's own word count
        (+1 buffer) before scoring, so a short query isn't unfairly
        diluted by a long padded candidate title (year, "chapter 1", etc)
        — and a short unrelated candidate doesn't get an inflated ratio
        just because there's little left to disagree on.
+    3. Also scores against the FULL (untrimmed) candidate and takes
+       whichever score is higher, so a typo anywhere else in the query
+       (not just the first word) doesn't get unfairly penalized by
+       trimming cutting off the wrong end.
     """
     qw, cw = query_clean.split(), candidate_clean.split()
     if not qw or not cw:
         return 0.0
+    first_dist = _edit_distance(qw[0], cw[0])
     first_word_ratio = difflib.SequenceMatcher(None, qw[0], cw[0]).ratio()
-    if first_word_ratio < 0.5:
+    # Allow up to 2 edits outright (covers a missing/extra/wrong letter on
+    # basically any word length), OR fall back to the old ratio gate for
+    # cases the edit-distance check is too strict for (e.g. very short
+    # words where 2 edits is almost the whole word).
+    if first_dist > 2 and first_word_ratio < 0.5:
         return 0.0
     trimmed = " ".join(cw[:len(qw) + 1])
-    return difflib.SequenceMatcher(None, query_clean, trimmed).ratio()
+    ratio_trimmed = difflib.SequenceMatcher(None, query_clean, trimmed).ratio()
+    ratio_full = difflib.SequenceMatcher(None, query_clean, candidate_clean).ratio()
+    return max(ratio_trimmed, ratio_full)
 
 
 async def get_similar_titles(query, limit=5):
@@ -902,7 +942,11 @@ async def get_similar_titles(query, limit=5):
 
     def _score(titles):
         scored = [(_title_similarity(q, t), t) for t in titles]
-        scored = [(s, t) for s, t in scored if s >= 0.6]
+        # Slightly more lenient than before (0.6 -> 0.55) now that the
+        # first-word gate above is doing the real precision work via edit
+        # distance — this catches genuine single-letter-typo matches that
+        # used to score just under the old flat cutoff.
+        scored = [(s, t) for s, t in scored if s >= 0.55]
         scored.sort(key=lambda x: -x[0])
         return [t for _, t in scored[:limit]]
 
