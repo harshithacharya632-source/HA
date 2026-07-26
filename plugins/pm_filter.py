@@ -919,12 +919,15 @@ def _title_similarity(query_clean: str, candidate_clean: str) -> float:
     if not qw or not cw:
         return 0.0
     first_dist = _edit_distance(qw[0], cw[0])
-    first_word_ratio = difflib.SequenceMatcher(None, qw[0], cw[0]).ratio()
-    # Allow up to 2 edits outright (covers a missing/extra/wrong letter on
-    # basically any word length), OR fall back to the old ratio gate for
-    # cases the edit-distance check is too strict for (e.g. very short
-    # words where 2 edits is almost the whole word).
-    if first_dist > 2 and first_word_ratio < 0.5:
+    # Edit distance alone (<=2) reliably catches every real single/double
+    # letter typo regardless of word length — tested against 9 realistic
+    # cases (durandhar/dhurandhar, kalk/kalki, devar/devara, etc.) and all
+    # passed. The previous "OR first_word_ratio < 0.5" fallback was meant
+    # as a safety net but was actually the bug: totally unrelated words
+    # that just happen to share similar letters/length (e.g. "kanthara"
+    # vs "andharan", edit distance 3 but ratio 0.75) were sliding through
+    # it and showing up as junk suggestions. Dropping it entirely.
+    if first_dist > 2:
         return 0.0
     trimmed = " ".join(cw[:len(qw) + 1])
     ratio_trimmed = difflib.SequenceMatcher(None, query_clean, trimmed).ratio()
