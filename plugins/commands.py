@@ -24,7 +24,9 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
     no further deep-link round trip. Used to auto-resume a file right after
     verification succeeds — this is what used to be a 'Get Your File' button
     that re-parsed the original link and could fail with
-    'File not found or link is invalid'."""
+    'File not found or link is invalid'.
+
+    No auto-delete/timer here on purpose — the file just arrives and stays."""
     files_ = await get_file_details(file_id)
     if not files_:
         await client.send_message(chat_id, "<b>❌ Sorry, that file could no longer be found. Please search again.</b>")
@@ -47,7 +49,7 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
 
     reply_markup = await build_stream_reply_markup(chat_id, file_id)
     try:
-        msg = await client.send_cached_media(
+        await client.send_cached_media(
             chat_id=chat_id,
             file_id=file_id,
             caption=f_caption,
@@ -57,11 +59,6 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
     except MediaEmpty:
         await client.send_message(chat_id, "❌ <b>File is no longer available.</b> The source file may have been deleted from the database channel.")
         return
-    btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
-    k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-    await asyncio.sleep(60)
-    await msg.delete()
-    await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>", reply_markup=InlineKeyboardMarkup(btn))
 
 
 BATCH_FILES = {}
