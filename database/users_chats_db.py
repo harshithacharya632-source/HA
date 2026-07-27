@@ -1,6 +1,3 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
 
 import re
 from pymongo.errors import DuplicateKeyError
@@ -359,6 +356,14 @@ class Database:
             {'$set': {setting_key: value}},
             upsert=True
         )
+
+    async def admin_required_status(self, bot_id):
+        """Check if bot admin is required in groups. Default is True (bot must be admin)."""
+        return await self.get_bot_setting(bot_id, 'ADMIN_REQUIRED', True)
+
+    async def update_admin_required(self, bot_id, enable):
+        """Set whether bot admin is required in groups globally."""
+        await self.update_bot_setting(bot_id, 'ADMIN_REQUIRED', enable)
 
     async def movie_update_status(self, bot_id):
         from info import MOVIE_UPDATE_NOTIFICATION
