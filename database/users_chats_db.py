@@ -1,5 +1,4 @@
 
-
 import re
 from pymongo.errors import DuplicateKeyError
 import motor.motor_asyncio
@@ -241,7 +240,6 @@ class Database:
         if user_data:
             expiry_time = user_data.get("expiry_time")
             if expiry_time is None:
-                # User previously used the free trial, but it has ended.
                 return False
             elif isinstance(expiry_time, datetime.datetime) and datetime.datetime.now() <= expiry_time:
                 return True
@@ -253,7 +251,6 @@ class Database:
         user_id = userid
         user_data = await self.get_user(user_id)        
         expiry_time = user_data.get("expiry_time")
-        # Calculate remaining time
         remaining_time = expiry_time - datetime.datetime.now()
         return remaining_time
 
@@ -295,9 +292,6 @@ class Database:
         return extended_ids
 
     # ================== [PERSISTENT DAILY VERIFICATION] ==================
-    # These mirror the free-trial/premium pattern above but store the
-    # "verified until" date in Mongo instead of an in-memory dict, so
-    # verification status survives bot restarts/redeploys.
     async def set_verified(self, user_id, expiry_date_str):
         await self.users.update_one(
             {"id": user_id},
