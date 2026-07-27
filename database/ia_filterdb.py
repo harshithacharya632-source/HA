@@ -16,6 +16,31 @@ sec_db = sec_client[DATABASE_NAME]
 sec_col = sec_db[COLLECTION_NAME]
 
 
+def create_search_index():
+    """One-time setup: create a text index on file_name so get_search_results()
+    can use fast, indexed $text search instead of a full collection scan.
+    Safe to call anytime - creating an index that already exists is a no-op."""
+    for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
+        try:
+            collection.create_index([('file_name', 'text')], name='file_name_text')
+            print(f"Text index ready on {collection.full_name}")
+        except Exception as e:
+            print(f"Could not create text index on {collection.full_name}: {e}")
+
+
+# ✅ Auto-create the text index at import time (bot startup), instead of
+# depending on someone remembering to run build_search_index.py by hand.
+# Without this index, EVERY search silently falls back to a full
+# collection scan — which is almost certainly the real "no speed change"
+# bottleneck, independent of anything in the search/ranking code itself.
+# Creating an index that already exists is a cheap no-op, so this is safe
+# to run on every startup.
+try:
+    create_search_index()
+except Exception as e:
+    print(f"[startup] create_search_index() failed: {e}")
+
+
 async def save_file(media):
     """Save file in the database."""
     
@@ -73,8 +98,15 @@ def is_file_already_saved(file_id, file_name):
             
     return False
 
-async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False):
-    """For given query return (results, next_offset, total_results)."""
+async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False, need_count=True):
+    """For given query return (results, next_offset, total_results).
+
+    need_count=False skips the count_documents() call entirely when the
+    caller is never going to use the exact total anyway (e.g. the display
+    pool, which computes its own total from the capped local list) —
+    count_documents() has to tally EVERY matching document in the whole
+    collection, not just the `max_results` page, so on a large/growing
+    library it can easily be the single slowest part of a search."""
     if not query:
         return [], "", 0
     query = query.strip()
@@ -96,7 +128,9 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
 
     def _run(collection, mongo_filter):
         cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
-        return list(cur), collection.count_documents(mongo_filter)
+        found = list(cur)
+        count = collection.count_documents(mongo_filter) if need_count else len(found)
+        return found, count
 
     def _run_all_blocking():
         # All the actual pymongo work (synchronous/blocking network calls)
@@ -128,17 +162,6 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
     return files, next_offset, total_results
 
-
-def create_search_index():
-    """One-time setup: create a text index on file_name so get_search_results()
-    can use fast, indexed $text search instead of a full collection scan.
-    Safe to call anytime - creating an index that already exists is a no-op."""
-    for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
-        try:
-            collection.create_index([('file_name', 'text')], name='file_name_text')
-            print(f"Text index ready on {collection.full_name}")
-        except Exception as e:
-            print(f"Could not create text index on {collection.full_name}: {e}")
 
 async def get_bad_files(query, file_type=None, use_filter=False):
     """For given query return (results, next_offset)"""
