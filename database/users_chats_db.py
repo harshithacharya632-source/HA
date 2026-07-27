@@ -1,4 +1,5 @@
 
+
 import re
 from pymongo.errors import DuplicateKeyError
 import motor.motor_asyncio
@@ -240,6 +241,7 @@ class Database:
         if user_data:
             expiry_time = user_data.get("expiry_time")
             if expiry_time is None:
+                # User previously used the free trial, but it has ended.
                 return False
             elif isinstance(expiry_time, datetime.datetime) and datetime.datetime.now() <= expiry_time:
                 return True
@@ -251,6 +253,7 @@ class Database:
         user_id = userid
         user_data = await self.get_user(user_id)        
         expiry_time = user_data.get("expiry_time")
+        # Calculate remaining time
         remaining_time = expiry_time - datetime.datetime.now()
         return remaining_time
 
@@ -292,6 +295,9 @@ class Database:
         return extended_ids
 
     # ================== [PERSISTENT DAILY VERIFICATION] ==================
+    # These mirror the free-trial/premium pattern above but store the
+    # "verified until" date in Mongo instead of an in-memory dict, so
+    # verification status survives bot restarts/redeploys.
     async def set_verified(self, user_id, expiry_date_str):
         await self.users.update_one(
             {"id": user_id},
@@ -351,14 +357,6 @@ class Database:
             {'$set': {setting_key: value}},
             upsert=True
         )
-
-    async def admin_required_status(self, bot_id):
-        """Check if bot admin is required in groups. Default is True (bot must be admin)."""
-        return await self.get_bot_setting(bot_id, 'ADMIN_REQUIRED', True)
-
-    async def update_admin_required(self, bot_id, enable):
-        """Set whether bot admin is required in groups globally."""
-        await self.update_bot_setting(bot_id, 'ADMIN_REQUIRED', enable)
 
     async def movie_update_status(self, bot_id):
         from info import MOVIE_UPDATE_NOTIFICATION
