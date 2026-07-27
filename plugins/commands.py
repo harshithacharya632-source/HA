@@ -557,6 +557,7 @@ async def start(client, message):
                         )
                 except Exception as e:
                     logger.error(f"Failed to auto-resume file for user {userid}: {e}")
+            return
         else:
             return await message.reply_text(text="<b>ɪɴᴠᴀʟɪᴅ ʟɪɴᴋ ᴏʀ ᴇxᴘɪʀᴇᴅ ʟɪɴᴋ</b>", protect_content=True)
             
