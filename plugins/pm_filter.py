@@ -1022,7 +1022,7 @@ async def get_cached_season_files(chat_id, key, search):
     entry = SEASON_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
         return entry["files"]
-    files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+    files, _, _ = await get_search_results(chat_id, search, max_results=50000, need_count=False)
     files = filter_and_rank(files, search)
     SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
@@ -1048,7 +1048,7 @@ async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_
     entry = DISPLAY_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < DISPLAY_CACHE_TTL):
         return entry["files"]
-    files, _, _ = await get_search_results(chat_id, search, max_results=pool_size)
+    files, _, _ = await get_search_results(chat_id, search, max_results=pool_size, need_count=False)
     files = filter_and_rank(files, search)
     DISPLAY_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
@@ -4088,7 +4088,24 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     # the better, correct local match.
     similar = await get_similar_titles(mv_rqst)
     if similar:
-        await _build_and_show(similar)
+        async def _imdb_correct_name(local_title):
+            """Our own DB match is guaranteed clickable/in-stock, but the
+            displayed text is just our locally-extracted filename stem
+            (can be messy — wrong capitalization, missing punctuation,
+            etc). Look the title up on IMDb and show its real, correctly
+            formatted name instead. Capped with a timeout and falls back
+            to the local title on any failure/slowness, so a flaky IMDb
+            lookup never breaks or stalls the suggestion list."""
+            try:
+                imdb = await asyncio.wait_for(get_poster(local_title), timeout=6)
+                if imdb and imdb.get('title'):
+                    return imdb['title']
+            except Exception as e:
+                print(f"[spell-fuzzy] IMDb name-correction failed for '{local_title}': {e}")
+            return local_title
+
+        corrected = await asyncio.gather(*[_imdb_correct_name(t) for t in similar])
+        await _build_and_show(list(corrected))
         return
 
     # 2) Nothing close in our own library — fall back to the external
