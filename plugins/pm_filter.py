@@ -807,14 +807,6 @@ def _sync_fetch_known_titles(limit):
     collections = (col, sec_col) if MULTIPLE_DATABASE else (col,)
     for collection in collections:
         try:
-            # Newest-first: without a sort, Mongo returns natural/insertion
-            # order, which on a library bigger than `limit` silently cuts
-            # off recently-added titles (e.g. a brand-new release like
-            # "Dhurandhar" never making it into the sample at all — no
-            # amount of fuzzy-matching helps if the title isn't even in
-            # the pool). Sorting by _id descending guarantees the newest
-            # additions are always included, which is exactly what users
-            # are most likely to be typo-searching for.
             cursor = collection.find({}, {"file_name": 1}).sort("_id", -1).limit(limit)
             for doc in cursor:
                 name = doc.get("file_name")
@@ -897,37 +889,27 @@ def _edit_distance(a: str, b: str) -> int:
 def _title_similarity(query_clean: str, candidate_clean: str) -> float:
     """More precise than a raw whole-string difflib ratio:
     1. Requires the FIRST word to actually resemble the query's first
-       word — real typos essentially never swap out the entire first
-       word, so this alone kills lookalike-but-unrelated titles (e.g.
-       'Cocktaile 2' matching 'Love Mocktail 2020' just because the
-       middle letters happen to overlap). The gate itself is edit-distance
-       based (<=2 edits) rather than a plain ratio cutoff, so a single
-       missing/extra/wrong letter reliably passes even on SHORT first
-       words (e.g. 'ntara' -> 'kantara' is a 2-edit fix but ratio alone
-       can dip it below a fixed 0.5 cutoff).
+       word via EDIT DISTANCE (<=2 edits) — real typos essentially never
+       swap out the entire first word, so this alone kills lookalike-but-
+       unrelated titles. Edit distance (not a ratio cutoff) is what makes
+       this reliable regardless of word length: a plain ratio threshold
+       either lets through unrelated same-length/letter-heavy words (e.g.
+       "kanthara" vs "andharan" — different words, but ratio 0.75) or
+       rejects genuine short-word typos (e.g. "kalk" vs "kalki"). Edit
+       distance treats both cases correctly: 3 edits vs 1 edit.
     2. Trims the candidate down to roughly the query's own word count
        (+1 buffer) before scoring, so a short query isn't unfairly
        diluted by a long padded candidate title (year, "chapter 1", etc)
        — and a short unrelated candidate doesn't get an inflated ratio
-       just because there's little left to disagree on.
-    3. Also scores against the FULL (untrimmed) candidate and takes
-       whichever score is higher, so a typo anywhere else in the query
-       (not just the first word) doesn't get unfairly penalized by
-       trimming cutting off the wrong end.
+       just because there's little left to disagree on. Also scores
+       against the FULL candidate and takes the higher of the two, so a
+       typo elsewhere in the query isn't penalized by the trim cutting
+       off the wrong end.
     """
     qw, cw = query_clean.split(), candidate_clean.split()
     if not qw or not cw:
         return 0.0
-    first_dist = _edit_distance(qw[0], cw[0])
-    # Edit distance alone (<=2) reliably catches every real single/double
-    # letter typo regardless of word length — tested against 9 realistic
-    # cases (durandhar/dhurandhar, kalk/kalki, devar/devara, etc.) and all
-    # passed. The previous "OR first_word_ratio < 0.5" fallback was meant
-    # as a safety net but was actually the bug: totally unrelated words
-    # that just happen to share similar letters/length (e.g. "kanthara"
-    # vs "andharan", edit distance 3 but ratio 0.75) were sliding through
-    # it and showing up as junk suggestions. Dropping it entirely.
-    if first_dist > 2:
+    if _edit_distance(qw[0], cw[0]) > 2:
         return 0.0
     trimmed = " ".join(cw[:len(qw) + 1])
     ratio_trimmed = difflib.SequenceMatcher(None, query_clean, trimmed).ratio()
@@ -945,10 +927,6 @@ async def get_similar_titles(query, limit=5):
 
     def _score(titles):
         scored = [(_title_similarity(q, t), t) for t in titles]
-        # Slightly more lenient than before (0.6 -> 0.55) now that the
-        # first-word gate above is doing the real precision work via edit
-        # distance — this catches genuine single-letter-typo matches that
-        # used to score just under the old flat cutoff.
         scored = [(s, t) for s, t in scored if s >= 0.55]
         scored.sort(key=lambda x: -x[0])
         return [t for _, t in scored[:limit]]
@@ -1022,7 +1000,7 @@ async def get_cached_season_files(chat_id, key, search):
     entry = SEASON_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
         return entry["files"]
-    files, _, _ = await get_search_results(chat_id, search, max_results=50000, need_count=False)
+    files, _, _ = await get_search_results(chat_id, search, max_results=50000)
     files = filter_and_rank(files, search)
     SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
@@ -1048,7 +1026,7 @@ async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_
     entry = DISPLAY_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < DISPLAY_CACHE_TTL):
         return entry["files"]
-    files, _, _ = await get_search_results(chat_id, search, max_results=pool_size, need_count=False)
+    files, _, _ = await get_search_results(chat_id, search, max_results=pool_size)
     files = filter_and_rank(files, search)
     DISPLAY_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
@@ -1716,8 +1694,11 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         )])
 
         for f in matched[start:end]:
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
+            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                format_file_button_text(f),
+                f"[{size}] {display}",
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -1863,8 +1844,11 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         )])
 
         for f in matched[start:end]:
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
+            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                format_file_button_text(f),
+                f"[{size}] {display}",
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -1955,8 +1939,11 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
         )])
 
         for f in matched[start:end]:
+            name    = f["file_name"]
+            size    = get_size(f["file_size"])
+            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                format_file_button_text(f),
+                f"[{size}] {display}",
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -3624,7 +3611,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data == "gujarati_info":
         btn = [[
             InlineKeyboardButton("⟸ Bᴀᴄᴋ", callback_data="start"),
-            nlineKeyboardButton("Cᴏɴᴛᴀᴄᴛ", url="https://t.me/Goflix_AdminBot")
+            InlineKeyboardButton("Cᴏɴᴛᴀᴄᴛ", url="https://t.me/Goflix_AdminBot")
         ]]
         await client.edit_message_media(
             query.message.chat.id, 
@@ -3719,7 +3706,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
 async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from_deeplink=False):
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
-    _t0 = datetime.now().timestamp()  # ⏱ speed diagnostics — see the [speed] log lines (datetime, not the shadowed `time` module)
     if not spoll:
         message = msg
         # from_deeplink=True is used by the "GET FILES" channel button
@@ -3769,7 +3755,6 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
 
             key = f"{message.chat.id}-{message.id}"
             files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=8)
-            print(f"[speed] DB search+rank took {datetime.now().timestamp() - _t0:.3f}s for query '{search}'")
             settings = await get_settings(message.chat.id)
             if not files:
                 if settings["spell_check"]:
@@ -3850,61 +3835,15 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
         btn.append(
             [InlineKeyboardButton(text="𝐍𝐎 𝐌𝐎𝐑𝐄 𝐏𝐀𝐆𝐄𝐒 𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄",callback_data="pages")]
         )
+    imdb = await get_poster(search, file=(files[0])['file_name']) if settings["imdb"] else None
     requester_is_premium = bool(message.from_user) and await is_premium_user(message.from_user.id)
     premium_badge = "👑 <u>ᴘʀᴇᴍɪᴜᴍ ᴜsᴇʀ ʀᴇǫᴜᴇsᴛ</u> 👑\n" if requester_is_premium else ""
     cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
     remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
     TEMPLATE = script.IMDB_TEMPLATE_TXT
-
-    # ✅ SPEED: show the plain-text results IMMEDIATELY — this no longer
-    # waits on get_poster() (a live IMDb web lookup that was adding the
-    # 1-1.7s delay to every single search). If IMDb info is enabled for
-    # this group, it's fetched in the BACKGROUND afterward and the message
-    # gets upgraded in place with the poster/plot/cast once it's ready —
-    # so the user sees results almost instantly either way.
-    user_mention = message.from_user.mention if message.from_user else "Anonymous"
-    if settings["button"]:
-        cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
-    else:
-        cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
-        cap += "<b><u>🍿 Your Movie Files 👇</u></b>\n"
-        for file in files:
-            cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
-
-    fuk = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
-    print(f"[speed] fast results shown after {datetime.now().timestamp() - _t0:.3f}s total (before any IMDb lookup)")
-
-    async def _auto_delete(sent_msg):
-        try:
-            if settings['auto_delete']:
-                await asyncio.sleep(300)
-                await sent_msg.delete()
-                await message.delete()
-        except KeyError:
-            await save_group_settings(message.chat.id, 'auto_delete', True)
-            await asyncio.sleep(300)
-            await sent_msg.delete()
-            await message.delete()
-        except Exception:
-            pass
-
-    async def _upgrade_with_imdb():
-        """Runs AFTER the fast plain-text results are already on screen.
-        Fetches the (slow) IMDb poster/plot/cast and, if found, replaces
-        the plain-text message with the richer poster+caption version —
-        exactly the same content as before, just delivered a moment later
-        instead of delaying the whole search."""
-        try:
-            imdb = await get_poster(search, file=(files[0])['file_name'])
-        except Exception as e:
-            logger.exception(e)
-            imdb = None
-        if not imdb:
-            await _auto_delete(fuk)
-            return
-
-        upgraded_cap = premium_badge + TEMPLATE.format(
+    if imdb:
+        cap = premium_badge + TEMPLATE.format(
             qurey=search,
             title=imdb['title'],
             votes=imdb['votes'],
@@ -3933,119 +3872,81 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
             plot=imdb['plot'],
             rating=imdb['rating'],
             url=imdb['url'],
-            search=search, files=files, settings=settings,
-            remaining_seconds=remaining_seconds, message=message,
+            **locals()
         )
+
         if message.from_user:
-            temp.IMDB_CAP[message.from_user.id] = upgraded_cap
+            temp.IMDB_CAP[message.from_user.id] = cap
         if not settings["button"]:
-            upgraded_cap += "<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n"
+            cap += "<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n"
             for file in files:
-                upgraded_cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
+                cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
+    else:
+        user_mention = message.from_user.mention if message.from_user else "Anonymous"
+        if settings["button"]:
+            cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
+        else:
+            cap = premium_badge + f"<b>🍃 Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ➤ {search}\n🍃 Rᴇǫᴜᴇsᴛᴇᴅ Bʏ ➤ {user_mention}\n🍃 ʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ➤ {remaining_seconds} sᴇᴄᴏɴᴅs\n🍃 ᴘᴏᴡᴇʀᴇᴅ ʙʏ ➤ {message.chat.title}</b>"
+            cap += "<b><u>🍿 Your Movie Files 👇</u></b>\n"
+            for file in files:
+                cap += f"<b>➤ <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), normalize_episode_marker(file['file_name']).split()))}</a></b>\n"
 
-        if imdb.get('poster'):
-            try:
-                hehe = await message.reply_photo(photo=imdb.get('poster'), caption=upgraded_cap, reply_markup=InlineKeyboardMarkup(btn))
-                await fuk.delete()
-                await _auto_delete(hehe)
-                return
-            except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
-                try:
-                    poster = imdb.get('poster').replace('.jpg', "._V1_UX360.jpg")
-                    hmm = await message.reply_photo(photo=poster, caption=upgraded_cap, reply_markup=InlineKeyboardMarkup(btn))
-                    await fuk.delete()
-                    await _auto_delete(hmm)
-                    return
-                except Exception as e:
-                    logger.exception(e)
-            except Exception as e:
-                logger.exception(e)
-        # No usable poster (or sending it failed) — just upgrade the text in place.
+    if imdb and imdb.get('poster'):
         try:
-            fek = await fuk.edit_text(text=upgraded_cap, reply_markup=InlineKeyboardMarkup(btn))
-            await _auto_delete(fek)
-        except Exception as e:
-            logger.exception(e)
-            await _auto_delete(fuk)
-
-    if settings["imdb"]:
-        asyncio.create_task(_upgrade_with_imdb())
-    else:
-        asyncio.create_task(_auto_delete(fuk))
-
-
-async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
-    mv_id = msg.id
-    mv_rqst = name
-    reqstr1 = msg.from_user.id if msg.from_user else 0
-    reqstr = await client.get_users(reqstr1)
-    settings = await get_settings(msg.chat.id)
-    query = re.sub(
-        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*w?|kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|with\ssubtitle(s)?)",
-        "", msg.text, flags=re.IGNORECASE)  # plis contribute some common words
-    query = query.strip() + " movie"
-    try:
-        movies = await get_poster(mv_rqst, bulk=True)
-    except Exception as e:
-        logger.exception(e)
-        reqst_gle = mv_rqst.replace(" ", "+")
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
-    movielist = []
-    if not movies:
-        reqst_gle = mv_rqst.replace(" ", "+")
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
-    movielist += [movie.get('title') for movie in movies]
-    movielist += [f"{movie.get('title')} {movie.get('year')}" for movie in movies]
-    SPELL_CHECK[mv_id] = movielist
-    if AI_SPELL_CHECK == True and vj_search == True:
-        vj_search_new = False
-        vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
-        movienamelist = []
-        movienamelist += [movie.get('title') for movie in movies]
-        for techvj in movienamelist:
+            hehe = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=InlineKeyboardMarkup(btn))
+            await reply_msg.delete()
             try:
-                mv_rqst = mv_rqst.capitalize()
-            except:
-                pass
-            if mv_rqst.startswith(techvj[0]):
-                await auto_filter(client, techvj, msg, reply_msg, vj_search_new)
-                break
-        reqst_gle = mv_rqst.replace(" ", "+")
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
+                if settings['auto_delete']:
+                    await asyncio.sleep(300)
+                    await hehe.delete()
+                    await message.delete()
+            except KeyError:
+                await save_group_settings(message.chat.id, 'auto_delete', True)
+                await asyncio.sleep(300)
+                await hehe.delete()
+                await message.delete()
+        except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
+            pic = imdb.get('poster')
+            poster = pic.replace('.jpg', "._V1_UX360.jpg") 
+            hmm = await message.reply_photo(photo=poster, caption=cap, reply_markup=InlineKeyboardMarkup(btn))
+            await reply_msg.delete()
+            try:
+               if settings['auto_delete']:
+                    await asyncio.sleep(300)
+                    await hmm.delete()
+                    await message.delete()
+            except KeyError:
+                await save_group_settings(message.chat.id, 'auto_delete', True)
+                await asyncio.sleep(300)
+                await hmm.delete()
+                await message.delete()
+        except Exception as e:
+            logger.exception(e) 
+            fek = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn))
+            try:
+                if settings['auto_delete']:
+                    await asyncio.sleep(300)
+                    await fek.delete()
+                    await message.delete()
+            except KeyError:
+                await save_group_settings(message.chat.id, 'auto_delete', True)
+                await asyncio.sleep(300)
+                await fek.delete()
+                await message.delete()
     else:
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=movie_name.strip(),
-                    callback_data=f"spol#{reqstr1}#{k}",
-                )
-            ]
-            for k, movie_name in enumerate(movielist)
-        ]
+        fuk = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
+        
+        try:
+            if settings['auto_delete']:
+                await asyncio.sleep(300)
+                await fuk.delete()
+                await message.delete()
+        except KeyError:
+            await save_group_settings(message.chat.id, 'auto_delete', True)
+            await asyncio.sleep(300)
+            await fuk.delete()
+            await message.delete()
+    
 async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
     mv_rqst = name
