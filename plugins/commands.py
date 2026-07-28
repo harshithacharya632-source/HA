@@ -26,7 +26,12 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
     that re-parsed the original link and could fail with
     'File not found or link is invalid'.
 
-    No auto-delete/timer here on purpose — the file just arrives and stays."""
+    Same copyright-notice + 60s auto-delete + "Get File Again" button as
+    every other single-file delivery in the bot (see the main file-delivery
+    path below) — this was dropped in an earlier fix while chasing that
+    'File not found' bug, but the actual bugs were the dead link-parsing
+    and a missing `return` elsewhere, both fixed now, so it's safe to
+    restore the normal behaviour here too."""
     files_ = await get_file_details(file_id)
     if not files_:
         await client.send_message(chat_id, "<b>❌ Sorry, that file could no longer be found. Please search again.</b>")
@@ -49,7 +54,7 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
 
     reply_markup = await build_stream_reply_markup(chat_id, file_id)
     try:
-        await client.send_cached_media(
+        msg = await client.send_cached_media(
             chat_id=chat_id,
             file_id=file_id,
             caption=f_caption,
@@ -59,6 +64,12 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
     except MediaEmpty:
         await client.send_message(chat_id, "❌ <b>File is no longer available.</b> The source file may have been deleted from the database channel.")
         return
+
+    btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
+    k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
+    await asyncio.sleep(60)
+    await msg.delete()
+    await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>", reply_markup=InlineKeyboardMarkup(btn))
 
 
 BATCH_FILES = {}
