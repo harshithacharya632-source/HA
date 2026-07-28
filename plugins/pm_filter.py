@@ -184,7 +184,20 @@ async def next_page(bot, query):
             pass
         return
 
-    files, n_offset, total = await get_ranked_page(query.message.chat.id, key, search, offset=offset, max_results=8)
+    settings = await get_settings(query.message.chat.id)
+    # ✅ PAGE_SIZE must match whatever page 1 (auto_filter) fetched with —
+    # this used to be hard-coded to 8 for the actual fetch while the page
+    # counter below divided by 10 (or MAX_B_TN), so the displayed
+    # "current / total" numbers never matched the real content and NEXT
+    # could look like it looped back to page 1. Same value, everywhere.
+    try:
+        page_size = 10 if settings['max_btn'] else int(MAX_B_TN)
+    except KeyError:
+        await save_group_settings(query.message.chat.id, 'max_btn', True)
+        settings = await get_settings(query.message.chat.id)
+        page_size = 10
+
+    files, n_offset, total = await get_ranked_page(query.message.chat.id, key, search, offset=offset, max_results=page_size)
     try:
         n_offset = int(n_offset)
     except:
@@ -194,7 +207,6 @@ async def next_page(bot, query):
         return
     temp.GETALL[key] = files
     temp.SHORT[query.from_user.id] = query.message.chat.id
-    settings = await get_settings(query.message.chat.id)
     pre = 'filep' if settings.get('file_secure', False) else 'file'
     # ✅ Speed: the ❌-availability scan needs the FULL matching pool
     # (up to 50,000 files), which is what was adding 1.5-2s to every
@@ -225,71 +237,28 @@ async def next_page(bot, query):
             ],
             build_quality_row("all", key, req)
         ]
-    try:
-        if settings['max_btn']:
-            if 0 < offset <= 10:
-                off_set = 0
-            elif offset == 0:
-                off_set = None
-            else:
-                off_set = offset - 10
-            if n_offset == 0:
-                btn.append(
-                    [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS)]
-                )
-            elif off_set is None:
-                btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
-            else:
-                btn.append(
-                    [
-                        InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY),
-                        InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS),
-                        InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)
-                    ],
-                )
-        else:
-            if 0 < offset <= int(MAX_B_TN):
-                off_set = 0
-            elif offset == 0:
-                off_set = None
-            else:
-                off_set = offset - int(MAX_B_TN)
-            if n_offset == 0:
-                btn.append(
-                    [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages", style=enums.ButtonStyle.SUCCESS)]
-                )
-            elif off_set is None:
-                btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
-            else:
-                btn.append(
-                    [
-                        InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY),
-                        InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages", style=enums.ButtonStyle.SUCCESS),
-                        InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)
-                    ],
-                )
-    except KeyError:
-        await save_group_settings(query.message.chat.id, 'max_btn', True)
-        if 0 < offset <= 10:
-            off_set = 0
-        elif offset == 0:
-            off_set = None
-        else:
-            off_set = offset - 10
-        if n_offset == 0:
-            btn.append(
-                [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS)]
-            )
-        elif off_set is None:
-            btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
-        else:
-            btn.append(
-                [
-                    InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY),
-                    InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages", style=enums.ButtonStyle.SUCCESS),
-                    InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)
-                ],
-            )
+
+    if 0 < offset <= page_size:
+        off_set = 0
+    elif offset == 0:
+        off_set = None
+    else:
+        off_set = offset - page_size
+    page_label = f"{math.ceil(int(offset) / page_size) + 1} / {math.ceil(total / page_size)}"
+    if n_offset == 0:
+        btn.append(
+            [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY), InlineKeyboardButton(page_label, callback_data="pages", style=enums.ButtonStyle.SUCCESS)]
+        )
+    elif off_set is None:
+        btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(page_label, callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)])
+    else:
+        btn.append(
+            [
+                InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}", style=enums.ButtonStyle.PRIMARY),
+                InlineKeyboardButton(page_label, callback_data="pages", style=enums.ButtonStyle.SUCCESS),
+                InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}", style=enums.ButtonStyle.PRIMARY)
+            ],
+        )
     if not settings["button"]:
         cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
         time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
@@ -338,7 +307,9 @@ async def advantage_spoll_choker(bot, query):
             # though the corrected name is right. A key unique to this specific
             # suggestion click guarantees a fresh search.
             spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}-spol-{movie_}"
-            files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=8)
+            spoll_settings = await get_settings(query.message.chat.id)
+            spoll_page_size = 10 if spoll_settings.get('max_btn', True) else int(MAX_B_TN)
+            files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=spoll_page_size)
             # ✅ Close the "Did you mean" suggestion prompt before showing
             # the fresh search, instead of editing it in place.
             try:
@@ -1000,7 +971,7 @@ async def get_cached_season_files(chat_id, key, search):
     entry = SEASON_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
         return entry["files"]
-    files, _, _ = await get_search_results(chat_id, search, max_results=50000)
+    files, _, _ = await get_search_results(chat_id, search, max_results=50000, need_count=False)
     files = filter_and_rank(files, search)
     SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
@@ -1026,7 +997,7 @@ async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_
     entry = DISPLAY_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < DISPLAY_CACHE_TTL):
         return entry["files"]
-    files, _, _ = await get_search_results(chat_id, search, max_results=pool_size)
+    files, _, _ = await get_search_results(chat_id, search, max_results=pool_size, need_count=False)
     files = filter_and_rank(files, search)
     DISPLAY_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
@@ -3754,8 +3725,14 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
             )
 
             key = f"{message.chat.id}-{message.id}"
-            files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=8)
             settings = await get_settings(message.chat.id)
+            # ✅ PAGE_SIZE must match whatever the "X / Y" page-counter math
+            # below uses (10, or MAX_B_TN when Max Buttons is off) — this
+            # used to be hard-coded to 8 regardless of that setting, which
+            # is exactly what caused the wrong "current/total" page numbers
+            # and the NEXT button not lining up with the real content.
+            page_size = 10 if settings.get('max_btn', True) else int(MAX_B_TN)
+            files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=page_size)
             if not files:
                 if settings["spell_check"]:
                     return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
