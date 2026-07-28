@@ -185,17 +185,12 @@ async def next_page(bot, query):
         return
 
     settings = await get_settings(query.message.chat.id)
-    # ✅ PAGE_SIZE must match whatever page 1 (auto_filter) fetched with —
-    # this used to be hard-coded to 8 for the actual fetch while the page
-    # counter below divided by 10 (or MAX_B_TN), so the displayed
-    # "current / total" numbers never matched the real content and NEXT
-    # could look like it looped back to page 1. Same value, everywhere.
-    try:
-        page_size = 10 if settings['max_btn'] else int(MAX_B_TN)
-    except KeyError:
-        await save_group_settings(query.message.chat.id, 'max_btn', True)
-        settings = await get_settings(query.message.chat.id)
-        page_size = 10
+    # ✅ PAGE_SIZE stays fixed at 8 (that's the size you want) — the actual
+    # bug was that the page-counter math below was dividing by 10 (or
+    # MAX_B_TN) while the real fetch was 8, so "current / total" never
+    # matched the real content. Fix: keep 8, just use 8 in the math too,
+    # everywhere, instead of a different number.
+    page_size = 8
 
     files, n_offset, total = await get_ranked_page(query.message.chat.id, key, search, offset=offset, max_results=page_size)
     try:
@@ -307,8 +302,7 @@ async def advantage_spoll_choker(bot, query):
             # though the corrected name is right. A key unique to this specific
             # suggestion click guarantees a fresh search.
             spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}-spol-{movie_}"
-            spoll_settings = await get_settings(query.message.chat.id)
-            spoll_page_size = 10 if spoll_settings.get('max_btn', True) else int(MAX_B_TN)
+            spoll_page_size = 8
             files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=spoll_page_size)
             # ✅ Close the "Did you mean" suggestion prompt before showing
             # the fresh search, instead of editing it in place.
@@ -1660,6 +1654,13 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         # ✅ Quality row stays visible (with a ✅ on the active one) so the
         # user can switch quality directly without hitting Back first.
         btn = [build_quality_row(scope, key, uid, selected=qkey, available=get_available_qualities(pool))]
+        # ✅ When opened straight from the main results (scope == "all"),
+        # keep the "🍃 SERIES CLICK 🍃" season/episode button available too
+        # — it was missing here, so picking a quality lost your only way
+        # to jump into season/episode navigation without going all the
+        # way back first.
+        if scope == "all":
+            btn.append([InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}", style=enums.ButtonStyle.PRIMARY)])
         btn.append([InlineKeyboardButton(
             f"🎚 {label} — {len(matched)} file(s)", callback_data="ident"
         )])
@@ -1807,6 +1808,13 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         # lost) plus a single compact "Change Language" button — instead
         # of repeating the full language menu here.
         btn = [build_language_quality_row(lkey, scope, key, uid, available=get_available_qualities(matched))]
+        # ✅ When opened straight from the main results (scope == "all"),
+        # keep the "🍃 SERIES CLICK 🍃" season/episode button available too
+        # — this was missing here, so picking a language lost your only
+        # way to jump into season/episode navigation without going all
+        # the way back first.
+        if scope == "all":
+            btn.append([InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}", style=enums.ButtonStyle.PRIMARY)])
         btn.append([InlineKeyboardButton(
             "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}", style=enums.ButtonStyle.SUCCESS
         )])
@@ -1902,6 +1910,8 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
         end             = start + FILES_PER_PAGE
 
         btn = [build_language_quality_row(lkey, scope, key, uid, selected=qkey)]
+        if scope == "all":
+            btn.append([InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}", style=enums.ButtonStyle.PRIMARY)])
         btn.append([InlineKeyboardButton(
             "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}", style=enums.ButtonStyle.SUCCESS
         )])
@@ -3726,12 +3736,10 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
 
             key = f"{message.chat.id}-{message.id}"
             settings = await get_settings(message.chat.id)
-            # ✅ PAGE_SIZE must match whatever the "X / Y" page-counter math
-            # below uses (10, or MAX_B_TN when Max Buttons is off) — this
-            # used to be hard-coded to 8 regardless of that setting, which
-            # is exactly what caused the wrong "current/total" page numbers
-            # and the NEXT button not lining up with the real content.
-            page_size = 10 if settings.get('max_btn', True) else int(MAX_B_TN)
+            # ✅ PAGE_SIZE stays fixed at 8 — the bug was the page-counter
+            # math further down using 10/MAX_B_TN instead of 8, not the
+            # fetch size itself. Both now use this same fixed value.
+            page_size = 8
             files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=page_size)
             if not files:
                 if settings["spell_check"]:
@@ -3794,20 +3802,9 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
             build_quality_row("all", key, req)
         ]
     if offset != "":
-        try:
-            if settings['max_btn']:
-                btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
-                )
-            else:
-                btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
-                )
-        except KeyError:
-            await save_group_settings(message.chat.id, 'max_btn', True)
-            btn.append(
-                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
-            )
+        btn.append(
+            [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/page_size)}",callback_data="pages", style=enums.ButtonStyle.SUCCESS), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}", style=enums.ButtonStyle.PRIMARY)]
+        )
     else:
         btn.append(
             [InlineKeyboardButton(text="𝐍𝐎 𝐌𝐎𝐑𝐄 𝐏𝐀𝐆𝐄𝐒 𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄",callback_data="pages")]
