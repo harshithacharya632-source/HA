@@ -3698,6 +3698,14 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
 async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from_deeplink=False):
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
+    # ✅ Fixed page size used everywhere below (both the normal search
+    # path and the spoll/corrected-name path) — must be defined here,
+    # unconditionally, since it used to only be set inside the "not spoll"
+    # branch while the pagination math further down runs for BOTH
+    # branches, crashing every suggestion-button click with
+    # "UnboundLocalError: local variable 'page_size' referenced before
+    # assignment".
+    page_size = 8
     if not spoll:
         message = msg
         # from_deeplink=True is used by the "GET FILES" channel button
@@ -3747,10 +3755,6 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
 
             key = f"{message.chat.id}-{message.id}"
             settings = await get_settings(message.chat.id)
-            # ✅ PAGE_SIZE stays fixed at 8 — the bug was the page-counter
-            # math further down using 10/MAX_B_TN instead of 8, not the
-            # fetch size itself. Both now use this same fixed value.
-            page_size = 8
             files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=page_size)
             if not files:
                 if settings["spell_check"]:
