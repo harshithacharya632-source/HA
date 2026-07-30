@@ -279,8 +279,6 @@ async def next_page(bot, query):
 async def advantage_spoll_choker(bot, query):
     _, user, movie_ = query.data.split('#')
     movies = SPELL_CHECK.get(query.message.reply_to_message.id)
-  #  if not movies:
-     #   return await query.answer(script.OLD_ALRT_TXT.format(query.from_user.first_name), show_alert=True)
     if int(user) != 0 and query.from_user.id != int(user):
         return await query.answer(script.ALRT_TXT.format(query.from_user.first_name), show_alert=True)
     if movie_ == "close_spellcheck":
@@ -289,41 +287,59 @@ async def advantage_spoll_choker(bot, query):
     movie = re.sub(r"[:\-()]", " ", movie)
     movie = re.sub(r"\s+", " ", movie).strip()
     await query.answer(script.TOP_ALRT_MSG)
-    gl = await global_filters(bot, query.message, text=movie)
-    if gl == False:
-        k = await manual_filters(bot, query.message, text=movie)
-        if k == False:
-            # ⚠️ Must NOT reuse the original message's key here. auto_filter()
-            # already cached an EMPTY result under "{chat_id}-{original_msg_id}"
-            # for the misspelled query (that's WHY this suggestion screen showed
-            # up at all) — reusing that same key just returns the stale empty
-            # cache hit instead of actually searching for the corrected name,
-            # so the button looked like it did nothing / said "not found" even
-            # though the corrected name is right. A key unique to this specific
-            # suggestion click guarantees a fresh search.
-            spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}-spol-{movie_}"
-            spoll_page_size = 8
-            files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=spoll_page_size)
-            # ✅ Close the "Did you mean" suggestion prompt before showing
-            # the fresh search, instead of editing it in place.
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            if files:
-                k = (spoll_key, movie, files, offset, total_results)
-                ai_search = True
-                reply_msg = await bot.send_message(query.message.chat.id, f"<b><i>Searching For {movie} 🔍</i></b>")
-                await auto_filter(bot, movie, query, reply_msg, ai_search, k)
+
+    # ✅ Whatever happens below, the user must end up seeing SOMETHING —
+    # a result, a "not found", or an error — never a "Searching..."
+    # message frozen forever with no explanation (which is what a single
+    # unhandled exception anywhere in this chain used to cause).
+    reply_msg = None
+    try:
+        gl = await global_filters(bot, query.message, text=movie)
+        if gl == False:
+            k = await manual_filters(bot, query.message, text=movie)
+            if k == False:
+                # ⚠️ Must NOT reuse the original message's key here. auto_filter()
+                # already cached an EMPTY result under "{chat_id}-{original_msg_id}"
+                # for the misspelled query (that's WHY this suggestion screen showed
+                # up at all) — reusing that same key just returns the stale empty
+                # cache hit instead of actually searching for the corrected name,
+                # so the button looked like it did nothing / said "not found" even
+                # though the corrected name is right. A key unique to this specific
+                # suggestion click guarantees a fresh search.
+                spoll_key = f"{query.message.chat.id}-{query.message.reply_to_message.id}-spol-{movie_}"
+                spoll_page_size = 8
+                files, offset, total_results = await get_ranked_page(query.message.chat.id, spoll_key, movie, offset=0, max_results=spoll_page_size)
+                # ✅ Close the "Did you mean" suggestion prompt before showing
+                # the fresh search, instead of editing it in place.
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                if files:
+                    k = (spoll_key, movie, files, offset, total_results)
+                    ai_search = True
+                    reply_msg = await bot.send_message(query.message.chat.id, f"<b><i>Searching For {movie} 🔍</i></b>")
+                    await auto_filter(bot, movie, query, reply_msg, ai_search, k)
+                else:
+                    reqstr1 = query.from_user.id if query.from_user else 0
+                    reqstr = await bot.get_users(reqstr1)
+                    if NO_RESULTS_MSG:
+                        await bot.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, movie)))
+                    k = await bot.send_message(query.message.chat.id, script.MVE_NT_FND)
+                    await asyncio.sleep(10)
+                    await k.delete()
+    except Exception as e:
+        logger.exception(e)
+        fallback_text = f"⚠️ <b>Something went wrong showing results for {movie}.</b> Please search again."
+        try:
+            if reply_msg:
+                await reply_msg.edit_text(fallback_text)
             else:
-                reqstr1 = query.from_user.id if query.from_user else 0
-                reqstr = await bot.get_users(reqstr1)
-                if NO_RESULTS_MSG:
-                    await bot.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, movie)))
-                k = await bot.send_message(query.message.chat.id, script.MVE_NT_FND)
-                await asyncio.sleep(10)
-                await k.delete()
-                
+                await bot.send_message(query.message.chat.id, fallback_text)
+        except Exception:
+            pass
+
+
 #1234567
 @Client.on_callback_query(filters.regex(r"^fy#"))
 async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
@@ -1666,11 +1682,8 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
         )])
 
         for f in matched[start:end]:
-            name    = f["file_name"]
-            size    = get_size(f["file_size"])
-            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                f"[{size}] {display}",
+                format_file_button_text(f),
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -1803,31 +1816,25 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         start           = page * FILES_PER_PAGE
         end             = start + FILES_PER_PAGE
 
-        # ✅ Top of the results now shows a Quality row (to refine within
-        # this language, routed through lq# so the language filter isn't
-        # lost) plus a single compact "Change Language" button — instead
-        # of repeating the full language menu here.
+        # ✅ Top of the results shows a Quality row (to refine within this
+        # language, routed through lq# so the language filter isn't lost),
+        # then Series (left) + Change Language (right) side by side in one
+        # row, then the language+count label.
         btn = [build_language_quality_row(lkey, scope, key, uid, available=get_available_qualities(matched))]
-        # ✅ When opened straight from the main results (scope == "all"),
-        # keep the "🍃 SERIES CLICK 🍃" season/episode button available too
-        # — this was missing here, so picking a language lost your only
-        # way to jump into season/episode navigation without going all
-        # the way back first.
+        series_and_lang_row = []
         if scope == "all":
-            btn.append([InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}", style=enums.ButtonStyle.PRIMARY)])
-        btn.append([InlineKeyboardButton(
+            series_and_lang_row.append(InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}", style=enums.ButtonStyle.PRIMARY))
+        series_and_lang_row.append(InlineKeyboardButton(
             "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}", style=enums.ButtonStyle.SUCCESS
-        )])
+        ))
+        btn.append(series_and_lang_row)
         btn.append([InlineKeyboardButton(
             f"🌐 {label} — {len(matched)} file(s)", callback_data="ident"
         )])
 
         for f in matched[start:end]:
-            name    = f["file_name"]
-            size    = get_size(f["file_size"])
-            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                f"[{size}] {display}",
+                format_file_button_text(f),
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -1910,21 +1917,20 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
         end             = start + FILES_PER_PAGE
 
         btn = [build_language_quality_row(lkey, scope, key, uid, selected=qkey)]
+        series_and_lang_row = []
         if scope == "all":
-            btn.append([InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}", style=enums.ButtonStyle.PRIMARY)])
-        btn.append([InlineKeyboardButton(
+            series_and_lang_row.append(InlineKeyboardButton("🍃 ꜱᴇʀɪᴇꜱ ᴄʟɪᴄᴋ 🍃", callback_data=f"seasons#{key}", style=enums.ButtonStyle.PRIMARY))
+        series_and_lang_row.append(InlineKeyboardButton(
             "🔁 Change Language", callback_data=f"langmenu#{scope}#{key}#{uid}", style=enums.ButtonStyle.SUCCESS
-        )])
+        ))
+        btn.append(series_and_lang_row)
         btn.append([InlineKeyboardButton(
             f"🎚 {q_label} · 🌐 {lang_label} — {len(matched)} file(s)", callback_data="ident"
         )])
 
         for f in matched[start:end]:
-            name    = f["file_name"]
-            size    = get_size(f["file_size"])
-            display = name[:45] + "…" if len(name) > 45 else name
             btn.append([InlineKeyboardButton(
-                f"[{size}] {display}",
+                format_file_button_text(f),
                 callback_data=f'{pre}#{f["file_id"]}'
             )])
 
@@ -3761,7 +3767,14 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
         message = msg.message.reply_to_message  # msg will be callback query
         key_from_spoll, search, files, offset, total_results = spoll
         settings = await get_settings(message.chat.id)
-        await msg.message.delete()
+        # advantage_spoll_choker already deleted this message before calling
+        # us — this was a second, unprotected delete attempt on an already-
+        # gone message, which raised an exception and silently killed the
+        # whole search right here (no error shown, no results, just stuck).
+        try:
+            await msg.message.delete()
+        except Exception:
+            pass
     pre = 'filep' if settings.get('file_secure', False) else 'file'
     # spoll uses its own unique key (set in advantage_spoll_choker) so the
     # corrected-name search never collides with the cache entry the original
