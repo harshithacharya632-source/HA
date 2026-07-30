@@ -321,9 +321,14 @@ async def advantage_spoll_choker(bot, query):
                     reply_msg = await bot.send_message(query.message.chat.id, f"<b><i>Searching For {movie} 🔍</i></b>")
                     await auto_filter(bot, movie, query, reply_msg, ai_search, k)
                 else:
-                    reqstr1 = query.from_user.id if query.from_user else 0
-                    reqstr = await bot.get_users(reqstr1)
-                    if NO_RESULTS_MSG:
+                    # ✅ query.from_user is already the full user object —
+                    # no need to re-fetch it via bot.get_users(), which can
+                    # fail with BOT_METHOD_INVALID for peers Pyrogram hasn't
+                    # cached yet and was crashing this whole handler (that's
+                    # what the "Something went wrong" fallback was catching
+                    # every single time for a suggestion not in your DB yet).
+                    reqstr = query.from_user
+                    if NO_RESULTS_MSG and reqstr:
                         await bot.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, movie)))
                     k = await bot.send_message(query.message.chat.id, script.MVE_NT_FND)
                     await asyncio.sleep(10)
@@ -3950,10 +3955,13 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
     mv_rqst = name
     reqstr1 = msg.from_user.id if msg.from_user else 0
-    if reqstr1:
-        reqstr = await client.get_users(reqstr1)
-        reqstr_id = reqstr.id
-        reqstr_mention = reqstr.mention
+    # ✅ msg.from_user is already the full user object — no need to
+    # re-fetch it via client.get_users(), which can fail with
+    # BOT_METHOD_INVALID for peers Pyrogram hasn't cached yet and would
+    # crash this entire function (every typo'd search goes through here).
+    if msg.from_user:
+        reqstr_id = msg.from_user.id
+        reqstr_mention = msg.from_user.mention
     else:
         reqstr_id = 0
         reqstr_mention = "Anonymous"
