@@ -1321,8 +1321,18 @@ async def seasons_cb_handler(client, query: CallbackQuery):
         # for the whole time the seasons are being processed.
         await query.answer()
 
+    except QueryIdInvalid:
+        # Button was tapped on a stale/expired message — Telegram won't
+        # accept an answer to this query at all anymore. Trying anyway
+        # (the old behaviour) raised the SAME error a second time, with
+        # nothing catching it, so the button silently did nothing. Now
+        # it's just a no-op instead of a silent crash.
+        pass
     except Exception as e:
-        await query.answer(f"❌ Error: {e}", show_alert=True)
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
 
 
 # ===============================
@@ -1405,8 +1415,18 @@ async def episode_selector(client, query: CallbackQuery):
         # for the whole time the episodes are being processed.
         await query.answer()
 
+    except QueryIdInvalid:
+        # Button was tapped on a stale/expired message — Telegram won't
+        # accept an answer to this query at all anymore. Trying anyway
+        # (the old behaviour) raised the SAME error a second time, with
+        # nothing catching it, so the button silently did nothing. Now
+        # it's just a no-op instead of a silent crash.
+        pass
     except Exception as e:
-        await query.answer(f"❌ Error: {e}", show_alert=True)
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
 
 
 # ===============================
@@ -1503,8 +1523,18 @@ async def filter_files(client, query: CallbackQuery):
         # for the whole time the file list is being processed.
         await query.answer()
 
+    except QueryIdInvalid:
+        # Button was tapped on a stale/expired message — Telegram won't
+        # accept an answer to this query at all anymore. Trying anyway
+        # (the old behaviour) raised the SAME error a second time, with
+        # nothing catching it, so the button silently did nothing. Now
+        # it's just a no-op instead of a silent crash.
+        pass
     except Exception as e:
-        await query.answer(f"❌ Error: {e}", show_alert=True)
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
 
 
 # ===============================
@@ -1598,8 +1628,18 @@ async def combined_files(client, query: CallbackQuery):
         # for the whole time the combined files are being processed.
         await query.answer()
 
+    except QueryIdInvalid:
+        # Button was tapped on a stale/expired message — Telegram won't
+        # accept an answer to this query at all anymore. Trying anyway
+        # (the old behaviour) raised the SAME error a second time, with
+        # nothing catching it, so the button silently did nothing. Now
+        # it's just a no-op instead of a silent crash.
+        pass
     except Exception as e:
-        await query.answer(f"❌ Error: {e}", show_alert=True)
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
 
 
 # ===============================
@@ -1720,8 +1760,18 @@ async def quality_filter_cb_handler(client, query: CallbackQuery):
 
         await query.answer()
 
+    except QueryIdInvalid:
+        # Button was tapped on a stale/expired message — Telegram won't
+        # accept an answer to this query at all anymore. Trying anyway
+        # (the old behaviour) raised the SAME error a second time, with
+        # nothing catching it, so the button silently did nothing. Now
+        # it's just a no-op instead of a silent crash.
+        pass
     except Exception as e:
-        await query.answer(f"❌ Error: {e}", show_alert=True)
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
 
 
 # ===============================
@@ -1777,8 +1827,18 @@ async def language_menu_cb_handler(client, query: CallbackQuery):
 
         await query.answer()
 
+    except QueryIdInvalid:
+        # Button was tapped on a stale/expired message — Telegram won't
+        # accept an answer to this query at all anymore. Trying anyway
+        # (the old behaviour) raised the SAME error a second time, with
+        # nothing catching it, so the button silently did nothing. Now
+        # it's just a no-op instead of a silent crash.
+        pass
     except Exception as e:
-        await query.answer(f"❌ Error: {e}", show_alert=True)
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
 
 
 # ===============================
@@ -1868,8 +1928,18 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
 
         await query.answer()
 
+    except QueryIdInvalid:
+        # Button was tapped on a stale/expired message — Telegram won't
+        # accept an answer to this query at all anymore. Trying anyway
+        # (the old behaviour) raised the SAME error a second time, with
+        # nothing catching it, so the button silently did nothing. Now
+        # it's just a no-op instead of a silent crash.
+        pass
     except Exception as e:
-        await query.answer(f"❌ Error: {e}", show_alert=True)
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
 
 
 # ===============================
@@ -1965,8 +2035,18 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
 
         await query.answer()
 
+    except QueryIdInvalid:
+        # Button was tapped on a stale/expired message — Telegram won't
+        # accept an answer to this query at all anymore. Trying anyway
+        # (the old behaviour) raised the SAME error a second time, with
+        # nothing catching it, so the button silently did nothing. Now
+        # it's just a no-op instead of a silent crash.
+        pass
     except Exception as e:
-        await query.answer(f"❌ Error: {e}", show_alert=True)
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
 
 
 # SESSON End Here ##############
@@ -2948,10 +3028,13 @@ async def cb_handler(client: Client, query: CallbackQuery):
             await query.answer()
     
         except Exception as e:
-            await query.answer(
-                f"Something went wrong ❌\n\n{e}",
-                show_alert=True
-            )
+            try:
+                await query.answer(
+                    f"Something went wrong ❌\n\n{e}",
+                    show_alert=True
+                )
+            except Exception:
+                pass
 
 
     ######
@@ -3733,6 +3816,19 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
             search = search.replace("-", " ")
             search = search.replace(":", "")
             search = search.replace(".", "")
+
+            # ✅ Common typo: letter "O" instead of digit "0" right after
+            # S/E, e.g. "S04EO1" meant as "S04E01" (easy to type/copy-paste
+            # wrong since O and 0 look near-identical). Normalize BEFORE
+            # the season+episode regex below, since that regex requires
+            # real digits and would otherwise just leave "EO1" untouched
+            # (it doesn't match \d+), causing a silent search miss even
+            # though the intended episode is obvious to a human.
+            # Two separate patterns since "E" in "S04EO1" is preceded by a
+            # digit (no word boundary there), while "S" in "SO4E01" is at
+            # the start of a token (word boundary applies normally).
+            search = re.sub(r'(\d)[eE][oO](\d{1,2})\b', r'\g<1>E0\2', search)
+            search = re.sub(r'\b([sS])[oO](\d{1,2})', r'\g<1>0\2', search)
 
             # ✅ Season + Episode
             search = re.sub(
