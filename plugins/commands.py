@@ -690,7 +690,8 @@ async def start(client, message):
     if not files_:
         try:
             pre, file_id = ((base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))).decode("ascii")).split("_", 1)
-        except Exception:
+        except Exception as e:
+            logger.error(f"[start-fallback] Unrecognized /start payload data={data!r} (top-level file_id={file_id!r}, command={message.command!r}): {e}")
             return await message.reply_text("<b>❌ File not found or link is invalid. Please get a fresh link.</b>")
         try:
             if not await db.has_premium_access(message.from_user.id):
