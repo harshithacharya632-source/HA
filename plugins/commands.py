@@ -575,6 +575,13 @@ async def start(client, message):
             if PREMIUM_AND_REFERAL_MODE == True:
                 text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"           
             await message.reply_text(text=text.format(message.from_user.mention), protect_content=True)
+            try:
+                await client.send_message(
+                    LOG_CHANNEL,
+                    f"<b>✅ Verification Completed</b>\n\n👤 User: {message.from_user.mention}\n🆔 ID: <code>{message.from_user.id}</code>"
+                )
+            except Exception as e:
+                logger.error(f"Failed to log verification completion for {userid}: {e}")
             resume_data = None
             try:
                 resume_data = await verify_user(client, userid, token)
@@ -955,6 +962,39 @@ async def extend_premium_cmd(client, message):
         f"📨 Notified: {sent}\n"
         f"⚠️ Failed to notify (blocked bot etc.): {failed}"
     )
+
+
+@Client.on_message(filters.command('verification') & filters.user(ADMINS))
+async def verification_list_cmd(client, message):
+    """Owner-only: lists every user whose daily verification is still
+    valid today — name, id, and their verified-until date."""
+    try:
+        users = await db.get_all_verified_users()
+    except Exception as e:
+        logger.error(f"verification_list: get_all_verified_users failed: {e}")
+        return await message.reply_text("<b>❌ Something went wrong fetching the verification list. Check the logs.</b>")
+
+    if not users:
+        return await message.reply_text("<b>ℹ️ No users are verified today.</b>")
+
+    lines = [f"<b>✅ Verified Users — {len(users)} today</b>\n"]
+    for i, u in enumerate(users, 1):
+        uid = u.get("id")
+        verified_until = u.get("verified_until")
+
+        try:
+            user_obj = await client.get_users(uid)
+            name = user_obj.mention
+        except Exception:
+            name = "Unknown"
+
+        lines.append(f"{i}. {name} (<code>{uid}</code>)\n   ✅ Verified until {verified_until}")
+        await asyncio.sleep(0.03)  # gentle pacing for client.get_users calls
+
+    text = "\n\n".join(lines)
+    chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)] or [text]
+    for chunk in chunks:
+        await message.reply_text(chunk, disable_web_page_preview=True)
 
 
 @Client.on_message(filters.command('premium_list') & filters.user(ADMINS))
