@@ -337,7 +337,7 @@ async def start(client, message):
                     new_expiry = current_expiry + datetime.timedelta(seconds=seconds)
                 else:
                     new_expiry = now + datetime.timedelta(seconds=seconds)
-                await db.update_user({"id": uid, "expiry_time": new_expiry})
+                await db.update_user({"id": uid, "expiry_time": new_expiry, "expiry_reminder_sent": False, "expired_notified": False})
                 return new_expiry
 
             referrer_seconds = await get_seconds(REFERAL_PREMEIUM_TIME)  # 1 week, as advertised
@@ -955,6 +955,107 @@ async def extend_premium_cmd(client, message):
         f"📨 Notified: {sent}\n"
         f"⚠️ Failed to notify (blocked bot etc.): {failed}"
     )
+
+
+@Client.on_message(filters.command('premium_list') & filters.user(ADMINS))
+async def premium_list_cmd(client, message):
+    """Owner-only: lists every user with currently-active premium — name,
+    id, and remaining time — soonest-expiring first."""
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+
+    try:
+        users = await db.get_all_premium_users()
+    except Exception as e:
+        logger.error(f"premium_list: get_all_premium_users failed: {e}")
+        return await message.reply_text("<b>❌ Something went wrong fetching the premium list. Check the logs.</b>")
+
+    if not users:
+        return await message.reply_text("<b>ℹ️ No active premium users right now.</b>")
+
+    now = datetime.datetime.now()
+    lines = [f"<b>👑 Premium Users — {len(users)} active</b>\n"]
+    for i, u in enumerate(users, 1):
+        uid = u.get("id")
+        expiry = u.get("expiry_time")
+        remaining = expiry - now
+        days = remaining.days
+        hours, rem_secs = divmod(remaining.seconds, 3600)
+        minutes = rem_secs // 60
+
+        try:
+            user_obj = await client.get_users(uid)
+            name = user_obj.mention
+        except Exception:
+            name = "Unknown"
+
+        lines.append(
+            f"{i}. {name} (<code>{uid}</code>)\n"
+            f"   ⏳ {days}d {hours}h {minutes}m left — expires {expiry.strftime('%Y-%m-%d %H:%M')}"
+        )
+        await asyncio.sleep(0.03)  # gentle pacing for client.get_users calls
+
+    text = "\n\n".join(lines)
+    # Telegram caps messages at 4096 chars — split into safe chunks if the list is long.
+    chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)] or [text]
+    for chunk in chunks:
+        await message.reply_text(chunk, disable_web_page_preview=True)
+
+
+async def premium_expiry_notifier(client):
+    """Background loop — call once at bot startup, e.g.:
+        asyncio.create_task(premium_expiry_notifier(app))
+    right after your Client is created/started in the main bot file.
+
+    Every hour, checks for:
+      1) Active-premium users expiring within the next 24h -> sends a
+         one-time 'ends tomorrow, renew with /plan' reminder.
+      2) Users whose premium expired within the last 24h -> sends a
+         one-time thank-you + 'buy again with /plan' message.
+    Each user is only ever notified once per cycle via the
+    expiry_reminder_sent / expired_notified flags in their DB record,
+    which get reset automatically whenever their premium is renewed."""
+    while True:
+        try:
+            expiring_soon = await db.get_users_expiring_within(86400)  # next 24h
+            for u in expiring_soon:
+                uid = u.get("id")
+                try:
+                    await client.send_message(
+                        uid,
+                        "<b>⏳ Your Goflix premium ends tomorrow!</b>\n\n"
+                        "Renew now to keep your ad-free, direct-download access.\n\n"
+                        "💎 Send /plan to buy again."
+                    )
+                except Exception as e:
+                    logger.error(f"[premium_expiry_notifier] reminder failed for {uid}: {e}")
+                try:
+                    await db.mark_expiry_reminder_sent(uid)
+                except Exception as e:
+                    logger.error(f"[premium_expiry_notifier] mark_expiry_reminder_sent failed for {uid}: {e}")
+                await asyncio.sleep(0.05)
+
+            recently_expired = await db.get_recently_expired_users(86400)  # last 24h
+            for u in recently_expired:
+                uid = u.get("id")
+                try:
+                    await client.send_message(
+                        uid,
+                        "<b>Your Goflix premium has ended.</b>\n\n"
+                        "🙏 Thank you for using Goflix premium!\n\n"
+                        "Want to buy again? Send /plan"
+                    )
+                except Exception as e:
+                    logger.error(f"[premium_expiry_notifier] expired-notice failed for {uid}: {e}")
+                try:
+                    await db.mark_expired_notified(uid)
+                except Exception as e:
+                    logger.error(f"[premium_expiry_notifier] mark_expired_notified failed for {uid}: {e}")
+                await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.error(f"[premium_expiry_notifier] loop error: {e}")
+
+        await asyncio.sleep(3600)  # re-check every hour
 
 
 @Client.on_message(filters.command('logs') & filters.user(ADMINS))
@@ -1661,7 +1762,7 @@ async def give_premium_cmd_handler(client, message):
         seconds = await get_seconds(time)
         if seconds > 0:
             expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
-            user_data = {"id": user_id, "expiry_time": expiry_time} 
+            user_data = {"id": user_id, "expiry_time": expiry_time, "expiry_reminder_sent": False, "expired_notified": False} 
             await db.update_user(user_data)  # Use the update_user method to update or insert user data
             await message.reply_text("Premium access added to the user.")            
             await client.send_message(
@@ -1698,7 +1799,7 @@ async def remove_premium_cmd_handler(client, message):
         seconds = await get_seconds(time)
         if seconds > 0:
             expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
-            user_data = {"id": user_id, "expiry_time": expiry_time}  # Using "id" instead of "user_id"
+            user_data = {"id": user_id, "expiry_time": expiry_time, "expiry_reminder_sent": True, "expired_notified": True}  # Using "id" instead of "user_id"
             await db.update_user(user_data)  # Use the update_user method to update or insert user data
             await message.reply_text("Premium access removed to the user.")
             await client.send_message(
