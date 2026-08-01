@@ -354,6 +354,24 @@ class Database:
             return False
         return comp >= datetime.date.today()
 
+    async def get_all_verified_users(self):
+        """All users whose persisted daily verification is still valid
+        today (mirrors the same comp >= today logic as is_verified_today).
+        Used by the owner-only /verification command."""
+        today = datetime.date.today()
+        cursor = self.users.find({"verified_until": {"$exists": True, "$ne": None}})
+        verified = []
+        async for user_data in cursor:
+            expiry_date_str = user_data.get("verified_until")
+            try:
+                years, month, day = expiry_date_str.split('-')
+                comp = datetime.date(int(years), int(month), int(day))
+            except Exception:
+                continue
+            if comp >= today:
+                verified.append(user_data)
+        return verified
+
     async def set_thumbnail(self, id, file_id):
         await self.col.update_one({'id': int(id)}, {'$set': {'file_id': file_id}})
 
