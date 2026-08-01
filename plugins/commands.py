@@ -317,16 +317,45 @@ async def start(client, message):
             await message.reply(f"<b>You have joined using the referral link of user with ID {user_id}\n\nSend /start again to use the bot</b>")
             num_referrals = await get_referal_users_count(user_id)
             await client.send_message(chat_id = user_id, text = "<b>{} start the bot with your referral link\n\nTotal Referals - {}</b>".format(message.from_user.mention, num_referrals))
-            if num_referrals == REFERAL_COUNT:
-                time = REFERAL_PREMEIUM_TIME       
-                seconds = await get_seconds(time)
-                if seconds > 0:
-                    expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
-                    user_data = {"id": user_id, "expiry_time": expiry_time} 
-                    await db.update_user(user_data)  # Use the update_user method to update or insert user data
-                    await delete_all_referal_users(user_id)
-                    await client.send_message(chat_id = user_id, text = "<b>You Have Successfully Completed Total Referal.\n\nYou Added In Premium For {}</b>".format(REFERAL_PREMEIUM_TIME))
-                    return 
+
+            # ✅ Reward BOTH sides immediately for every unique referral —
+            # this used to only reward the REFERRER, and only once their
+            # count hit an exact REFERAL_COUNT threshold (so a single
+            # referral did nothing at all unless that threshold was
+            # exactly 1). The referee (person who opened the link) never
+            # got anything, ever, in any case. Also extends existing
+            # premium instead of overwriting it, so this can never
+            # accidentally shorten someone's remaining time.
+            async def _grant_or_extend_premium(uid, seconds):
+                existing = await db.get_user(uid)
+                now = datetime.datetime.now()
+                current_expiry = existing.get("expiry_time") if existing else None
+                if isinstance(current_expiry, datetime.datetime) and current_expiry > now:
+                    new_expiry = current_expiry + datetime.timedelta(seconds=seconds)
+                else:
+                    new_expiry = now + datetime.timedelta(seconds=seconds)
+                await db.update_user({"id": uid, "expiry_time": new_expiry})
+                return new_expiry
+
+            referrer_seconds = await get_seconds(REFERAL_PREMEIUM_TIME)  # 1 week, as advertised
+            referee_seconds = await get_seconds("3day")                 # 3 days for joining via a referral link
+
+            if referrer_seconds > 0:
+                await _grant_or_extend_premium(user_id, referrer_seconds)
+                try:
+                    await client.send_message(
+                        chat_id=user_id,
+                        text="<b>🎉 You earned {} premium for referring {}!</b>".format(REFERAL_PREMEIUM_TIME, message.from_user.mention)
+                    )
+                except Exception:
+                    pass
+
+            if referee_seconds > 0:
+                await _grant_or_extend_premium(message.from_user.id, referee_seconds)
+                try:
+                    await message.reply("<b>🎉 You got 3 days premium for joining via a referral link!</b>")
+                except Exception:
+                    pass
         else:
             if PREMIUM_AND_REFERAL_MODE == True:
                 buttons = [[
