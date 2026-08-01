@@ -1,4 +1,3 @@
-
 import sys, glob, importlib, logging, logging.config, pytz, asyncio
 from pathlib import Path
 
@@ -80,6 +79,14 @@ async def start():
         print("Restarting All Clone Bots.......")
         await restart_bots()
         print("Restarted All Clone Bots.")
+
+    # Background task: hourly check for premium users expiring within 24h
+    # (sends a one-time reminder) and users whose premium expired within
+    # the last 24h (sends a one-time thank-you + "buy again" message).
+    from plugins.commands import premium_expiry_notifier
+    asyncio.create_task(premium_expiry_notifier(TechVJBot))
+    print("Started premium expiry notifier background task.")
+
     app = web.AppRunner(await web_server())
     await app.setup()
     bind_address = "0.0.0.0"
@@ -92,4 +99,3 @@ if __name__ == '__main__':
         loop.run_until_complete(start())
     except KeyboardInterrupt:
         logging.info('Service Stopped Bye 👋')
-
