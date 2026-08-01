@@ -23,6 +23,12 @@ BTN_URL_REGEX = re.compile(r"(([^\[]+?) $$$$ (buttonurl|buttonalert):(?:/{0,2})(
 
 imdb = Cinemagoer(accessSystem="https")
 TOKENS = {}
+# Records when each verify token was issued (user.id -> {token: unix_time}).
+# Used to detect "bypass bots" that skip the shortener's ad/timer steps and
+# resolve straight to the final deep link almost instantly — a genuine
+# shortener flow always takes real human time.
+TOKEN_ISSUED_AT = {}
+MIN_VERIFY_SECONDS = 60  # verifications completed faster than this (seconds) are flagged as bypassed
 VERIFIED = {}
 # Remembers the deep-link payload (e.g. "file_XXXX") a user was trying to
 # open right before they got sent to verify. So once verification succeeds,
@@ -584,8 +590,14 @@ async def check_token(bot, userid, token):
             is_used = TKN[token]
             if is_used == True:
                 return False
-            else:
-                return True
+            issued_at = TOKEN_ISSUED_AT.get(user.id, {}).get(token)
+            if issued_at is not None and (time.time() - issued_at) < MIN_VERIFY_SECONDS:
+                # Redeemed way too fast for a real shortener flow (ad page +
+                # timer) — almost certainly a bypass tool. Consume the token
+                # so it can't be retried, and tell the caller to reject it.
+                TKN[token] = True
+                return "BYPASS"
+            return True
     else:
         return False
 
@@ -602,6 +614,7 @@ async def get_token(bot, userid, link, pending_data=None):
         PENDING[user.id] = pending_data
     token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
     TOKENS[user.id] = {token: False}
+    TOKEN_ISSUED_AT[user.id] = {token: time.time()}
     link = f"{link}verify-{user.id}-{token}"
     shortened_verify_url = await get_verify_shorted_link(link, VERIFY_SHORTLINK_URL, VERIFY_SHORTLINK_API)
     if VERIFY_SECOND_SHORTNER == True:
