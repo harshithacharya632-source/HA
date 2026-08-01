@@ -873,6 +873,8 @@ async def get_seconds(time_string):
         return value * 3600
     elif unit == 'day':
         return value * 86400
+    elif unit == 'week' or unit == 'w':
+        return value * 86400 * 7
     elif unit == 'month':
         return value * 86400 * 30
     elif unit == 'year':
