@@ -1,5 +1,3 @@
-
-
 import re
 from pymongo.errors import DuplicateKeyError
 import motor.motor_asyncio
@@ -293,6 +291,43 @@ class Database:
             await self.users.update_one({"id": uid}, {"$set": {"expiry_time": new_expiry}})
             extended_ids.append(uid)
         return extended_ids
+
+    async def get_all_premium_users(self):
+        """All users with currently-active premium, soonest-expiring first.
+        Used by /premium_list."""
+        now = datetime.datetime.now()
+        cursor = self.users.find({"expiry_time": {"$gt": now}}).sort("expiry_time", 1)
+        return [user_data async for user_data in cursor]
+
+    async def get_users_expiring_within(self, seconds):
+        """Active-premium users whose expiry falls within the next `seconds`
+        who have NOT already been sent the expiry reminder. Used by the
+        daily expiry-notifier loop to send a one-time 'ends tomorrow' notice."""
+        now = datetime.datetime.now()
+        soon = now + datetime.timedelta(seconds=seconds)
+        cursor = self.users.find({
+            "expiry_time": {"$gt": now, "$lte": soon},
+            "expiry_reminder_sent": {"$ne": True}
+        })
+        return [user_data async for user_data in cursor]
+
+    async def mark_expiry_reminder_sent(self, user_id):
+        await self.users.update_one({"id": user_id}, {"$set": {"expiry_reminder_sent": True}})
+
+    async def get_recently_expired_users(self, seconds):
+        """Users whose premium expired within the last `seconds` who have
+        NOT already been sent the 'premium ended' notice. Used by the daily
+        expiry-notifier loop to send a one-time thank-you/upsell message."""
+        now = datetime.datetime.now()
+        cutoff = now - datetime.timedelta(seconds=seconds)
+        cursor = self.users.find({
+            "expiry_time": {"$lte": now, "$gt": cutoff},
+            "expired_notified": {"$ne": True}
+        })
+        return [user_data async for user_data in cursor]
+
+    async def mark_expired_notified(self, user_id):
+        await self.users.update_one({"id": user_id}, {"$set": {"expired_notified": True}})
 
     # ================== [PERSISTENT DAILY VERIFICATION] ==================
     # These mirror the free-trial/premium pattern above but store the
