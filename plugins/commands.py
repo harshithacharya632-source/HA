@@ -356,6 +356,7 @@ async def start(client, message):
                     await message.reply("<b>🎉 You got 3 days premium for joining via a referral link!</b>")
                 except Exception:
                     pass
+            return
         else:
             if PREMIUM_AND_REFERAL_MODE == True:
                 buttons = [[
