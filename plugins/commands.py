@@ -8,7 +8,7 @@ from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file
 from database.users_chats_db import db, delete_all_referal_users, get_referal_users_count, get_referal_all_users, referal_add_user
 from database.join_reqs import JoinReqs
 from info import CLONE_MODE, OWNER_LNK, REACTIONS, CHANNELS, REQUEST_TO_JOIN_MODE, TRY_AGAIN_BTN, ADMINS, SHORTLINK_MODE, PREMIUM_AND_REFERAL_MODE, STREAM_MODE, AUTH_CHANNEL, REFERAL_PREMEIUM_TIME, REFERAL_COUNT, PAYMENT_TEXT, PAYMENT_QR, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, CHNL_LNK, GRP_LNK, REQST_CHANNEL, SUPPORT_CHAT, MAX_B_TN, VERIFY, SHORTLINK_API, SHORTLINK_URL, TUTORIAL, VERIFY_TUTORIAL, IS_TUTORIAL, URL
-from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds, is_premium_user
+from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds, is_premium_user, MIN_VERIFY_SECONDS
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
 from database.users_chats_db import db
@@ -570,6 +570,29 @@ async def start(client, message):
         except Exception as e:
             logger.error(f"check_token failed for user {userid}: {e}")
             return await message.reply_text(text="<b>⚠️ Verification failed due to a temporary error. Please tap the verify link again.</b>", protect_content=True)
+        if is_valid == "BYPASS":
+            try:
+                await client.send_message(
+                    LOG_CHANNEL,
+                    f"<b>🚫 Verification Bypass Detected</b>\n\n👤 User: {message.from_user.mention}\n🆔 ID: <code>{message.from_user.id}</code>\n\nVerified in under {MIN_VERIFY_SECONDS}s — flagged as a likely bypass tool."
+                )
+            except Exception as e:
+                logger.error(f"Failed to log bypass detection for {userid}: {e}")
+
+            try:
+                new_link = await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=")
+            except Exception as e:
+                logger.error(f"Failed to issue fresh verify link after bypass for {userid}: {e}")
+                return await message.reply_text(
+                    text="<b>🚫 You used a bypass tool to skip verification. Please try /start again to get a fresh verification link.</b>",
+                    protect_content=True
+                )
+            btn = [[InlineKeyboardButton("ᴠᴇʀɪғʏ", url=new_link)]]
+            return await message.reply_text(
+                text="<b>🚫 You used a bypass tool to skip verification, don't spam here.\n\nPlease complete the verification properly using the fresh link below.</b>",
+                reply_markup=InlineKeyboardMarkup(btn),
+                protect_content=True
+            )
         if is_valid == True:
             text = "<b>ʜᴇʏ {} 👋,\n\nʏᴏᴜ ʜᴀᴠᴇ ᴄᴏᴍᴘʟᴇᴛᴇᴅ ᴛʜᴇ ᴠᴇʀɪꜰɪᴄᴀᴛɪᴏɴ...\n\nɴᴏᴡ ʏᴏᴜ ʜᴀᴠᴇ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇss ᴛɪʟʟ ᴛᴏᴅᴀʏ ɴᴏᴡ ᴇɴᴊᴏʏ\n\n</b>"
             if PREMIUM_AND_REFERAL_MODE == True:
