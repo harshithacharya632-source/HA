@@ -28,17 +28,30 @@ async def build_stream_reply_markup(user_id, file_id):
 
 @Client.on_chat_join_request((filters.group | filters.channel))
 async def auto_approve(client, message: ChatJoinRequest):
+    if not await db.is_user_exist(message.from_user.id):
+        await db.add_user(message.from_user.id, message.from_user.first_name)
+
     if AUTO_APPROVE_MODE == True:
-        if not await db.is_user_exist(message.from_user.id):
-            await db.add_user(message.from_user.id, message.from_user.first_name)
-        if message.chat.id == AUTH_CHANNEL:
-            return 
-        chat = message.chat 
-        user = message.from_user  
-        await client.approve_chat_join_request(chat_id=chat.id, user_id=user.id)
+        chat = message.chat
+        user = message.from_user
+        try:
+            await client.approve_chat_join_request(chat_id=chat.id, user_id=user.id)
+        except Exception as e:
+            logger.error(f"[auto_approve] Failed to approve join request for user {user.id} in chat {chat.id} ({chat.title}): {e}")
+            try:
+                await client.send_message(
+                    LOG_CHANNEL,
+                    f"<b>⚠️ Auto-approve failed</b>\n\nChat: {chat.title} (<code>{chat.id}</code>)\nUser: {user.mention} (<code>{user.id}</code>)\nError: <code>{e}</code>"
+                )
+            except Exception:
+                pass
+            return
         text = f"<b>ʜᴇʟʟᴏ {message.from_user.mention} 👋,\n\nʏᴏᴜʀ ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ {message.chat.title} ɪs ᴀᴘᴘʀᴏᴠᴇᴅ.\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ - {CHNL_LNK}</b>"
-        await client.send_message(chat_id=user.id, text=text)
-         
+        try:
+            await client.send_message(chat_id=user.id, text=text)
+        except Exception as e:
+            logger.error(f"[auto_approve] Approved user {user.id} for chat {chat.id} but failed to DM them: {e}")
+
     if REQUEST_TO_JOIN_MODE == False:
         return 
     if message.chat.id != AUTH_CHANNEL:
