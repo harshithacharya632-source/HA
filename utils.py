@@ -28,7 +28,7 @@ TOKENS = {}
 # resolve straight to the final deep link almost instantly — a genuine
 # shortener flow always takes real human time.
 TOKEN_ISSUED_AT = {}
-MIN_VERIFY_SECONDS = 60  # verifications completed faster than this (seconds) are flagged as bypassed
+MIN_VERIFY_SECONDS = 100  # verifications completed faster than this (seconds) are flagged as bypassed
 VERIFIED = {}
 # Remembers the deep-link payload (e.g. "file_XXXX") a user was trying to
 # open right before they got sent to verify. So once verification succeeds,
