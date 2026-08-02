@@ -1179,7 +1179,7 @@ def file_matches_lang(lkey: str, filename: str) -> bool:
 
 # Shown in the file caption's "Lang :" line when a filename carries no
 # detectable language tags at all (see get_file_languages above).
-DEFAULT_CAPTION_LANG = "English Kannada Hindi Malayalam"
+DEFAULT_CAPTION_LANG = "Not Available"
 
 
 def format_caption_language(filename: str, original_caption: str = None) -> str:
