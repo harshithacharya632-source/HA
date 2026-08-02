@@ -1177,6 +1177,21 @@ def file_matches_lang(lkey: str, filename: str) -> bool:
     return lkey in get_file_languages(filename)
 
 
+# Shown in the file caption's "Lang :" line when a filename carries no
+# detectable language tags at all (see get_file_languages above).
+DEFAULT_CAPTION_LANG = "English Kannada Hindi Malayalam"
+
+
+def format_caption_language(filename: str) -> str:
+    """Human-readable language list for the file caption. Detects real
+    tags from the filename (e.g. 'Hin.Eng.Kan' -> 'Hindi English Kannada');
+    falls back to DEFAULT_CAPTION_LANG when the filename has no tags."""
+    detected = get_file_languages(filename or "")
+    if not detected:
+        return DEFAULT_CAPTION_LANG
+    return " ".join(LANGUAGE_LABELS[lk] for lk in detected)
+
+
 def build_language_button(scope, key, uid):
     """Single 🌐 Language entry button — opens the dynamic submenu."""
     return [InlineKeyboardButton("🌐 Language", callback_data=f"langmenu#{scope}#{key}#{uid}", style=enums.ButtonStyle.PRIMARY)]
@@ -2577,6 +2592,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             try:
                 f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
                                                        file_size='' if size is None else size,
+                                                       file_lang=format_caption_language(title),
                                                        file_caption='' if f_caption is None else f_caption)
             except Exception as e:
                 logger.exception(e)
@@ -2674,6 +2690,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             try:
                 f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
                                                        file_size='' if size is None else size,
+                                                       file_lang=format_caption_language(title),
                                                        file_caption='' if f_caption is None else f_caption)
             except Exception as e:
                 logger.exception(e)
