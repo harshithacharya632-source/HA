@@ -240,6 +240,7 @@ Nᴀᴍᴇ - {}"""
     CAPTION = """<b>📂 ғɪʟᴇɴᴀᴍᴇ :</b> {file_name}
 
 <b>⚙️ sɪᴢᴇ :</b> {file_size}
+<b>🗣️ ʟᴀɴɢ :</b> {file_lang}
       ♨️ Goflix file   
 🔗 <a href='https://t.me/trendi_Backup'>📢 Update Channel</a>
 🎬 <a href='https://t.me/gofixmovie'>🎥 Movie Group</a>
