@@ -1183,13 +1183,17 @@ DEFAULT_CAPTION_LANG = "English Kannada Hindi Malayalam"
 
 
 def format_caption_language(filename: str, original_caption: str = None) -> str:
-    """Human-readable language list for the file caption. Detects real
-    tags from BOTH the filename and the file's original stored caption
-    (e.g. 'Hin.Eng.Kan' or 'Hindi English' anywhere in either -> 'Hindi
-    English Kannada'); falls back to DEFAULT_CAPTION_LANG when neither
-    has a detectable tag."""
-    combined = f"{filename or ''} {original_caption or ''}"
-    detected = get_file_languages(combined)
+    """Human-readable language list for the file caption. Checks the
+    FILENAME first (reliable — short tags like 'Kan', 'Eng', 'Tam' put
+    there deliberately). Only falls back to scanning the original stored
+    caption if the filename itself has zero detectable tags — captions
+    are often stuffed with every language hashtag for searchability, so
+    they're used as a last resort rather than combined with the filename
+    (combining the two would make almost every file show all languages).
+    Falls back to DEFAULT_CAPTION_LANG only when neither has a tag."""
+    detected = get_file_languages(filename or "")
+    if not detected and original_caption:
+        detected = get_file_languages(original_caption)
     if not detected:
         return DEFAULT_CAPTION_LANG
     return " ".join(LANGUAGE_LABELS[lk] for lk in detected)
