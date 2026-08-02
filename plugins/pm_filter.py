@@ -1182,11 +1182,14 @@ def file_matches_lang(lkey: str, filename: str) -> bool:
 DEFAULT_CAPTION_LANG = "English Kannada Hindi Malayalam"
 
 
-def format_caption_language(filename: str) -> str:
+def format_caption_language(filename: str, original_caption: str = None) -> str:
     """Human-readable language list for the file caption. Detects real
-    tags from the filename (e.g. 'Hin.Eng.Kan' -> 'Hindi English Kannada');
-    falls back to DEFAULT_CAPTION_LANG when the filename has no tags."""
-    detected = get_file_languages(filename or "")
+    tags from BOTH the filename and the file's original stored caption
+    (e.g. 'Hin.Eng.Kan' or 'Hindi English' anywhere in either -> 'Hindi
+    English Kannada'); falls back to DEFAULT_CAPTION_LANG when neither
+    has a detectable tag."""
+    combined = f"{filename or ''} {original_caption or ''}"
+    detected = get_file_languages(combined)
     if not detected:
         return DEFAULT_CAPTION_LANG
     return " ".join(LANGUAGE_LABELS[lk] for lk in detected)
@@ -2592,7 +2595,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             try:
                 f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
                                                        file_size='' if size is None else size,
-                                                       file_lang=format_caption_language(title),
+                                                       file_lang=format_caption_language(title, f_caption),
                                                        file_caption='' if f_caption is None else f_caption)
             except Exception as e:
                 logger.exception(e)
@@ -2690,7 +2693,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             try:
                 f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
                                                        file_size='' if size is None else size,
-                                                       file_lang=format_caption_language(title),
+                                                       file_lang=format_caption_language(title, f_caption),
                                                        file_caption='' if f_caption is None else f_caption)
             except Exception as e:
                 logger.exception(e)
