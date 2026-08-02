@@ -43,7 +43,7 @@ _LANGUAGE_DEFS = [
 _LANGUAGE_LABELS = {k: v for k, v, _ in _LANGUAGE_DEFS}
 _LANGUAGE_TOKENS = {k: t for k, _, t in _LANGUAGE_DEFS}
 _LANGUAGE_ORDER  = [k for k, _, _ in _LANGUAGE_DEFS]
-DEFAULT_CAPTION_LANG = "English Kannada Hindi Malayalam"
+DEFAULT_CAPTION_LANG = "Not Available"
 
 
 def format_caption_language(filename: str, original_caption: str = None) -> str:
