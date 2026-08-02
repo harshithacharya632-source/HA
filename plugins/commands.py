@@ -19,6 +19,45 @@ from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file
 from plugins.pm_filter import auto_filter
 logger = logging.getLogger(__name__)
 
+# ── Language detection for the "🗣️ ʟᴀɴɢ :" caption line ────────────────
+# Mirrors the detector in plugins/pm_filter.py so both files stay in sync
+# without a cross-plugin import. Scans filename + original stored caption
+# for language tags (e.g. "Hin", "Eng", "Kannada") and expands them to
+# full names; falls back to DEFAULT_CAPTION_LANG when nothing is found.
+_LANG_TOKEN_SPLIT_RE = re.compile(r'[^A-Za-z0-9]+')
+_LANGUAGE_DEFS = [
+    ("hin", "Hindi",     {"hindi", "hin"}),
+    ("eng", "English",   {"english", "eng"}),
+    ("tam", "Tamil",     {"tamil", "tam"}),
+    ("tel", "Telugu",    {"telugu", "tel"}),
+    ("kan", "Kannada",   {"kannada", "kan"}),
+    ("mal", "Malayalam", {"malayalam", "mal"}),
+    ("chi", "Chinese",   {"chinese", "chi", "mandarin", "cantonese"}),
+    ("jap", "Japanese",  {"japanese", "jap", "jpn"}),
+    ("guj", "Gujarati",  {"gujarati", "guj"}),
+    ("mar", "Marathi",   {"marathi", "mar"}),
+    ("ben", "Bengali",   {"bengali", "ben", "bangla"}),
+    ("urd", "Urdu",      {"urdu", "urd"}),
+    ("tul", "Tulu",      {"tulu", "tul"}),
+]
+_LANGUAGE_LABELS = {k: v for k, v, _ in _LANGUAGE_DEFS}
+_LANGUAGE_TOKENS = {k: t for k, _, t in _LANGUAGE_DEFS}
+_LANGUAGE_ORDER  = [k for k, _, _ in _LANGUAGE_DEFS]
+DEFAULT_CAPTION_LANG = "English Kannada Hindi Malayalam"
+
+
+def format_caption_language(filename: str, original_caption: str = None) -> str:
+    """Detects language tags from BOTH the filename and the file's
+    original stored caption; falls back to DEFAULT_CAPTION_LANG when
+    neither has a detectable tag."""
+    combined = f"{filename or ''} {original_caption or ''}".lower()
+    tokens = set(_LANG_TOKEN_SPLIT_RE.split(combined))
+    detected = [k for k in _LANGUAGE_ORDER if tokens & _LANGUAGE_TOKENS[k]]
+    if not detected:
+        return DEFAULT_CAPTION_LANG
+    return " ".join(_LANGUAGE_LABELS[k] for k in detected)
+# ─────────────────────────────────────────────────────────────────────
+
 async def deliver_resolved_file(client, chat_id, pre, file_id):
     """Directly deliver an already-resolved (pre, file_id) to chat_id, with
     no further deep-link round trip. Used to auto-resume a file right after
@@ -45,6 +84,7 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
             f_caption = CUSTOM_FILE_CAPTION.format(
                 file_name='' if title is None else title,
                 file_size='' if size is None else size,
+                file_lang=format_caption_language(title, f_caption),
                 file_caption='' if f_caption is None else f_caption
             )
         except Exception:
@@ -439,7 +479,7 @@ async def start(client, message):
             f_caption=msg.get("caption", "")
             if BATCH_FILE_CAPTION:
                 try:
-                    f_caption=BATCH_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
+                    f_caption=BATCH_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_lang=format_caption_language(title, f_caption), file_caption='' if f_caption is None else f_caption)
                 except:
                     f_caption=f_caption
             if f_caption is None:
@@ -513,7 +553,7 @@ async def start(client, message):
                 f_caption = getattr(msg, 'caption', file_name)
                 if BATCH_FILE_CAPTION:
                     try:
-                        f_caption=BATCH_FILE_CAPTION.format(file_name=file_name, file_size='' if size is None else size, file_caption=f_caption)
+                        f_caption=BATCH_FILE_CAPTION.format(file_name=file_name, file_size='' if size is None else size, file_lang=format_caption_language(file_name, f_caption), file_caption=f_caption)
                     except:
                         f_caption = getattr(msg, 'caption', '')
                 file_id = file.file_id
@@ -687,7 +727,7 @@ async def start(client, message):
             f_caption=files1["caption"]
             if CUSTOM_FILE_CAPTION:
                 try:
-                    f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
+                    f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_lang=format_caption_language(title, f_caption), file_caption='' if f_caption is None else f_caption)
                 except:
                     f_caption=f_caption
             if f_caption is None:
@@ -789,7 +829,7 @@ async def start(client, message):
             f_caption = f"<code>{title}</code>"
             if CUSTOM_FILE_CAPTION:
                 try:
-                    f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='')
+                    f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_lang=format_caption_language(title), file_caption='')
                 except:
                     return
             await msg.edit_caption(caption=f_caption)
@@ -808,7 +848,7 @@ async def start(client, message):
     f_caption=files["caption"]
     if CUSTOM_FILE_CAPTION:
         try:
-            f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
+            f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_lang=format_caption_language(title, f_caption), file_caption='' if f_caption is None else f_caption)
         except:
             f_caption=f_caption
     if f_caption is None:
