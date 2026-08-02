@@ -1338,10 +1338,19 @@ async def seasons_cb_handler(client, query: CallbackQuery):
 # ===============================
 # EPISODE LIST
 # ===============================
+EPISODES_PER_PAGE = 24  # 8 rows x 3 buttons per row
+
 @Client.on_callback_query(filters.regex(r"^eps#"))
 async def episode_selector(client, query: CallbackQuery):
     try:
-        _, season_tag, key, user = query.data.split("#")
+        parts = query.data.split("#")
+        if len(parts) == 5:
+            _, season_tag, key, user, page_str = parts
+            page = int(page_str)
+        else:
+            # Backwards compatible with older buttons that don't carry a page number
+            _, season_tag, key, user = parts
+            page = 0
 
         if int(user) != query.from_user.id:
             return await query.answer(
@@ -1391,16 +1400,46 @@ async def episode_selector(client, query: CallbackQuery):
         if not episodes:
             btn.append([InlineKeyboardButton("🚫 No episodes found", callback_data="ident")])
         else:
-            # 3 episode buttons per row
-            for i in range(0, len(episodes), 3):
+            total_episodes = len(episodes)
+            total_pages = max(1, math.ceil(total_episodes / EPISODES_PER_PAGE))
+            page = max(0, min(page, total_pages - 1))  # clamp to valid range
+
+            start = page * EPISODES_PER_PAGE
+            end   = start + EPISODES_PER_PAGE
+            page_episodes = episodes[start:end]
+
+            # 3 episode buttons per row, only for the current page (max 24)
+            for i in range(0, len(page_episodes), 3):
                 row = [
                     InlineKeyboardButton(
                         f"EP {str(ep).zfill(2)}",
                         callback_data=f"fs#s{season_no}e{ep}#{key}#0#{uid}"
                     )
-                    for ep in episodes[i:i+3]
+                    for ep in page_episodes[i:i+3]
                 ]
                 btn.append(row)
+
+            # Pagination nav — Prev/Next (blue) + page indicator (green)
+            if total_pages > 1:
+                nav = []
+                if page > 0:
+                    nav.append(InlineKeyboardButton(
+                        "⬅️ Previous",
+                        callback_data=f"eps#s{season_no}#{key}#{uid}#{page-1}",
+                        style=enums.ButtonStyle.PRIMARY
+                    ))
+                nav.append(InlineKeyboardButton(
+                    f"{page+1}/{total_pages}",
+                    callback_data="ident",
+                    style=enums.ButtonStyle.SUCCESS
+                ))
+                if page + 1 < total_pages:
+                    nav.append(InlineKeyboardButton(
+                        "Next ➡️",
+                        callback_data=f"eps#s{season_no}#{key}#{uid}#{page+1}",
+                        style=enums.ButtonStyle.PRIMARY
+                    ))
+                btn.append(nav)
 
         btn.append([
             InlineKeyboardButton("↩️ Back to Seasons", callback_data=f"seasons#{key}")
