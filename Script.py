@@ -242,9 +242,10 @@ Nᴀᴍᴇ - {}"""
 <b>⚙️ sɪᴢᴇ :</b> {file_size}
 <b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ :</b> {file_duration}
 <b>🗣️ ʟᴀɴɢ :</b> {file_lang}
-      ♨️ Goflix file   
-🔗 <a href='https://t.me/trendi_Backup'>📢 Update Channel</a>
-🎬 <a href='https://t.me/gofixmovie'>🎥 Movie Group</a>
+
+      ✈️ Telegram Goflix file
+➤ <a href='https://t.me/trendi_Backup'>Updated Channel Goflix</a>
+➤ <a href='https://t.me/gofixmovie'>Movie Search Group</a>
 """
 
     IMDB_TEMPLATE_TXT = """
