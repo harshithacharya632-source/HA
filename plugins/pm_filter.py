@@ -1179,24 +1179,58 @@ def file_matches_lang(lkey: str, filename: str) -> bool:
 
 # Shown in the file caption's "Lang :" line when a filename carries no
 # detectable language tags at all (see get_file_languages above).
-DEFAULT_CAPTION_LANG = "Not Available"
+DEFAULT_CAPTION_LANG = "Original Audio"
 
 
 def format_caption_language(filename: str, original_caption: str = None) -> str:
     """Human-readable language list for the file caption. Checks the
     FILENAME first (reliable — short tags like 'Kan', 'Eng', 'Tam' put
     there deliberately). Only falls back to scanning the original stored
-    caption if the filename itself has zero detectable tags — captions
-    are often stuffed with every language hashtag for searchability, so
-    they're used as a last resort rather than combined with the filename
-    (combining the two would make almost every file show all languages).
-    Falls back to DEFAULT_CAPTION_LANG only when neither has a tag."""
-    detected = get_file_languages(filename or "")
+    caption for the MAIN language list if the filename itself has zero
+    detectable tags — captions are often stuffed with every language
+    hashtag for searchability, so they're used as a last resort rather
+    than combined with the filename (combining the two would make almost
+    every file show all languages).
+    'Multi Audio' / 'Dual Audio' tags are checked independently in BOTH
+    filename and caption (low false-positive risk, unlike full language
+    names) and appended if found in either.
+    Falls back to DEFAULT_CAPTION_LANG only when nothing at all is found."""
+    detected = list(get_file_languages(filename or ""))
     if not detected and original_caption:
-        detected = get_file_languages(original_caption)
+        detected = list(get_file_languages(original_caption))
+
+    combined_tokens = set(_LANG_TOKEN_SPLIT_RE.split(
+        f"{filename or ''} {original_caption or ''}".lower()
+    ))
+    if "multi" not in detected and (combined_tokens & LANGUAGE_TOKENS["multi"]):
+        detected.append("multi")
+
     if not detected:
         return DEFAULT_CAPTION_LANG
     return " ".join(LANGUAGE_LABELS[lk] for lk in detected)
+
+
+# Regex for pulling a duration like "52m21s", "1h05m30s", or "01:02:03"
+# out of the file's original stored caption (e.g. "File Duration 52m21s").
+_DURATION_RE = re.compile(
+    r'(?:duration|runtime|length)\s*[:\-]?\s*'
+    r'(\d{1,2}:\d{2}(?::\d{2})?|(?:\d{1,2}\s*h)?(?:\d{1,2}\s*m)?(?:\d{1,2}\s*s)?)',
+    re.IGNORECASE
+)
+DEFAULT_DURATION = "Not Available"
+
+
+def extract_duration(original_caption: str = None) -> str:
+    """Pulls a duration value out of the file's original stored caption,
+    e.g. 'File Duration 52m21s' -> '52m21s'. Falls back to
+    DEFAULT_DURATION when no duration is mentioned in the caption."""
+    if not original_caption:
+        return DEFAULT_DURATION
+    m = _DURATION_RE.search(original_caption)
+    if not m:
+        return DEFAULT_DURATION
+    val = re.sub(r'\s+', '', m.group(1) or '')
+    return val if val else DEFAULT_DURATION
 
 
 def build_language_button(scope, key, uid):
@@ -2600,6 +2634,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
                                                        file_size='' if size is None else size,
                                                        file_lang=format_caption_language(title, f_caption),
+                                                       file_duration=extract_duration(f_caption),
                                                        file_caption='' if f_caption is None else f_caption)
             except Exception as e:
                 logger.exception(e)
@@ -2698,6 +2733,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title,
                                                        file_size='' if size is None else size,
                                                        file_lang=format_caption_language(title, f_caption),
+                                                       file_duration=extract_duration(f_caption),
                                                        file_caption='' if f_caption is None else f_caption)
             except Exception as e:
                 logger.exception(e)
