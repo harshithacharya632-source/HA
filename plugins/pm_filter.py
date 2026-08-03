@@ -1149,6 +1149,17 @@ LANGUAGE_LABELS = {k: v for k, v, _ in LANGUAGE_DEFS}
 LANGUAGE_TOKENS = {k: t for k, _, t in LANGUAGE_DEFS}
 LANGUAGE_ORDER  = [k for k, _, _ in LANGUAGE_DEFS]
 
+# Short 3-letter codes (hin, tam, tel, mar, ben, chi, jap, jpn, guj, urd, tul)
+# are only reliable as language tags when a filename-namer deliberately
+# placed them as a standalone dot/underscore-separated token. In free-text
+# captions those same 3 letters show up constantly for unrelated reasons
+# ("Mar" = the month March, "Ben" = a name, "Tel" = "Tel:" phone prefix,
+# etc.), so captions are only matched against the FULL language name
+# (e.g. "marathi", not "mar") to avoid false positives.
+LANGUAGE_TOKENS_CAPTION_SAFE = {
+    k: {t for t in toks if len(t) >= 4} for k, toks in LANGUAGE_TOKENS.items()
+}
+
 _LANG_TOKEN_SPLIT_RE = re.compile(r'[^A-Za-z0-9]+')
 
 # Captions commonly list subtitle languages separately from audio languages
@@ -1171,18 +1182,20 @@ def get_file_languages(filename: str, caption: str = None) -> tuple:
     Matches whole tokens only (split on any non-alphanumeric char) so it
     won't false-positive on tags buried inside other words. 'dual' tags
     are folded into the single 'Multi Audio' bucket.
-    Pass `caption` to also pick up language tags mentioned only in the
-    file's caption (e.g. hashtags like #Hindi #Tamil) and not in the
-    filename itself. Any "Subtitle: ..." portion of the caption is
-    stripped out first so subtitle languages aren't mistaken for audio
-    languages."""
-    combined = f"{filename or ''} {_strip_subtitle_info(caption)}".lower()
-    tokens = set(_LANG_TOKEN_SPLIT_RE.split(combined))
-    if not tokens:
-        return ()
+
+    Filename tokens are checked against the FULL tag set, including short
+    3-letter codes (deliberately placed there by whoever named the file).
+    Caption tokens are checked against the CAPTION-SAFE set only (full
+    words like "marathi", not bare "mar") since captions are free text
+    where short codes collide with ordinary words/abbreviations far too
+    often. Any "Subtitle: ..." portion of the caption is stripped out
+    first so subtitle languages aren't mistaken for audio languages."""
+    fname_tokens = set(_LANG_TOKEN_SPLIT_RE.split((filename or "").lower()))
+    cap_tokens = set(_LANG_TOKEN_SPLIT_RE.split(_strip_subtitle_info(caption).lower()))
+
     found = tuple(
         key for key in LANGUAGE_ORDER
-        if tokens & LANGUAGE_TOKENS[key]
+        if (fname_tokens & LANGUAGE_TOKENS[key]) or (cap_tokens & LANGUAGE_TOKENS_CAPTION_SAFE[key])
     )
     return found
 
@@ -1216,7 +1229,7 @@ def format_caption_language(filename: str, original_caption: str = None) -> str:
     Falls back to DEFAULT_CAPTION_LANG only when nothing at all is found."""
     detected = list(get_file_languages(filename or ""))
     if not detected and original_caption:
-        detected = list(get_file_languages(original_caption))
+        detected = list(get_file_languages("", original_caption))
 
     combined_tokens = set(_LANG_TOKEN_SPLIT_RE.split(
         f"{filename or ''} {original_caption or ''}".lower()
