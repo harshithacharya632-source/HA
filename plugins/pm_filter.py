@@ -1151,6 +1151,18 @@ LANGUAGE_ORDER  = [k for k, _, _ in LANGUAGE_DEFS]
 
 _LANG_TOKEN_SPLIT_RE = re.compile(r'[^A-Za-z0-9]+')
 
+# Captions commonly list subtitle languages separately from audio languages
+# (e.g. "Subtitle: Chinese English"). Without stripping this out first, a
+# file with Hindi/Tamil AUDIO but Chinese SUBTITLES would incorrectly get
+# tagged as a Chinese-language file. This removes everything from a
+# "subtitle(s)"/"sub(s)" keyword to the end of that line only, leaving any
+# audio-language info elsewhere in the caption untouched.
+_SUBTITLE_STRIP_RE = re.compile(r'(?i)\b(?:subtitles?|subs?)\b.*')
+
+
+def _strip_subtitle_info(text: str) -> str:
+    return _SUBTITLE_STRIP_RE.sub('', text or '')
+
 
 @functools.lru_cache(maxsize=8192)
 def get_file_languages(filename: str, caption: str = None) -> tuple:
@@ -1161,8 +1173,10 @@ def get_file_languages(filename: str, caption: str = None) -> tuple:
     are folded into the single 'Multi Audio' bucket.
     Pass `caption` to also pick up language tags mentioned only in the
     file's caption (e.g. hashtags like #Hindi #Tamil) and not in the
-    filename itself."""
-    combined = f"{filename or ''} {caption or ''}".lower()
+    filename itself. Any "Subtitle: ..." portion of the caption is
+    stripped out first so subtitle languages aren't mistaken for audio
+    languages."""
+    combined = f"{filename or ''} {_strip_subtitle_info(caption)}".lower()
     tokens = set(_LANG_TOKEN_SPLIT_RE.split(combined))
     if not tokens:
         return ()
