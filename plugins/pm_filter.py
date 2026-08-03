@@ -1162,13 +1162,14 @@ LANGUAGE_TOKENS_CAPTION_SAFE = {
 
 _LANG_TOKEN_SPLIT_RE = re.compile(r'[^A-Za-z0-9]+')
 
-# Captions commonly list subtitle languages separately from audio languages
-# (e.g. "Subtitle: Chinese English"). Without stripping this out first, a
-# file with Hindi/Tamil AUDIO but Chinese SUBTITLES would incorrectly get
-# tagged as a Chinese-language file. This removes everything from a
-# "subtitle(s)"/"sub(s)" keyword to the end of that line only, leaving any
-# audio-language info elsewhere in the caption untouched.
-_SUBTITLE_STRIP_RE = re.compile(r'(?i)\b(?:subtitles?|subs?)\b.*')
+# Captions commonly list subtitle languages separately from audio languages,
+# often as a multi-line block (e.g. "Subtitle Tracks (5):\n- English\n-
+# Chinese (Simplified)\n..."). Without stripping the WHOLE block out first,
+# a file with Hindi/Tamil AUDIO but Chinese SUBTITLES would incorrectly get
+# tagged as Chinese. This removes everything from a "subtitle(s)"/"sub(s)"
+# keyword up to the next blank line (or end of caption) - covering
+# multi-line bullet lists, not just same-line text.
+_SUBTITLE_STRIP_RE = re.compile(r'(?is)\b(?:subtitles?|subs?)\b.*?(?=\n\s*\n|\Z)')
 
 
 def _strip_subtitle_info(text: str) -> str:
@@ -1215,27 +1216,18 @@ DEFAULT_CAPTION_LANG = "Original Audio"
 
 
 def format_caption_language(filename: str, original_caption: str = None) -> str:
-    """Human-readable language list for the file caption. Checks the
-    FILENAME first (reliable — short tags like 'Kan', 'Eng', 'Tam' put
-    there deliberately). Only falls back to scanning the original stored
-    caption for the MAIN language list if the filename itself has zero
-    detectable tags — captions are often stuffed with every language
-    hashtag for searchability, so they're used as a last resort rather
-    than combined with the filename (combining the two would make almost
-    every file show all languages).
-    'Multi Audio' / 'Dual Audio' tags are checked independently in BOTH
-    filename and caption (low false-positive risk, unlike full language
-    names) and appended if found in either.
+    """Human-readable language list for the file caption. Combines
+    languages found in the FILENAME (checked against the full tag set,
+    including short deliberate codes like 'Kan', 'Eng', 'Tam') with
+    languages found in the CAPTION (checked against the caption-safe set
+    only - full words like 'kannada', not bare 'kan' - since captions are
+    free text where short codes collide with unrelated words far too
+    often; see get_file_languages). Both sources are always combined so a
+    file whose filename only carries ONE tag but whose caption genuinely
+    lists several audio languages still shows all of them, not just the
+    filename's one.
     Falls back to DEFAULT_CAPTION_LANG only when nothing at all is found."""
-    detected = list(get_file_languages(filename or ""))
-    if not detected and original_caption:
-        detected = list(get_file_languages("", original_caption))
-
-    combined_tokens = set(_LANG_TOKEN_SPLIT_RE.split(
-        f"{filename or ''} {original_caption or ''}".lower()
-    ))
-    if "multi" not in detected and (combined_tokens & LANGUAGE_TOKENS["multi"]):
-        detected.append("multi")
+    detected = list(get_file_languages(filename or "", original_caption))
 
     if not detected:
         return DEFAULT_CAPTION_LANG
