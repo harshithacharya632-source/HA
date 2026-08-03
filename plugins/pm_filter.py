@@ -1153,13 +1153,17 @@ _LANG_TOKEN_SPLIT_RE = re.compile(r'[^A-Za-z0-9]+')
 
 
 @functools.lru_cache(maxsize=8192)
-def get_file_languages(filename: str) -> tuple:
-    """Detect which language tags exist in a filename, e.g.
-    'Movie.2024.Tam.Tel.Kan.Mal.Eng.WEBRip.mkv' -> ('tam','tel','kan','mal','eng').
+def get_file_languages(filename: str, caption: str = None) -> tuple:
+    """Detect which language tags exist in a filename AND/OR its caption,
+    e.g. 'Movie.2024.Tam.Tel.Kan.Mal.Eng.WEBRip.mkv' -> ('tam','tel','kan','mal','eng').
     Matches whole tokens only (split on any non-alphanumeric char) so it
     won't false-positive on tags buried inside other words. 'dual' tags
-    are folded into the single 'Multi Audio' bucket."""
-    tokens = set(_LANG_TOKEN_SPLIT_RE.split(filename.lower()))
+    are folded into the single 'Multi Audio' bucket.
+    Pass `caption` to also pick up language tags mentioned only in the
+    file's caption (e.g. hashtags like #Hindi #Tamil) and not in the
+    filename itself."""
+    combined = f"{filename or ''} {caption or ''}".lower()
+    tokens = set(_LANG_TOKEN_SPLIT_RE.split(combined))
     if not tokens:
         return ()
     found = tuple(
@@ -1169,12 +1173,13 @@ def get_file_languages(filename: str) -> tuple:
     return found
 
 
-def file_matches_lang(lkey: str, filename: str) -> bool:
-    """Like `lkey in get_file_languages(filename)`, except lkey == "nolang"
-    matches files where NO language tag was detected at all."""
+def file_matches_lang(lkey: str, filename: str, caption: str = None) -> bool:
+    """Like `lkey in get_file_languages(filename, caption)`, except
+    lkey == "nolang" matches files where NO language tag was detected at
+    all (checking both filename and caption)."""
     if lkey == "nolang":
-        return not get_file_languages(filename)
-    return lkey in get_file_languages(filename)
+        return not get_file_languages(filename, caption)
+    return lkey in get_file_languages(filename, caption)
 
 
 # Shown in the file caption's "Lang :" line when a filename carries no
@@ -1899,7 +1904,7 @@ async def language_menu_cb_handler(client, query: CallbackQuery):
         seen = set()
         has_untagged = False
         for f in pool:
-            langs = get_file_languages(f["file_name"])
+            langs = get_file_languages(f["file_name"], f.get("caption"))
             if langs:
                 seen.update(langs)
             else:
@@ -1962,7 +1967,7 @@ async def language_filter_cb_handler(client, query: CallbackQuery):
         all_files = await get_cached_season_files(chat_id, key, search)
         pool, back_cb = resolve_scope_pool(scope, key, uid, all_files)
 
-        matched = [f for f in pool if file_matches_lang(lkey, f["file_name"])]
+        matched = [f for f in pool if file_matches_lang(lkey, f["file_name"], f.get("caption"))]
 
         if not matched:
             return await query.answer(f"🚫 No {label} files found here.", show_alert=True)
@@ -2070,7 +2075,7 @@ async def language_quality_filter_cb_handler(client, query: CallbackQuery):
 
         matched = [
             f for f in pool
-            if file_matches_lang(lkey, f["file_name"])
+            if file_matches_lang(lkey, f["file_name"], f.get("caption"))
             and lo <= f.get("file_size", 0) < hi
         ]
 
