@@ -3373,6 +3373,11 @@ async def cb_handler(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
     elif query.data == "admin":
+        if query.from_user.id not in ADMINS:
+            return await query.answer(
+                "⚠️ This section is for admins only!",
+                show_alert=True
+            )
         buttons = [[
             InlineKeyboardButton('⟸ Bᴀᴄᴋ', callback_data='help'),
             InlineKeyboardButton('ᴇxᴛʀᴀ', callback_data='extra')
