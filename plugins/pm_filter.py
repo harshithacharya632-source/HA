@@ -3267,16 +3267,28 @@ async def cb_handler(client: Client, query: CallbackQuery):
              InlineKeyboardButton('🏠 𝙷𝙾𝙼𝙴 🏠', callback_data='start')
         ]]
         reply_markup = InlineKeyboardMarkup(buttons)
-        await client.edit_message_media(
-            query.message.chat.id, 
-            query.message.id, 
-            InputMediaPhoto(random.choice(PICS))
-        )
-        await query.message.edit_text(
-            text=script.HELP_TXT.format(query.from_user.mention),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
+        if query.message.photo:
+            await client.edit_message_media(
+                query.message.chat.id, 
+                query.message.id, 
+                InputMediaPhoto(random.choice(PICS))
+            )
+            await query.message.edit_text(
+                text=script.HELP_TXT.format(query.from_user.mention),
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            # Coming back from a text-only panel (e.g. admin) which has no
+            # media to edit — delete it and send a fresh photo message.
+            await query.message.delete()
+            await client.send_photo(
+                query.message.chat.id,
+                photo=random.choice(PICS),
+                caption=script.HELP_TXT.format(query.from_user.mention),
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
     elif query.data == "about":
         buttons = [[
             InlineKeyboardButton('Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ', url=GRP_LNK),
@@ -3373,17 +3385,21 @@ async def cb_handler(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
     elif query.data == "admin":
+        if query.from_user.id not in ADMINS:
+            return await query.answer(
+                "⚠️ This section is for admins only!",
+                show_alert=True
+            )
         buttons = [[
             InlineKeyboardButton('⟸ Bᴀᴄᴋ', callback_data='help'),
             InlineKeyboardButton('ᴇxᴛʀᴀ', callback_data='extra')
         ]]
-        await client.edit_message_media(
-            query.message.chat.id, 
-            query.message.id, 
-            InputMediaPhoto(random.choice(PICS))
-        )
         reply_markup = InlineKeyboardMarkup(buttons)
-        await query.message.edit_text(
+        # ADMIN_TXT can exceed Telegram's 1024-char photo caption limit,
+        # so send it as a plain text message instead of a photo caption.
+        await query.message.delete()
+        await client.send_message(
+            query.message.chat.id,
             text=script.ADMIN_TXT,
             reply_markup=reply_markup,
             parse_mode=enums.ParseMode.HTML
@@ -3441,17 +3457,27 @@ async def cb_handler(client: Client, query: CallbackQuery):
         buttons = [[
             InlineKeyboardButton('⟸ Bᴀᴄᴋ', callback_data='admin')
         ]]
-        await client.edit_message_media(
-            query.message.chat.id, 
-            query.message.id, 
-            InputMediaPhoto(random.choice(PICS))
-        )
         reply_markup = InlineKeyboardMarkup(buttons)
-        await query.message.edit_text(
-            text=script.EXTRAMOD_TXT.format(OWNER_LNK, CHNL_LNK),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
+        if query.message.photo:
+            await client.edit_message_media(
+                query.message.chat.id, 
+                query.message.id, 
+                InputMediaPhoto(random.choice(PICS))
+            )
+            await query.message.edit_text(
+                text=script.EXTRAMOD_TXT.format(OWNER_LNK, CHNL_LNK),
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            await query.message.delete()
+            await client.send_photo(
+                query.message.chat.id,
+                photo=random.choice(PICS),
+                caption=script.EXTRAMOD_TXT.format(OWNER_LNK, CHNL_LNK),
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
     elif query.data == "stats":
         buttons = [[
             InlineKeyboardButton('⟸ Bᴀᴄᴋ', callback_data='help'),
