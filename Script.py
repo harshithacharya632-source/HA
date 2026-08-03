@@ -243,7 +243,7 @@ Nᴀᴍᴇ - {}"""
 <b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ :</b> {file_duration}
 <b>🗣️ ʟᴀɴɢ :</b> {file_lang}
 
-      ✈️ Telegram Goflix file
+✈️ Telegram Goflix file
 ➤ <a href='https://t.me/trendi_Backup'>Updated Channel Goflix</a>
 ➤ <a href='https://t.me/gofixmovie'>Movie Search Group</a>
 """
