@@ -1237,11 +1237,23 @@ async def premium_expiry_notifier(client):
     a failure fetching/sending one (e.g. the reminder list) must never
     prevent the other (e.g. the expired list) from running in the same
     cycle."""
+    # Only send the "ends tomorrow" reminder when a user genuinely has
+    # roughly a day left — NOT for short trials (e.g. a 2 min test grant)
+    # or a plan that's about to expire in the next few minutes, where
+    # saying "tomorrow" would be misleading. Those users still get the
+    # "premium has ended" message once they actually lapse.
+    REMINDER_MIN_LEAD_SECONDS = 20 * 3600  # 20h — so it fires once, ~20-24h out
+
     while True:
         try:
             expiring_soon = await db.get_users_expiring_within(86400)  # next 24h
+            now = datetime.datetime.now()
             for u in expiring_soon:
                 uid = u.get("id")
+                exp = u.get("expiry_time")
+                remaining = (exp - now).total_seconds() if exp else 0
+                if remaining < REMINDER_MIN_LEAD_SECONDS:
+                    continue  # too soon for a "tomorrow" message to make sense
                 try:
                     await client.send_message(
                         uid,
