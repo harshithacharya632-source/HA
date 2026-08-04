@@ -1282,7 +1282,7 @@ async def premium_expiry_notifier(client):
         except Exception as e:
             logger.error(f"[premium_expiry_notifier] expired-block error: {e}")
 
-        await asyncio.sleep(3600)  # re-check every hour
+        await asyncio.sleep(300)  # re-check every 5 minutes
 
 
 @Client.on_message(filters.command('logs') & filters.user(ADMINS))
