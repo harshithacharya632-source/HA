@@ -1231,7 +1231,12 @@ async def premium_expiry_notifier(client):
          one-time thank-you + 'buy again with /plan' message.
     Each user is only ever notified once per cycle via the
     expiry_reminder_sent / expired_notified flags in their DB record,
-    which get reset automatically whenever their premium is renewed."""
+    which get reset automatically whenever their premium is renewed.
+
+    The two checks below are independent try/except blocks on purpose —
+    a failure fetching/sending one (e.g. the reminder list) must never
+    prevent the other (e.g. the expired list) from running in the same
+    cycle."""
     while True:
         try:
             expiring_soon = await db.get_users_expiring_within(86400)  # next 24h
@@ -1251,16 +1256,21 @@ async def premium_expiry_notifier(client):
                 except Exception as e:
                     logger.error(f"[premium_expiry_notifier] mark_expiry_reminder_sent failed for {uid}: {e}")
                 await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.error(f"[premium_expiry_notifier] reminder-block error: {e}")
 
+        try:
             recently_expired = await db.get_recently_expired_users(86400)  # last 24h
             for u in recently_expired:
                 uid = u.get("id")
                 try:
                     await client.send_message(
                         uid,
-                        "<b>Your Goflix premium has ended.</b>\n\n"
-                        "🙏 Thank you for using Goflix premium!\n\n"
-                        "Want to buy again? Send /plan"
+                        "😔 <b>Your Goflix Premium Has Ended</b>\n\n"
+                        "All premium features are now closed — no more ad-free, "
+                        "no more direct downloads, no more high-speed links.\n\n"
+                        "Whenever you're ready to come back, just send /plan to buy again.\n\n"
+                        "🙏 Thank you for being a Goflix member!"
                     )
                 except Exception as e:
                     logger.error(f"[premium_expiry_notifier] expired-notice failed for {uid}: {e}")
@@ -1270,7 +1280,7 @@ async def premium_expiry_notifier(client):
                     logger.error(f"[premium_expiry_notifier] mark_expired_notified failed for {uid}: {e}")
                 await asyncio.sleep(0.05)
         except Exception as e:
-            logger.error(f"[premium_expiry_notifier] loop error: {e}")
+            logger.error(f"[premium_expiry_notifier] expired-block error: {e}")
 
         await asyncio.sleep(3600)  # re-check every hour
 
