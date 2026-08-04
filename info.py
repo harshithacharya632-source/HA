@@ -96,7 +96,7 @@ PUBLIC_FILE_CHANNEL = environ.get('PUBLIC_FILE_CHANNEL', '') # Public Channel Us
 
 
 # Links
-GRP_LNK = environ.get('GRP_LNK', 'https://t.me/gofixmovie')
+GRP_LNK = environ.get('GRP_LNK', 'https://t.me/+J1-eEmJSScU2M2Fl')
 CHNL_LNK = environ.get('CHNL_LNK', 'https://t.me/trendi_Backup')
 SUPPORT_CHAT = environ.get('SUPPORT_CHAT', 'Goflix_Disscussion') # Support Chat Link Without https:// or @
 OWNER_LNK = environ.get('OWNER_LNK', 'https://t.me/Goflix_AdminBot')
