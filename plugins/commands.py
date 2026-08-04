@@ -114,6 +114,63 @@ def extract_duration(original_caption: str = None) -> str:
     return val if val else DEFAULT_DURATION
 # ─────────────────────────────────────────────────────────────────────
 
+
+# ── Editable /plan pricing (used by /plan and /plan_rate) ─────────────
+# Stored in MongoDB via the existing db.get_bot_setting/update_bot_setting
+# helpers (keyed by the bot's own Telegram id), so the owner can change
+# prices from PM (/plan_rate) and it survives restarts/redeploys.
+PLAN_RATES_SETTING_KEY = "plan_rates"
+_DEFAULT_PLAN_RATES = {"week": "15", "month": "40", "3months": "110", "6months": "200"}
+
+
+async def load_plan_rates(bot_id) -> dict:
+    stored = await db.get_bot_setting(bot_id, PLAN_RATES_SETTING_KEY, None)
+    if not stored:
+        return dict(_DEFAULT_PLAN_RATES)
+    return {**_DEFAULT_PLAN_RATES, **stored}
+
+
+async def save_plan_rates(bot_id, rates: dict) -> None:
+    await db.update_bot_setting(bot_id, PLAN_RATES_SETTING_KEY, rates)
+
+
+def format_plan_rates(rates: dict) -> str:
+    r = rates
+    return (
+        f"- {r['week']}ʀs - 1 ᴡᴇᴇᴋ\n"
+        f"- {r['month']}ʀs - 1 ᴍᴏɴᴛʜs\n"
+        f"- {r['3months']}ʀs - 3 ᴍᴏɴᴛʜs\n"
+        f"- {r['6months']}ʀs - 6 ᴍᴏɴᴛʜs"
+    )
+
+
+# ── /myplan display formatting ─────────────────────────────────────────
+def format_remaining_time(td: datetime.timedelta) -> str:
+    """Turns a timedelta into '1 day 23 min 40 sec' style text."""
+    total_seconds = max(0, int(td.total_seconds()))
+    days, rem = divmod(total_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+    if hours:
+        parts.append(f"{hours} hr{'s' if hours != 1 else ''}")
+    if minutes:
+        parts.append(f"{minutes} min")
+    if seconds or not parts:
+        parts.append(f"{seconds} sec")
+    return " ".join(parts)
+
+
+def format_expiry_time(dt: datetime.datetime) -> str:
+    """Turns a datetime into '13/07/2026 7:16 AM' style text."""
+    date_part = dt.strftime("%d/%m/%Y")
+    hour = dt.strftime("%I").lstrip("0") or "12"
+    minute = dt.strftime("%M")
+    ampm = dt.strftime("%p")
+    return f"{date_part} {hour}:{minute} {ampm}"
+
 async def deliver_resolved_file(client, chat_id, pre, file_id):
     """Directly deliver an already-resolved (pre, file_id) to chat_id, with
     no further deep-link round trip. Used to auto-resume a file right after
@@ -1980,12 +2037,61 @@ async def plans_cmd_handler(client, message):
         [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")]
     ]
     reply_markup = InlineKeyboardMarkup(btn)
+    rates = await load_plan_rates(client.me.id)
+    caption_text = PAYMENT_TEXT.format(plan_rates=format_plan_rates(rates))
     await message.reply_photo(
         photo=PAYMENT_QR,
-        caption=PAYMENT_TEXT,
+        caption=caption_text,
+        parse_mode=enums.ParseMode.HTML,
+        has_spoiler=True,
         reply_markup=reply_markup
     )
-        
+
+
+@Client.on_message(filters.command("plan_rate") & filters.private)
+async def plan_rate_cmd_handler(client, message):
+    # Explicit check (instead of filters.user(ADMINS)) so a non-admin gets
+    # a visible "access denied" reply rather than the command silently
+    # doing nothing.
+    if message.from_user.id not in ADMINS:
+        return await message.reply_text("⛔ This command is for the bot owner/admins only.")
+
+    try:
+        bot_id = client.me.id
+        current = await load_plan_rates(bot_id)
+        current_text = (
+            "💰 <b>Current Plan Rates</b>\n\n"
+            f"- {current['week']}Rs - 1 Week\n"
+            f"- {current['month']}Rs - 1 Months\n"
+            f"- {current['3months']}Rs - 3 Months\n"
+            f"- {current['6months']}Rs - 6 Months\n\n"
+            "Send the new rates as <b>4 numbers</b>, one per line, in this exact order "
+            "(1 week, 1 month, 3 months, 6 months) — numbers only, e.g.:\n\n"
+            "<code>15\n40\n110\n200</code>\n\n"
+            "Send /cancel to keep the current rates."
+        )
+        reply = await client.ask(message.from_user.id, current_text, parse_mode=enums.ParseMode.HTML)
+
+        if reply.text and reply.text.strip().lower() == "/cancel":
+            return await reply.reply_text("❌ Cancelled — rates unchanged.")
+
+        lines = [ln.strip() for ln in (reply.text or "").splitlines() if ln.strip()]
+        if len(lines) != 4 or not all(ln.isdigit() for ln in lines):
+            return await reply.reply_text(
+                "⚠️ Invalid format. Send exactly 4 numbers, one per line "
+                "(week, month, 3 months, 6 months). Run /plan_rate again to retry."
+            )
+
+        new_rates = {"week": lines[0], "month": lines[1], "3months": lines[2], "6months": lines[3]}
+        await save_plan_rates(bot_id, new_rates)
+        await reply.reply_text(
+            "✅ Plan rates updated!\n\n" + format_plan_rates(new_rates).replace("ʀs", "Rs").replace("ᴡᴇᴇᴋ", "Week").replace("ᴍᴏɴᴛʜs", "Months")
+        )
+    except Exception as e:
+        logger.exception(e)
+        await message.reply_text(f"⚠️ /plan_rate failed:\n<code>{e}</code>", parse_mode=enums.ParseMode.HTML)
+
+
 @Client.on_message(filters.command("myplan"))
 async def check_plans_cmd(client, message):
     if PREMIUM_AND_REFERAL_MODE == False:
@@ -1994,7 +2100,15 @@ async def check_plans_cmd(client, message):
     if await db.has_premium_access(user_id):         
         remaining_time = await db.check_remaining_uasge(user_id)             
         expiry_time = remaining_time + datetime.datetime.now()
-        await message.reply_text(f"**Your plans details are :\n\nRemaining Time : {remaining_time}\n\nExpirytime : {expiry_time}**")
+        sent = await message.reply_text(
+            "✨ <b>Your Plan Details</b> ✨\n\n"
+            f"⏳ <b>Remaining Time :</b> {format_remaining_time(remaining_time)}\n"
+            f"📅 <b>Expires On :</b> {format_expiry_time(expiry_time)}\n\n"
+            "🔄 Extend your plan : /plan\n\n"
+            "Have a great day! 😊"
+        )
+        await asyncio.sleep(180)
+        await sent.delete()
     else:
         btn = [ 
             [InlineKeyboardButton("ɢᴇᴛ ғʀᴇᴇ ᴛʀᴀɪʟ ғᴏʀ 𝟻 ᴍɪɴᴜᴛᴇꜱ ☺️", callback_data="get_trail")],
