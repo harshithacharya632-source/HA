@@ -1,4 +1,5 @@
 import re
+import asyncio
 from pymongo.errors import DuplicateKeyError
 import motor.motor_asyncio
 from pymongo import MongoClient
@@ -9,11 +10,18 @@ import datetime
 my_client = MongoClient(OTHER_DB_URI)
 mydb = my_client["referal_user"]
 
+# NOTE: my_client above is a plain SYNCHRONOUS pymongo client (unlike `db`
+# below, which uses motor's async driver). Every call on it below is
+# wrapped in asyncio.to_thread() so a slow/laggy response from this
+# cluster only blocks the one request waiting on it - not the bot's whole
+# event loop (which would otherwise freeze every user's buttons at once
+# for however long that one Mongo call takes).
+
 async def referal_add_user(user_id, ref_user_id):
     user_db = mydb[str(user_id)]
     user = {'_id': ref_user_id}
     try:
-        user_db.insert_one(user)
+        await asyncio.to_thread(user_db.insert_one, user)
         return True
     except DuplicateKeyError:
         return False
@@ -21,17 +29,20 @@ async def referal_add_user(user_id, ref_user_id):
 
 async def get_referal_all_users(user_id):
     user_db = mydb[str(user_id)]
-    return user_db.find()
+    # Materialize to a list inside the thread - iterating a pymongo
+    # cursor is itself blocking network I/O, so doing that on the main
+    # event loop later would reintroduce the exact same freeze.
+    return await asyncio.to_thread(lambda: list(user_db.find()))
     
 async def get_referal_users_count(user_id):
     user_db = mydb[str(user_id)]
-    count = user_db.count_documents({})
+    count = await asyncio.to_thread(user_db.count_documents, {})
     return count
     
 
 async def delete_all_referal_users(user_id):
     user_db = mydb[str(user_id)]
-    user_db.delete_many({}) 
+    await asyncio.to_thread(user_db.delete_many, {})
 
 default_setgs = {
     'button': BUTTON_MODE,
