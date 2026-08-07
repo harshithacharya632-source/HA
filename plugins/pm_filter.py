@@ -32,7 +32,7 @@ SPELL_CHECK = {}
 async def build_searching_text(message):
     """Searching... placeholder text, with an extra-attention premium badge
     on top when the searcher is a premium user."""
-    if message.from_user and await is_premium_user(message.from_user.id):
+    if PREMIUM_AND_REFERAL_MODE and message.from_user and await is_premium_user(message.from_user.id):
         return (
             f"👑 <b>PREMIUM USER SEARCH</b> 👑\n"
             f"⭐ {message.from_user.mention} ⭐\n\n"
@@ -4076,7 +4076,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
         btn.append(
             [InlineKeyboardButton(text="𝐍𝐎 𝐌𝐎𝐑𝐄 𝐏𝐀𝐆𝐄𝐒 𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄",callback_data="pages")]
         )
-    requester_is_premium = bool(message.from_user) and await is_premium_user(message.from_user.id)
+    requester_is_premium = PREMIUM_AND_REFERAL_MODE and bool(message.from_user) and await is_premium_user(message.from_user.id)
     premium_badge = "👑 <u>ᴘʀᴇᴍɪᴜᴍ ᴜsᴇʀ ʀᴇǫᴜᴇsᴛ</u> 👑\n" if requester_is_premium else ""
     cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
