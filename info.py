@@ -172,7 +172,7 @@ if 'DYNO' in environ:
     ON_HEROKU = True
 else:
     ON_HEROKU = False
-URL = environ.get("URL", "injured-tiff-goflix-310fbd68.koyeb.app/")
+URL = environ.get("URL", "injured-tiff-goflix-310fbd68.koyeb.app")
 
 
 # Rename Info : If True Then Bot Rename File Else Not
