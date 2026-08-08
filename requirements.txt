@@ -23,6 +23,15 @@ hachoir
 python-decouple 
 ffmpeg
 youtube_search
+# NOT bumped in this pass - left as-is deliberately:
+# motor==2.5.1 requires pymongo<4, and umongo==3.0.1's `motor` extra
+# requires motor<3.0. Those two constraints mean pymongo and motor can
+# only move together (e.g. pymongo 4.8.0 + motor 3.5.1), and only if
+# umongo's motor integration isn't actually used elsewhere in this
+# codebase - confirm that first, then bump both at once and test.
+# The code-level fix (explicit serverSelectionTimeoutMS/retryReads/
+# retryWrites in users_chats_db.py) already works against these
+# current pins with zero dependency changes, so it's safe to ship now.
 pymongo[srv]==3.12.3 
 motor==2.5.1 
 marshmallow==3.14.1 
