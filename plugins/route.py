@@ -1,4 +1,3 @@
-
 import re
 import math
 import logging
@@ -23,9 +22,12 @@ async def root(request):
 # ---------------- WATCH PAGE (HTML PLAYER) ----------------
 @routes.get(r"/watch/{path:\S+}", allow_head=True)
 async def watch_page(request: web.Request):
+    path = request.match_info["path"]
+    match = re.search(r"(\d+)", path)
+    if not match:
+        raise web.HTTPNotFound()
     try:
-        path = request.match_info["path"]
-        id = int(re.search(r"(\d+)", path).group(1))
+        id = int(match.group(1))
         secure_hash = request.rel_url.query.get("hash")
 
         return web.Response(
@@ -39,9 +41,14 @@ async def watch_page(request: web.Request):
 # ---------------- DIRECT STREAM (ROOT PATH – REQUIRED FOR VLC/MX) ----------------
 @routes.get(r"/{path:\S+}", allow_head=True)
 async def direct_stream_handler(request: web.Request):
+    path = request.match_info["path"]
+    match = re.search(r"(\d+)", path)
+    if not match:
+        # Not a valid stream path (favicon.ico, robots.txt, browser probes, etc.)
+        # — reject quietly instead of logging a fake server error.
+        raise web.HTTPNotFound()
     try:
-        path = request.match_info["path"]
-        id = int(re.search(r"(\d+)", path).group(1))
+        id = int(match.group(1))
         secure_hash = request.rel_url.query.get("hash")
         return await media_streamer(request, id, secure_hash, inline=True)
     except InvalidHash:
@@ -56,9 +63,12 @@ async def direct_stream_handler(request: web.Request):
 # ---------------- DOWNLOAD ----------------
 @routes.get(r"/download/{path:\S+}", allow_head=True)
 async def download_handler(request: web.Request):
+    path = request.match_info["path"]
+    match = re.search(r"(\d+)", path)
+    if not match:
+        raise web.HTTPNotFound()
     try:
-        path = request.match_info["path"]
-        id = int(re.search(r"(\d+)", path).group(1))
+        id = int(match.group(1))
         secure_hash = request.rel_url.query.get("hash")
         return await media_streamer(request, id, secure_hash, inline=False)
     except InvalidHash:
@@ -170,6 +180,3 @@ async def media_streamer(
 
     await response.write_eof()
     return response
-
-
-
