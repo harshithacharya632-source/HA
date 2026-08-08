@@ -1,13 +1,19 @@
 import re
 import asyncio
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, ServerSelectionTimeoutError
 import motor.motor_asyncio
 from pymongo import MongoClient
 from info import DATABASE_NAME, USER_DB_URI, OTHER_DB_URI, CUSTOM_FILE_CAPTION, IMDB, IMDB_TEMPLATE, MELCOW_NEW_USERS, BUTTON_MODE, SPELL_CHECK_REPLY, PROTECT_CONTENT, AUTO_DELETE, MAX_BTN, AUTO_FFILTER, SHORTLINK_API, SHORTLINK_URL, SHORTLINK_MODE, TUTORIAL, IS_TUTORIAL
 import time
 import datetime
 
-my_client = MongoClient(OTHER_DB_URI)
+my_client = MongoClient(
+    OTHER_DB_URI,
+    serverSelectionTimeoutMS=15000,   # fail in 15s instead of the 30s default
+    connectTimeoutMS=15000,
+    retryReads=True,
+    retryWrites=True,
+)
 mydb = my_client["referal_user"]
 
 # NOTE: my_client above is a plain SYNCHRONOUS pymongo client (unlike `db`
@@ -67,12 +73,31 @@ default_setgs = {
 class Database:
     
     def __init__(self, uri, database_name):
-        self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
+        self._client = motor.motor_asyncio.AsyncIOMotorClient(
+            uri,
+            serverSelectionTimeoutMS=15000,   # fail in 15s instead of the 30s default
+            connectTimeoutMS=15000,
+            retryReads=True,
+            retryWrites=True,
+            maxPoolSize=50,
+        )
         self.db = self._client[database_name]
         self.col = self.db.users
         self.grp = self.db.groups
         self.users = self.db.uersz
         self.bot = self.db.clone_bots
+
+    async def _safe_find_one(self, collection, filter_query, projection=None):
+        """find_one wrapped so a transient replica-set election (no primary
+        momentarily available) returns None instead of raising and crashing
+        the caller. Every call site below already treats a falsy/None
+        result as "not found", so this is a safe drop-in."""
+        try:
+            if projection is not None:
+                return await collection.find_one(filter_query, projection)
+            return await collection.find_one(filter_query)
+        except ServerSelectionTimeoutError:
+            return None
 
 
     def new_user(self, id, name):
@@ -106,7 +131,7 @@ class Database:
         await self.col.insert_one(user)
     
     async def is_user_exist(self, id):
-        user = await self.col.find_one({'id':int(id)})
+        user = await self._safe_find_one(self.col, {'id':int(id)})
         return bool(user)
     
     async def total_users_count(self):
@@ -126,21 +151,21 @@ class Database:
         await self.bot.insert_one(settings)
 
     async def is_clone_exist(self, user_id):
-        clone = await self.bot.find_one({'user_id': int(user_id)})
+        clone = await self._safe_find_one(self.bot, {'user_id': int(user_id)})
         return bool(clone)
 
     async def delete_clone(self, user_id):
         await self.bot.delete_many({'user_id': int(user_id)})
 
     async def get_clone(self, user_id):
-        clone_data = await self.bot.find_one({"user_id": user_id})
+        clone_data = await self._safe_find_one(self.bot, {"user_id": user_id})
         return clone_data
             
     async def update_clone(self, user_id, user_data):
         await self.bot.update_one({"user_id": user_id}, {"$set": user_data}, upsert=True)
 
     async def get_bot(self, bot_id):
-        bot_data = await self.bot.find_one({"bot_id": bot_id})
+        bot_data = await self._safe_find_one(self.bot, {"bot_id": bot_id})
         return bot_data
             
     async def update_bot(self, bot_id, bot_data):
@@ -168,7 +193,7 @@ class Database:
             is_banned=False,
             ban_reason=''
         )
-        user = await self.col.find_one({'id':int(id)})
+        user = await self._safe_find_one(self.col, {'id':int(id)})
         if not user:
             return default
         return user.get('ban_status', default)
@@ -196,7 +221,7 @@ class Database:
     
 
     async def get_chat(self, chat):
-        chat = await self.grp.find_one({'id':int(chat)})
+        chat = await self._safe_find_one(self.grp, {'id':int(chat)})
         return False if not chat else chat.get('chat_status')
     
 
@@ -212,7 +237,7 @@ class Database:
         
     
     async def get_settings(self, id):
-        chat = await self.grp.find_one({'id':int(id)})
+        chat = await self._safe_find_one(self.grp, {'id':int(id)})
         if chat:
             return chat.get('settings', default_setgs)
         return default_setgs
@@ -239,7 +264,7 @@ class Database:
         return (await self.db.command("dbstats"))['dataSize']
 
     async def get_user(self, user_id):
-        user_data = await self.users.find_one({"id": user_id})
+        user_data = await self._safe_find_one(self.users, {"id": user_id})
         return user_data
             
     async def update_user(self, user_data):
@@ -387,32 +412,32 @@ class Database:
         await self.col.update_one({'id': int(id)}, {'$set': {'file_id': file_id}})
 
     async def get_thumbnail(self, id):
-        user = await self.col.find_one({'id': int(id)})
-        return user.get('file_id', None)
+        user = await self._safe_find_one(self.col, {'id': int(id)})
+        return user.get('file_id', None) if user else None
 
     async def set_caption(self, id, caption):
         await self.col.update_one({'id': int(id)}, {'$set': {'caption': caption}})
 
     async def get_caption(self, id):
-        user = await self.col.find_one({'id': int(id)})
-        return user.get('caption', None)
+        user = await self._safe_find_one(self.col, {'id': int(id)})
+        return user.get('caption', None) if user else None
 
     async def set_msg_command(self, id, com):
         await self.col.update_one({'id': int(id)}, {'$set': {'message_command': com}})
 
     async def get_msg_command(self, id):
-        user = await self.col.find_one({'id': int(id)})
-        return user.get('message_command', None)
+        user = await self._safe_find_one(self.col, {'id': int(id)})
+        return user.get('message_command', None) if user else None
 
     async def set_save(self, id, save):
         await self.col.update_one({'id': int(id)}, {'$set': {'save': save}})
 
     async def get_save(self, id):
-        user = await self.col.find_one({'id': int(id)})
-        return user.get('save', False) 
+        user = await self._safe_find_one(self.col, {'id': int(id)})
+        return user.get('save', False) if user else False
 
     async def get_bot_setting(self, bot_id, setting_key, default_value):
-        bot = await self.col.find_one({'id': int(bot_id)}, {setting_key: 1, '_id': 0})
+        bot = await self._safe_find_one(self.col, {'id': int(bot_id)}, {setting_key: 1, '_id': 0})
         return bot[setting_key] if bot and setting_key in bot else default_value
 
     async def update_bot_setting(self, bot_id, setting_key, value):
