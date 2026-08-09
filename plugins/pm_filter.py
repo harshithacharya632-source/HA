@@ -938,10 +938,19 @@ async def get_similar_titles(query, limit=5):
     return [m.title() for m in matches]
 
 
+_LEADING_ARTICLE_RE = re.compile(r'^(the|a|an)\s+', re.IGNORECASE)
+
+
 def filter_and_rank(files: list, search: str) -> list:
     """
     ✅ Only keep files whose cleaned name STARTS WITH the search term.
     This prevents middle/end matches from polluting season & episode lists.
+
+    A file's cleaned name is also checked with a leading "The"/"A"/"An"
+    stripped off, so searching "Mentalist" still matches a title stored
+    as "The Mentalist" — without this, the strict startswith check above
+    would reject it outright since "the mentalist..." doesn't start with
+    "mentalist".
     """
     # Clean the search term too
     search_clean = STRIP_RE.sub(' ', search.lower().strip())
@@ -952,15 +961,21 @@ def filter_and_rank(files: list, search: str) -> list:
     for f in files:
         name = f["file_name"]
         cleaned = clean_name(name)
+        cleaned_no_article = _LEADING_ARTICLE_RE.sub('', cleaned, count=1)
 
-        # ✅ PREFIX MATCH ONLY — must start with search name
-        if not cleaned.startswith(search_clean):
+        # ✅ PREFIX MATCH ONLY — must start with search name, either as-is
+        # or with the file's own leading article ignored
+        if not (cleaned.startswith(search_clean) or cleaned_no_article.startswith(search_clean)):
             continue
 
-        # Rank: exact prefix > contains
+        # Rank: exact prefix > contains (article-stripped exact prefix
+        # still ranks as an exact match, just below a true zero-article one)
         name_lower = name.lower()
+        name_lower_no_article = _LEADING_ARTICLE_RE.sub('', name_lower, count=1)
         if name_lower.startswith(search_lower):
             score = 0
+        elif name_lower_no_article.startswith(search_lower):
+            score = 0.5
         else:
             score = 1
 
