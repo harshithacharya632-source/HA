@@ -111,53 +111,76 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
         return [], "", 0
     query = query.strip()
     if not query:
-        raw_pattern = '.'
-    elif ' ' not in query:
-        raw_pattern = r'(\b|[\.\+\-_])' + query + r'(\b|[\.\+\-_])'
-    else:
-        raw_pattern = query.replace(' ', r'.*[\s\.\+\-_]')
-    try:
-        regex = re.compile(raw_pattern, flags=re.IGNORECASE)
-    except:
-        regex = query
-    regex_filter = {'file_name': regex}
-    # Phrase search on the text index (fast + gives an exact, indexed count).
-    # Quoting the whole query makes Mongo require the words as a phrase,
-    # matching the old regex's "words in order" behaviour.
-    text_filter = {'$text': {'$search': f'"{query}"'}}
+        return [], "", 0
 
-    def _run(collection, mongo_filter):
-        cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
-        found = list(cur)
-        count = collection.count_documents(mongo_filter) if need_count else len(found)
-        return found, count
+    async def _search(q):
+        """Run one search pass for query string `q` and return (files, total)."""
+        if not q:
+            raw_pattern = '.'
+        elif ' ' not in q:
+            raw_pattern = r'(\b|[\.\+\-_])' + q + r'(\b|[\.\+\-_])'
+        else:
+            raw_pattern = q.replace(' ', r'.*[\s\.\+\-_]')
+        try:
+            regex = re.compile(raw_pattern, flags=re.IGNORECASE)
+        except:
+            regex = q
+        regex_filter = {'file_name': regex}
+        # Phrase search on the text index (fast + gives an exact, indexed count).
+        # Quoting the whole query makes Mongo require the words as a phrase,
+        # matching the old regex's "words in order" behaviour.
+        text_filter = {'$text': {'$search': f'"{q}"'}}
 
-    def _run_all_blocking():
-        # All the actual pymongo work (synchronous/blocking network calls)
-        # happens here, inside one function, so it can be handed to a worker
-        # thread as a single unit below.
-        files_ = []
-        total_ = 0
-        for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
-            try:
-                # Requires a text index on file_name - see create_search_index()
-                # below / the one-time setup note. Falls back to the regex scan
-                # automatically if that index doesn't exist yet, so search never
-                # breaks - it's just slower until the index is created.
-                found, count = _run(collection, text_filter)
-            except Exception:
-                found, count = _run(collection, regex_filter)
-            files_.extend(found)
-            total_ += count
-        return files_, total_
+        def _run(collection, mongo_filter):
+            cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
+            found = list(cur)
+            count = collection.count_documents(mongo_filter) if need_count else len(found)
+            return found, count
 
-    # Run all the blocking pymongo calls in a worker thread instead of
-    # directly in this async function. Without this, every search froze the
-    # ENTIRE bot's event loop for the duration of the DB round trip - meaning
-    # other users' searches AND the file-send callbacks all queued up behind
-    # it. That's what was causing the multi-second lag on both search and
-    # file delivery, not the DB query itself being slow.
-    files, total_results = await asyncio.to_thread(_run_all_blocking)
+        def _run_all_blocking():
+            # All the actual pymongo work (synchronous/blocking network calls)
+            # happens here, inside one function, so it can be handed to a worker
+            # thread as a single unit below.
+            files_ = []
+            total_ = 0
+            for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
+                try:
+                    # Requires a text index on file_name - see create_search_index()
+                    # below / the one-time setup note. Falls back to the regex scan
+                    # automatically if that index doesn't exist yet, so search never
+                    # breaks - it's just slower until the index is created.
+                    found, count = _run(collection, text_filter)
+                except Exception:
+                    found, count = _run(collection, regex_filter)
+                files_.extend(found)
+                total_ += count
+            return files_, total_
+
+        # Run all the blocking pymongo calls in a worker thread instead of
+        # directly in this async function. Without this, every search froze the
+        # ENTIRE bot's event loop for the duration of the DB round trip - meaning
+        # other users' searches AND the file-send callbacks all queued up behind
+        # it. That's what was causing the multi-second lag on both search and
+        # file delivery, not the DB query itself being slow.
+        return await asyncio.to_thread(_run_all_blocking)
+
+    files, total_results = await _search(query)
+
+    # 🔤 Article-prefix fallback: titles like "The Mentalist" are stored
+    # with the leading article, but users often search the plain title
+    # ("Mentalist"). If the plain query comes up completely empty on the
+    # first page, retry with "The"/"A"/"An" in front before giving up.
+    # Only runs on the initial search (offset 0) and only when the query
+    # doesn't already start with one of these words, so it never fires on
+    # pagination ("next page") calls or double-prefixes a query.
+    if total_results == 0 and offset == 0:
+        first_word = query.split()[0].lower() if query.split() else ""
+        if first_word not in ("the", "a", "an"):
+            for prefix in ("The", "A", "An"):
+                prefixed_files, prefixed_total = await _search(f"{prefix} {query}")
+                if prefixed_total > 0:
+                    files, total_results = prefixed_files, prefixed_total
+                    break
 
     next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
     return files, next_offset, total_results
