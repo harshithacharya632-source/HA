@@ -1601,7 +1601,7 @@ async def save_template(client, message):
 @Client.on_message((filters.command(["request", "Request"]) | filters.regex("#request") | filters.regex("#Request")) & (filters.group | filters.private))
 async def requests(bot, message):
     if REQST_CHANNEL is None: return # Must add REQST_CHANNEL to use this feature
-    requester_is_premium = await is_premium_user(message.from_user.id)
+    requester_is_premium = PREMIUM_AND_REFERAL_MODE and await is_premium_user(message.from_user.id)
     request_prefix = "🌟🔥 <u><b>PREMIUM USER REQUEST — HANDLE FAST</b></u> 🔥🌟\n\n" if requester_is_premium else ""
     if message.reply_to_message:
         chat_id = message.chat.id
