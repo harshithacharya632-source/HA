@@ -1001,7 +1001,23 @@ async def get_cached_season_files(chat_id, key, search):
     entry = SEASON_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
         return entry["files"]
-    files, _, _ = await get_search_results(chat_id, search, max_results=50000, need_count=False)
+    # ✅ STUCK-SEARCH FIX: this used to await get_search_results() with no
+    # timeout at all. Since this call is fired via asyncio.create_task()
+    # (see auto_filter), a slow/hung Mongo query here doesn't just delay
+    # this one background task quietly — it holds onto a DB connection
+    # from the pool indefinitely. Under load, enough of these piling up
+    # exhausts the connection pool, and THAT is what made totally
+    # unrelated, later searches from other users in other groups also
+    # go silent for a while until a connection finally freed up again.
+    # Bounded the same way get_poster() already is elsewhere in this file.
+    try:
+        files, _, _ = await asyncio.wait_for(
+            get_search_results(chat_id, search, max_results=50000, need_count=False),
+            timeout=20,
+        )
+    except Exception as e:
+        logger.exception(f"get_cached_season_files timed out/failed for '{search}': {e}")
+        return []
     files = filter_and_rank(files, search)
     SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
@@ -1027,7 +1043,24 @@ async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_
     entry = DISPLAY_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < DISPLAY_CACHE_TTL):
         return entry["files"]
-    files, _, _ = await get_search_results(chat_id, search, max_results=pool_size, need_count=False)
+    # ✅ STUCK-SEARCH FIX: this is the call every single group text search
+    # goes through (give_filter -> auto_filter -> get_ranked_page -> here),
+    # and it used to await get_search_results() with NO timeout at all —
+    # the only unbounded call left in the whole search path, while every
+    # other slow call in this file (get_poster, etc.) was already wrapped
+    # in asyncio.wait_for(). give_filter() has a try/except around
+    # auto_filter() meant to catch exactly this ("Search took too long or
+    # failed") and show a friendly error, but that safety net only fires
+    # on a raised exception — a genuinely hung Mongo call (slow query,
+    # dropped connection, momentarily exhausted pool) never raised
+    # anything, it just sat there, so "Searching..." stayed on screen with
+    # no response until Mongo unstuck itself on its own — exactly the
+    # "takes the name and gets stuck, works again after a while" symptom.
+    # Now it fails fast and lets the existing fallback message do its job.
+    files, _, _ = await asyncio.wait_for(
+        get_search_results(chat_id, search, max_results=pool_size, need_count=False),
+        timeout=15,
+    )
     files = filter_and_rank(files, search)
     DISPLAY_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     return files
