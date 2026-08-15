@@ -222,6 +222,7 @@
   .play-opt.vlc .oicon{background:rgba(255,140,0,.18);color:#ffb04d;}
   .play-opt.mx .oicon{background:rgba(255,61,110,.18);color:#ff7d9c;}
   .play-opt.dl .oicon{background:rgba(80,220,140,.18);color:#66e0a3;}
+  .play-opt.quality .oicon{background:rgba(255,176,32,.16);color:var(--gold);font-size:12.5px;}
   .play-opt .otext{text-align:left;}
   .play-opt .otitle{font-size:14.5px;font-weight:700;}
   .play-opt .osub{font-size:12px;color:var(--text-dim);margin-top:1px;}
@@ -277,9 +278,9 @@
   .season-chip{padding:8px 16px;border-radius:20px;background:var(--card);border:1px solid var(--line);font-size:13.5px;font-weight:700;white-space:nowrap;flex:0 0 auto;color:var(--text-dim);}
   .season-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
   .episode-card{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);}
-  .episode-thumb{width:118px;height:66px;border-radius:10px;object-fit:cover;background:var(--card);flex:0 0 auto;}
+  .episode-thumb{width:118px;height:66px;border-radius:10px;object-fit:cover;background:var(--card);flex:0 0 auto;cursor:pointer;}
   .episode-info{flex:1;min-width:0;}
-  .episode-title{font-size:13.5px;font-weight:700;line-height:1.3;}
+  .episode-title{font-size:13.5px;font-weight:700;line-height:1.3;cursor:pointer;}
   .episode-meta{font-size:11.5px;color:var(--text-dim);margin:2px 0 4px;}
   .episode-overview{font-size:12px;color:#c9cbd2;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:6px;}
   .episode-watch-btn{display:inline-flex;align-items:center;gap:5px;background:rgba(229,9,20,.16);color:#ff6b73;padding:5px 12px;border-radius:16px;font-size:11.5px;font-weight:700;}
@@ -452,19 +453,25 @@
   <div class="sheet-backdrop" id="sheetBackdrop"></div>
   <div class="sheet" id="sheet">
     <div class="sheet-handle"></div>
-    <div class="sheet-title" id="sheetTitle">Choose a player</div>
-    <button class="play-opt web" id="playWeb">
-      <div class="oicon">▶</div>
-      <div class="otext"><div class="otitle">Web Player</div><div class="osub">Watch in GOFLIX player</div></div>
-    </button>
-    <button class="play-opt vlc" id="playVlc">
-      <div class="oicon">VLC</div>
-      <div class="otext"><div class="otitle">Open in VLC</div><div class="osub">External app</div></div>
-    </button>
-    <button class="play-opt mx" id="playMx">
-      <div class="oicon">MX</div>
-      <div class="otext"><div class="otitle">Open in MX Player</div><div class="osub">External app</div></div>
-    </button>
+    <div class="sheet-title" id="sheetTitle">Choose quality</div>
+
+    <div id="qualityStep"></div>
+
+    <div id="playerStep" class="hidden">
+      <button class="play-opt web" id="playWeb">
+        <div class="oicon">▶</div>
+        <div class="otext"><div class="otitle">Web Player</div><div class="osub">Watch in GOFLIX player</div></div>
+      </button>
+      <button class="play-opt vlc" id="playVlc">
+        <div class="oicon">VLC</div>
+        <div class="otext"><div class="otitle">Open in VLC</div><div class="osub">External app</div></div>
+      </button>
+      <button class="play-opt mx" id="playMx">
+        <div class="oicon">MX</div>
+        <div class="otext"><div class="otitle">Open in MX Player</div><div class="osub">External app</div></div>
+      </button>
+    </div>
+
     <button class="sheet-cancel" id="sheetCancel">Cancel</button>
   </div>
 
@@ -499,7 +506,11 @@ const CONFIG = {
   TMDB_PROXY_BASE: "/api/tmdb",
   RESOLVE_ENDPOINT: "/api/resolve",
   ME_ENDPOINT: "/api/me",
-  STREAM_BASE_URL: "https://injured-tiff-goflix-310fbd68.koyeb.app"
+  QUALITIES_ENDPOINT: "/api/qualities",
+  // This same server already has working /watch, /download, and streaming
+  // routes built in — no need to hardcode a domain, just use wherever
+  // this page is currently being served from.
+  STREAM_BASE_URL: window.location.origin
 };
 
 const tg = window.Telegram?.WebApp;
@@ -529,12 +540,36 @@ async function tmdb(path, params = {}) {
   return res.json();
 }
 
-async function resolveStream(item) {
+async function fetchQualities(item) {
+  const res = await fetch(CONFIG.QUALITIES_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      init_data: tg?.initData || "",
+      title: item.title || item.name,
+      year: (item.release_date || item.first_air_date || "").slice(0, 4),
+      season: item._season ?? null,
+      episode: item._episode ?? null
+    })
+  });
+  if (res.status === 402) {
+    const data = await res.json();
+    const err = new Error("premium_required");
+    err.premiumMessage = data.message;
+    throw err;
+  }
+  if (res.status === 401) { throw new Error("auth_failed"); }
+  if (!res.ok) throw new Error("server_error");
+  return res.json(); // { files: [{file_id, name, quality, size}] }
+}
+
+async function resolveStream(item, fileId) {
   const res = await fetch(CONFIG.RESOLVE_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       init_data: tg?.initData || "",
+      file_id: fileId || null,
       title: item.title || item.name,
       year: (item.release_date || item.first_air_date || "").slice(0, 4),
       season: item._season ?? null,
@@ -826,19 +861,70 @@ function toggleWatchlist(item){
   localStorage.setItem("goflix_watchlist", JSON.stringify(list));
 }
 
-/* ---------- Watch sheet (Web / VLC / MX) ---------- */
+/* ---------- Watch sheet (Quality -> Web / VLC / MX, or Quality -> Download) ---------- */
 const sheet = document.getElementById("sheet");
 const sheetBackdrop = document.getElementById("sheetBackdrop");
+const qualityStep = document.getElementById("qualityStep");
+const playerStep = document.getElementById("playerStep");
+let selectedFile = null;
+let pendingAction = "watch"; // "watch" shows the player picker, "download" goes straight to download
 
-function openWatchSheet(item){
+async function openWatchSheet(item, action = "watch"){
   activeItem = item;
-  document.getElementById("sheetTitle").textContent = item._episodeLabel
-    ? `Watch "${item._episodeLabel}"`
-    : `Watch "${item.title || item.name}"`;
+  pendingAction = action;
+  selectedFile = null;
+  document.getElementById("sheetTitle").textContent = "Choose quality";
+  qualityStep.classList.remove("hidden");
+  playerStep.classList.add("hidden");
+  qualityStep.innerHTML = '<div class="play-opt skeleton" style="height:58px"></div>'.repeat(3);
   sheet.classList.add("open"); sheetBackdrop.classList.add("open");
   tg?.HapticFeedback?.impactOccurred("light");
+
+  try {
+    const { files } = await fetchQualities(item);
+    renderQualityOptions(files || []);
+  } catch (err) {
+    tg?.HapticFeedback?.notificationOccurred("error");
+    alert(errorMessageFor(err));
+    closeSheet();
+  }
 }
-function closeSheet(){ sheet.classList.remove("open"); sheetBackdrop.classList.remove("open"); }
+
+function renderQualityOptions(files){
+  if (!files.length) {
+    qualityStep.innerHTML = `<div class="empty-state" style="padding:20px 4px">No files found for this title yet.</div>`;
+    return;
+  }
+  qualityStep.innerHTML = "";
+  files.forEach(f => {
+    const opt = document.createElement("button");
+    opt.className = "play-opt quality";
+    opt.innerHTML = `
+      <div class="oicon">${f.quality}</div>
+      <div class="otext"><div class="otitle">${f.quality}</div><div class="osub">${[f.size, f.name].filter(Boolean).join(" · ")}</div></div>`;
+    opt.addEventListener("click", () => selectQuality(f));
+    qualityStep.appendChild(opt);
+  });
+}
+
+function selectQuality(file){
+  selectedFile = file;
+  tg?.HapticFeedback?.impactOccurred("light");
+  if (pendingAction === "download") {
+    runDownload();
+  } else {
+    document.getElementById("sheetTitle").textContent = activeItem._episodeLabel
+      ? `Watch "${activeItem._episodeLabel}"`
+      : `Watch "${activeItem.title || activeItem.name}"`;
+    qualityStep.classList.add("hidden");
+    playerStep.classList.remove("hidden");
+  }
+}
+
+function closeSheet(){
+  sheet.classList.remove("open"); sheetBackdrop.classList.remove("open");
+  pendingAction = "watch"; selectedFile = null;
+}
 sheetBackdrop.addEventListener("click", closeSheet);
 document.getElementById("sheetCancel").addEventListener("click", closeSheet);
 
@@ -859,10 +945,22 @@ function errorMessageFor(err){
 }
 
 async function withResolvedUrls(fn){
-  if (!activeItem) return;
+  if (!activeItem || !selectedFile) return;
   try {
-    const resolved = await resolveStream(activeItem);
+    const resolved = await resolveStream(activeItem, selectedFile.file_id);
     fn(buildStreamUrls(resolved));
+  } catch (err) {
+    tg?.HapticFeedback?.notificationOccurred("error");
+    alert(errorMessageFor(err));
+  }
+  closeSheet();
+}
+async function runDownload(){
+  if (!activeItem || !selectedFile) return;
+  try {
+    const resolved = await resolveStream(activeItem, selectedFile.file_id);
+    const { downloadUrl } = buildStreamUrls(resolved);
+    if (tg) tg.openLink(downloadUrl); else window.open(downloadUrl, "_blank");
   } catch (err) {
     tg?.HapticFeedback?.notificationOccurred("error");
     alert(errorMessageFor(err));
@@ -948,18 +1046,8 @@ async function openDetail(item){
   }
 }
 document.getElementById("detailBack").addEventListener("click", () => history.length ? switchView("home") : switchView("home"));
-document.getElementById("detailWatchBtn").addEventListener("click", () => openWatchSheet(detailItem));
-document.getElementById("detailDownloadBtn").addEventListener("click", async () => {
-  activeItem = detailItem;
-  try {
-    const resolved = await resolveStream(detailItem);
-    const { downloadUrl } = buildStreamUrls(resolved);
-    if (tg) tg.openLink(downloadUrl); else window.open(downloadUrl, "_blank");
-  } catch (err) {
-    tg?.HapticFeedback?.notificationOccurred("error");
-    alert(errorMessageFor(err));
-  }
-});
+document.getElementById("detailWatchBtn").addEventListener("click", () => openWatchSheet(detailItem, "watch"));
+document.getElementById("detailDownloadBtn").addEventListener("click", () => openWatchSheet(detailItem, "download"));
 document.getElementById("detailTrailerBtn").addEventListener("click", () => {
   if (!detailItem?._trailerKey) { alert("No trailer available for this title."); return; }
   const url = `https://www.youtube.com/watch?v=${detailItem._trailerKey}`;
@@ -1023,14 +1111,17 @@ async function loadSeasonEpisodes(seasonNumber){
           <div class="episode-overview">${ep.overview || "No description available."}</div>
           <button class="episode-watch-btn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>Watch</button>
         </div>`;
-      card.querySelector(".episode-watch-btn").addEventListener("click", () => {
+      const watchThisEpisode = () => {
         openWatchSheet({
           ...detailItem,
           _season: seasonNumber,
           _episode: ep.episode_number,
           _episodeLabel: `${detailItem.name} — S${String(seasonNumber).padStart(2,"0")}E${String(ep.episode_number).padStart(2,"0")}`
         });
-      });
+      };
+      card.querySelector(".episode-watch-btn").addEventListener("click", watchThisEpisode);
+      card.querySelector(".episode-thumb").addEventListener("click", watchThisEpisode);
+      card.querySelector(".episode-title").addEventListener("click", watchThisEpisode);
       listEl.appendChild(card);
     });
   } catch (e) {
