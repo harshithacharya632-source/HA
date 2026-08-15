@@ -1,7 +1,13 @@
 import re
+import os
 import math
 import logging
+import hashlib
+import hmac
+import json as _json
+from urllib.parse import parse_qsl
 
+import aiohttp
 from aiohttp import web
 from info import *
 
@@ -9,6 +15,14 @@ from TechVJ.bot import multi_clients, work_loads
 from TechVJ.server.exceptions import FIleNotFound, InvalidHash
 from TechVJ.util.custom_dl import ByteStreamer
 from TechVJ.util.render_template import render_page
+from TechVJ.util.file_properties import get_hash, get_name
+
+from database.ia_filterdb import get_search_results
+from utils import is_premium_user
+
+WEBAPP_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "webapp")
+)
 
 routes = web.RouteTableDef()
 class_cache = {}
@@ -36,6 +50,167 @@ async def watch_page(request: web.Request):
         )
     except Exception:
         raise web.HTTPNotFound()
+
+
+# ---------------- MINI APP (GOFLIX HOME PAGE) ----------------
+@routes.get("/app", allow_head=True)
+async def goflix_app(request: web.Request):
+    return web.FileResponse(os.path.join(WEBAPP_DIR, "goflix_home.html"))
+
+
+# ---------------- TMDB PROXY (keeps TMDB_API_KEY off the client) ----------------
+@routes.get(r"/api/tmdb/{endpoint:\S+}", allow_head=True)
+async def tmdb_proxy(request: web.Request):
+    endpoint = request.match_info["endpoint"]
+    query = dict(request.rel_url.query)
+    query["api_key"] = TMDB_API_KEY
+    url = f"https://api.themoviedb.org/3/{endpoint}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=query, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                data = await resp.json()
+                return web.json_response(data, status=resp.status)
+    except Exception as e:
+        logging.exception(e)
+        raise web.HTTPBadGateway(text="TMDB request failed")
+
+
+# ---------------- TELEGRAM MINI APP initData VALIDATION ----------------
+def validate_init_data(init_data: str):
+    """Verify Telegram signed the Mini App's initData and return the user dict,
+    or None if it's missing/invalid/tampered. See:
+    https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+    """
+    if not init_data or not BOT_TOKEN:
+        return None
+    try:
+        parsed = dict(parse_qsl(init_data, strict_parsing=True))
+    except ValueError:
+        return None
+    received_hash = parsed.pop("hash", None)
+    if not received_hash:
+        return None
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calculated_hash, received_hash):
+        return None
+    user_json = parsed.get("user")
+    if not user_json:
+        return None
+    try:
+        return _json.loads(user_json)
+    except ValueError:
+        return None
+
+
+# ---------------- ME: profile / premium status for the Mini App ----------------
+@routes.post("/api/me")
+async def me(request: web.Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="expected JSON body")
+
+    user = validate_init_data(body.get("init_data", ""))
+    if not user:
+        raise web.HTTPUnauthorized(text="invalid or missing Telegram initData")
+
+    user_id = user.get("id")
+    is_premium = True
+    if PREMIUM_AND_REFERAL_MODE:
+        is_premium = await is_premium_user(user_id)
+
+    return web.json_response(
+        {
+            "name": (user.get("first_name", "") + " " + user.get("last_name", "")).strip(),
+            "username": user.get("username"),
+            "is_premium": is_premium,
+        }
+    )
+
+
+# ---------------- RESOLVE: TMDB title -> live stream id/hash ----------------
+# Mirrors what plugins/pm_filter.py's "generate_stream_link" callback does:
+# find the matching stored file, check premium, forward it to LOG_CHANNEL,
+# and hand back the fresh message id + hash that /watch and the direct
+# stream route expect. Nothing is pre-stored — this happens live per tap,
+# same as the bot's own Watch button.
+@routes.post("/api/resolve")
+async def resolve_stream(request: web.Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="expected JSON body")
+
+    init_data = body.get("init_data", "")
+    title = (body.get("title") or "").strip()
+    year = body.get("year")
+    season = body.get("season")
+    episode = body.get("episode")
+
+    if not title:
+        raise web.HTTPBadRequest(text="missing 'title'")
+
+    user = validate_init_data(init_data)
+    if not user:
+        raise web.HTTPUnauthorized(text="invalid or missing Telegram initData")
+    user_id = user.get("id")
+
+    # Premium gate — mirrors the master PREMIUM_AND_REFERAL_MODE toggle.
+    if PREMIUM_AND_REFERAL_MODE:
+        if not await is_premium_user(user_id):
+            return web.json_response(
+                {
+                    "premium_required": True,
+                    "message": "🔒 Stream & Download link is a Premium-only feature.\n\nBuy premium with /plan to unlock it.",
+                },
+                status=402,
+            )
+
+    # Build candidate queries, most specific first.
+    queries = []
+    if season and episode:
+        se_tag = f"S{int(season):02d}E{int(episode):02d}"
+        queries.append(f"{title} {se_tag}")
+    if year:
+        queries.append(f"{title} {year}")
+    queries.append(title)
+
+    files = []
+    for q in queries:
+        files, _, _ = await get_search_results(user_id, q, max_results=5, need_count=False)
+        if files:
+            break
+    if not files:
+        raise web.HTTPNotFound(text="no matching file found")
+
+    index = min(work_loads, key=work_loads.get)
+    client = multi_clients[index]
+    log_msg = None
+    last_error = None
+    for candidate in files:
+        try:
+            log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=candidate["file_id"])
+            break
+        except Exception as e:
+            # This specific match's stored file_id is bad/corrupted (e.g. MediaEmpty) —
+            # try the next matching file instead of failing the whole request.
+            last_error = e
+            logging.warning(f"send_cached_media failed for a candidate, trying next: {e}")
+            continue
+
+    if log_msg is None:
+        logging.exception(last_error)
+        raise web.HTTPInternalServerError(text="failed to prepare stream")
+
+    return web.json_response(
+        {
+            "id": log_msg.id,
+            "hash": get_hash(log_msg),
+            "name": get_name(log_msg),
+        }
+    )
 
 
 # ---------------- DIRECT STREAM (ROOT PATH – REQUIRED FOR VLC/MX) ----------------
