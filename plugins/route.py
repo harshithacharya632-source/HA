@@ -130,21 +130,29 @@ async def me(request: web.Request):
     )
 
 
-# ---------------- QUALITY LABEL PARSING ----------------
-_QUALITY_PATTERNS = [
-    (r"\b(2160p|4k|uhd)\b", "4K"),
-    (r"\b(1440p|2k)\b", "2K"),
-    (r"\b1080p\b", "1080p"),
-    (r"\b720p\b", "720p"),
-    (r"\b480p\b", "480p"),
-    (r"\b360p\b", "360p"),
-]
+# ---------------- QUALITY LABEL PARSING (by file size) ----------------
+# Same thresholds as plugins/pm_filter.py's QUALITY_RANGES, kept in sync
+# manually to avoid importing the whole pm_filter module here.
+_MB = 1024 * 1024
+QUALITY_RANGES = {
+    "4k":   (3000 * _MB, 40000 * _MB),
+    "2k":   (2000 * _MB, 3000 * _MB),
+    "1080": (1300 * _MB, 2000 * _MB),
+    "720":  (500 * _MB, 1300 * _MB),
+    "480":  (0, 500 * _MB),
+}
+QUALITY_LABELS = {"4k": "4K", "2k": "2K", "1080": "1080p", "720": "720p", "480": "480p"}
+QUALITY_ORDER = ["4k", "2k", "1080", "720", "480"]
 
-def parse_quality(file_name):
-    name = (file_name or "").lower()
-    for pattern, label in _QUALITY_PATTERNS:
-        if re.search(pattern, name):
-            return label
+def parse_quality(file_size):
+    try:
+        size = int(file_size)
+    except (TypeError, ValueError):
+        return "SD"
+    for qkey in QUALITY_ORDER:
+        lo, hi = QUALITY_RANGES[qkey]
+        if lo <= size < hi:
+            return QUALITY_LABELS[qkey]
     return "SD"
 
 def format_size(num_bytes):
@@ -156,6 +164,15 @@ def format_size(num_bytes):
             return f"{size:.0f}{unit}" if unit == "B" else f"{size:.2f}{unit}"
         size /= 1024
     return f"{size:.2f}TB"
+
+def normalize_query(title):
+    """Match the normalization auto_filter applies to search text, so a
+    TMDB title with punctuation Telegram filenames don't have (colons,
+    dashes) doesn't silently fail to match a file that's actually there."""
+    q = (title or "").lower()
+    q = q.replace("-", " ").replace(":", "").replace(".", "")
+    q = re.sub(r"\s+", " ", q).strip()
+    return q
 
 async def _check_premium_or_402(user_id):
     """Returns a 402 JSON response if the user isn't premium, else None."""
@@ -170,12 +187,13 @@ async def _check_premium_or_402(user_id):
     return None
 
 def _build_queries(title, year, season, episode):
+    clean = normalize_query(title)
     queries = []
     if season and episode:
-        queries.append(f"{title} S{int(season):02d}E{int(episode):02d}")
+        queries.append(f"{clean} S{int(season):02d}E{int(episode):02d}")
     if year:
-        queries.append(f"{title} {year}")
-    queries.append(title)
+        queries.append(f"{clean} {year}")
+    queries.append(clean)
     return queries
 
 
@@ -211,13 +229,13 @@ async def list_qualities(request: web.Request):
         {
             "file_id": f["file_id"],
             "name": f.get("file_name", ""),
-            "quality": parse_quality(f.get("file_name")),
+            "quality": parse_quality(f.get("file_size")),
             "size": format_size(f.get("file_size")),
         }
         for f in files
     ]
     # Best quality first.
-    order = {"4K": 0, "2K": 1, "1080p": 2, "720p": 3, "480p": 4, "360p": 5, "SD": 6}
+    order = {"4K": 0, "2K": 1, "1080p": 2, "720p": 3, "480p": 4, "SD": 5}
     results.sort(key=lambda r: order.get(r["quality"], 9))
 
     return web.json_response({"files": results})
