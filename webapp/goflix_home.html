@@ -457,21 +457,6 @@
 
     <div id="qualityStep"></div>
 
-    <div id="playerStep" class="hidden">
-      <button class="play-opt web" id="playWeb">
-        <div class="oicon">▶</div>
-        <div class="otext"><div class="otitle">Web Player</div><div class="osub">Watch in GOFLIX player</div></div>
-      </button>
-      <button class="play-opt vlc" id="playVlc">
-        <div class="oicon">VLC</div>
-        <div class="otext"><div class="otitle">Open in VLC</div><div class="osub">External app</div></div>
-      </button>
-      <button class="play-opt mx" id="playMx">
-        <div class="oicon">MX</div>
-        <div class="otext"><div class="otitle">Open in MX Player</div><div class="osub">External app</div></div>
-      </button>
-    </div>
-
     <button class="sheet-cancel" id="sheetCancel">Cancel</button>
   </div>
 
@@ -865,17 +850,12 @@ function toggleWatchlist(item){
 const sheet = document.getElementById("sheet");
 const sheetBackdrop = document.getElementById("sheetBackdrop");
 const qualityStep = document.getElementById("qualityStep");
-const playerStep = document.getElementById("playerStep");
-let selectedFile = null;
-let pendingAction = "watch"; // "watch" shows the player picker, "download" goes straight to download
+let pendingAction = "watch"; // "watch" opens the web player, "download" downloads
 
 async function openWatchSheet(item, action = "watch"){
   activeItem = item;
   pendingAction = action;
-  selectedFile = null;
   document.getElementById("sheetTitle").textContent = "Choose quality";
-  qualityStep.classList.remove("hidden");
-  playerStep.classList.add("hidden");
   qualityStep.innerHTML = '<div class="play-opt skeleton" style="height:58px"></div>'.repeat(3);
   sheet.classList.add("open"); sheetBackdrop.classList.add("open");
   tg?.HapticFeedback?.impactOccurred("light");
@@ -907,23 +887,24 @@ function renderQualityOptions(files){
   });
 }
 
-function selectQuality(file){
-  selectedFile = file;
+async function selectQuality(file){
   tg?.HapticFeedback?.impactOccurred("light");
-  if (pendingAction === "download") {
-    runDownload();
-  } else {
-    document.getElementById("sheetTitle").textContent = activeItem._episodeLabel
-      ? `Watch "${activeItem._episodeLabel}"`
-      : `Watch "${activeItem.title || activeItem.name}"`;
-    qualityStep.classList.add("hidden");
-    playerStep.classList.remove("hidden");
+  qualityStep.innerHTML = `<div class="empty-state" style="padding:20px 4px">Preparing your stream…</div>`;
+  try {
+    const resolved = await resolveStream(activeItem, file.file_id);
+    const { webPlayerUrl, downloadUrl } = buildStreamUrls(resolved);
+    const url = pendingAction === "download" ? downloadUrl : webPlayerUrl;
+    if (tg) tg.openLink(url); else window.open(url, "_blank");
+  } catch (err) {
+    tg?.HapticFeedback?.notificationOccurred("error");
+    alert(errorMessageFor(err));
   }
+  closeSheet();
 }
 
 function closeSheet(){
   sheet.classList.remove("open"); sheetBackdrop.classList.remove("open");
-  pendingAction = "watch"; selectedFile = null;
+  pendingAction = "watch";
 }
 sheetBackdrop.addEventListener("click", closeSheet);
 document.getElementById("sheetCancel").addEventListener("click", closeSheet);
@@ -932,7 +913,6 @@ function buildStreamUrls({ id, hash, name }) {
   const safeName = encodeURIComponent(name || "GOFLIX");
   return {
     webPlayerUrl: `${CONFIG.STREAM_BASE_URL}/watch/${id}/${safeName}?hash=${hash}`,
-    rawStreamUrl: `${CONFIG.STREAM_BASE_URL}/${id}?hash=${hash}`,
     downloadUrl: `${CONFIG.STREAM_BASE_URL}/download/${id}/${safeName}?hash=${hash}`
   };
 }
@@ -943,45 +923,6 @@ function errorMessageFor(err){
   if (err.message === "auth_failed") return "Couldn't verify your Telegram session. Try reopening the Mini App from the bot.";
   return "Something went wrong preparing this stream. Try again in a moment.";
 }
-
-async function withResolvedUrls(fn){
-  if (!activeItem || !selectedFile) return;
-  try {
-    const resolved = await resolveStream(activeItem, selectedFile.file_id);
-    fn(buildStreamUrls(resolved));
-  } catch (err) {
-    tg?.HapticFeedback?.notificationOccurred("error");
-    alert(errorMessageFor(err));
-  }
-  closeSheet();
-}
-async function runDownload(){
-  if (!activeItem || !selectedFile) return;
-  try {
-    const resolved = await resolveStream(activeItem, selectedFile.file_id);
-    const { downloadUrl } = buildStreamUrls(resolved);
-    if (tg) tg.openLink(downloadUrl); else window.open(downloadUrl, "_blank");
-  } catch (err) {
-    tg?.HapticFeedback?.notificationOccurred("error");
-    alert(errorMessageFor(err));
-  }
-  closeSheet();
-}
-document.getElementById("playWeb").addEventListener("click", () => {
-  withResolvedUrls(({ webPlayerUrl }) => { if (tg) tg.openLink(webPlayerUrl); else window.open(webPlayerUrl, "_blank"); });
-});
-document.getElementById("playVlc").addEventListener("click", () => {
-  withResolvedUrls(({ rawStreamUrl }) => {
-    const vlcLink = "vlc://" + rawStreamUrl;
-    if (tg) tg.openLink(vlcLink); else window.location.href = vlcLink;
-  });
-});
-document.getElementById("playMx").addEventListener("click", () => {
-  withResolvedUrls(({ rawStreamUrl }) => {
-    const mxLink = `intent:${rawStreamUrl}#Intent;package=com.mxtech.videoplayer.ad;S.title=${encodeURIComponent(activeItem.title || activeItem.name)};end`;
-    if (tg) tg.openLink(mxLink); else window.location.href = mxLink;
-  });
-});
 
 /* ---------- Detail view ---------- */
 async function openDetail(item){
