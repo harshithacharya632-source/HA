@@ -130,6 +130,99 @@ async def me(request: web.Request):
     )
 
 
+# ---------------- QUALITY LABEL PARSING ----------------
+_QUALITY_PATTERNS = [
+    (r"\b(2160p|4k|uhd)\b", "4K"),
+    (r"\b(1440p|2k)\b", "2K"),
+    (r"\b1080p\b", "1080p"),
+    (r"\b720p\b", "720p"),
+    (r"\b480p\b", "480p"),
+    (r"\b360p\b", "360p"),
+]
+
+def parse_quality(file_name):
+    name = (file_name or "").lower()
+    for pattern, label in _QUALITY_PATTERNS:
+        if re.search(pattern, name):
+            return label
+    return "SD"
+
+def format_size(num_bytes):
+    if not num_bytes:
+        return ""
+    size = float(num_bytes)
+    for unit in ["B", "KB", "MB", "GB"]:
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.2f}{unit}"
+        size /= 1024
+    return f"{size:.2f}TB"
+
+async def _check_premium_or_402(user_id):
+    """Returns a 402 JSON response if the user isn't premium, else None."""
+    if PREMIUM_AND_REFERAL_MODE and not await is_premium_user(user_id):
+        return web.json_response(
+            {
+                "premium_required": True,
+                "message": "🔒 Stream & Download link is a Premium-only feature.\n\nBuy premium with /plan to unlock it.",
+            },
+            status=402,
+        )
+    return None
+
+def _build_queries(title, year, season, episode):
+    queries = []
+    if season and episode:
+        queries.append(f"{title} S{int(season):02d}E{int(episode):02d}")
+    if year:
+        queries.append(f"{title} {year}")
+    queries.append(title)
+    return queries
+
+
+# ---------------- QUALITIES: list every matching file for a title ----------------
+@routes.post("/api/qualities")
+async def list_qualities(request: web.Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="expected JSON body")
+
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise web.HTTPBadRequest(text="missing 'title'")
+
+    user = validate_init_data(body.get("init_data", ""))
+    if not user:
+        raise web.HTTPUnauthorized(text="invalid or missing Telegram initData")
+    user_id = user.get("id")
+
+    premium_block = await _check_premium_or_402(user_id)
+    if premium_block:
+        return premium_block
+
+    queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
+    files = []
+    for q in queries:
+        files, _, _ = await get_search_results(user_id, q, max_results=10, need_count=False)
+        if files:
+            break
+
+    results = [
+        {
+            "file_id": f["file_id"],
+            "name": f.get("file_name", ""),
+            "quality": parse_quality(f.get("file_name")),
+            "size": format_size(f.get("file_size")),
+        }
+        for f in files
+    ]
+    # Best quality first.
+    order = {"4K": 0, "2K": 1, "1080p": 2, "720p": 3, "480p": 4, "360p": 5, "SD": 6}
+    results.sort(key=lambda r: order.get(r["quality"], 9))
+
+    return web.json_response({"files": results})
+
+
 # ---------------- RESOLVE: TMDB title -> live stream id/hash ----------------
 # Mirrors what plugins/pm_filter.py's "generate_stream_link" callback does:
 # find the matching stored file, check premium, forward it to LOG_CHANNEL,
@@ -144,52 +237,40 @@ async def resolve_stream(request: web.Request):
         raise web.HTTPBadRequest(text="expected JSON body")
 
     init_data = body.get("init_data", "")
+    explicit_file_id = body.get("file_id")
     title = (body.get("title") or "").strip()
-    year = body.get("year")
-    season = body.get("season")
-    episode = body.get("episode")
 
-    if not title:
-        raise web.HTTPBadRequest(text="missing 'title'")
+    if not explicit_file_id and not title:
+        raise web.HTTPBadRequest(text="missing 'file_id' or 'title'")
 
     user = validate_init_data(init_data)
     if not user:
         raise web.HTTPUnauthorized(text="invalid or missing Telegram initData")
     user_id = user.get("id")
 
-    # Premium gate — mirrors the master PREMIUM_AND_REFERAL_MODE toggle.
-    if PREMIUM_AND_REFERAL_MODE:
-        if not await is_premium_user(user_id):
-            return web.json_response(
-                {
-                    "premium_required": True,
-                    "message": "🔒 Stream & Download link is a Premium-only feature.\n\nBuy premium with /plan to unlock it.",
-                },
-                status=402,
-            )
+    premium_block = await _check_premium_or_402(user_id)
+    if premium_block:
+        return premium_block
 
-    # Build candidate queries, most specific first.
-    queries = []
-    if season and episode:
-        se_tag = f"S{int(season):02d}E{int(episode):02d}"
-        queries.append(f"{title} {se_tag}")
-    if year:
-        queries.append(f"{title} {year}")
-    queries.append(title)
-
-    files = []
-    for q in queries:
-        files, _, _ = await get_search_results(user_id, q, max_results=5, need_count=False)
-        if files:
-            break
-    if not files:
-        raise web.HTTPNotFound(text="no matching file found")
+    if explicit_file_id:
+        # A specific quality was already chosen via /api/qualities — just send that one.
+        candidates = [{"file_id": explicit_file_id}]
+    else:
+        # Fallback: no quality picker was used, search and try matches in order.
+        queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
+        candidates = []
+        for q in queries:
+            candidates, _, _ = await get_search_results(user_id, q, max_results=5, need_count=False)
+            if candidates:
+                break
+        if not candidates:
+            raise web.HTTPNotFound(text="no matching file found")
 
     index = min(work_loads, key=work_loads.get)
     client = multi_clients[index]
     log_msg = None
     last_error = None
-    for candidate in files:
+    for candidate in candidates:
         try:
             log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=candidate["file_id"])
             break
