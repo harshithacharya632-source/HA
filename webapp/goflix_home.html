@@ -72,16 +72,22 @@
     position:sticky;top:0;z-index:40;
     display:flex;align-items:center;justify-content:space-between;
     padding:calc(14px + env(safe-area-inset-top, 0px)) 16px 14px;
-    background:linear-gradient(180deg, rgba(7,8,13,.95), rgba(7,8,13,.75));
-    backdrop-filter:blur(10px);
+    background:var(--bg-elev);opacity:.97;backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);
+    transition:background .35s ease;
   }
-  .logo{font-size:25px;font-weight:900;letter-spacing:.3px;}
-  .logo .go{color:var(--go);} .logo .flix{color:var(--flix);}
+  .logo{font-size:25px;font-weight:900;letter-spacing:.3px;animation:logoPop .6s cubic-bezier(.34,1.56,.64,1) both;}
+  .logo .go{color:var(--go);}
+  .logo .flix{color:var(--flix);display:inline-block;animation:logoGlow 3.2s ease-in-out .6s infinite;}
+  @keyframes logoPop{from{opacity:0;transform:scale(.7) translateY(-6px);}to{opacity:1;transform:scale(1) translateY(0);}}
+  @keyframes logoGlow{0%,100%{text-shadow:0 0 0 rgba(229,9,20,0);}50%{text-shadow:0 0 10px rgba(229,9,20,.65);}}
   .top-actions{display:flex;align-items:center;gap:10px;}
   .icon-btn{
     width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.08);
     display:flex;align-items:center;justify-content:center;color:var(--text);
+    transition:transform .15s ease,background .15s ease;
   }
+  .icon-btn:active{transform:scale(.88);background:rgba(229,9,20,.25);}
 
   /* ---------- Views ---------- */
   .view{display:none;}
@@ -210,20 +216,30 @@
 
   .genre-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:8px 16px 16px;}
   .genre-tile{
-    position:relative;height:100px;border-radius:14px;overflow:hidden;
-    display:flex;align-items:flex-end;padding:14px;font-size:17px;font-weight:800;
+    position:relative;height:136px;border-radius:14px;overflow:hidden;
     animation:tileIn .45s cubic-bezier(.22,.61,.36,1) both;
     animation-delay:var(--d, 0ms);
     transition:transform .18s cubic-bezier(.22,.61,.36,1),box-shadow .18s ease;
   }
-  .genre-tile span{position:relative;z-index:2;}
-  .genre-icon{display:block;font-size:22px;margin-bottom:4px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4));}
-  .genre-tile{transition:background-image .5s ease,transform .18s cubic-bezier(.22,.61,.36,1),box-shadow .18s ease;}
-  .genre-tile-imaged::before{opacity:1;}
-  .genre-tile::before{content:"";position:absolute;inset:0;opacity:.85;transition:opacity .18s ease;}
-  .genre-tile::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg, transparent 30%, rgba(0,0,0,.55));}
   .genre-tile:active{transform:scale(.95);box-shadow:var(--shadow);}
-  .genre-tile:active::before{opacity:1;}
+  .genre-collage{position:absolute;inset:0;display:flex;}
+  .collage-img{
+    flex:1;background-size:cover;background-position:center top;
+    opacity:0;transform:scale(1.08);
+    transition:opacity .5s ease,transform .5s ease;
+  }
+  .genre-tile-imaged .collage-img{opacity:1;transform:scale(1);}
+  .genre-tile-tint{position:absolute;inset:0;background:var(--tint);mix-blend-mode:multiply;opacity:.5;}
+  .genre-tile-shade{position:absolute;inset:0;background:linear-gradient(180deg, rgba(0,0,0,.05) 30%, rgba(0,0,0,.82) 100%);}
+  .genre-tile-text{position:relative;z-index:2;height:100%;display:flex;flex-direction:column;justify-content:flex-end;padding:14px;}
+  .genre-icon{display:block;font-size:18px;margin-bottom:3px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4));}
+  .genre-tile-name{font-size:18px;font-weight:800;color:#fff;line-height:1.1;}
+  .genre-tile-explore{
+    display:flex;align-items:center;gap:4px;margin-top:4px;
+    font-size:12px;font-weight:700;color:rgba(255,255,255,.8);
+  }
+  .genre-tile-explore svg{width:11px;height:11px;stroke:rgba(255,255,255,.8);fill:none;stroke-width:2.5;transition:transform .18s ease;}
+  .genre-tile:active .genre-tile-explore svg{transform:translateX(3px);}
 
   .lang-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:8px 16px 16px;}
   .lang-tile{
@@ -383,6 +399,23 @@
   .dbtn.primary svg{fill:#fff;}
   .dbtn.secondary{background:rgba(255,255,255,.1);color:#fff;}
   .dbtn.secondary svg{stroke:#fff;fill:none;stroke-width:2;}
+  .detail-bottom-spacer{height:82px;}
+
+  /* ---------- Detail: sticky bottom bar (Back / Add to List) ---------- */
+  .detail-bottom-bar{
+    display:none;position:fixed;left:0;right:0;bottom:0;z-index:60;gap:10px;
+    padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    background:var(--bg-elev);opacity:.98;backdrop-filter:blur(14px);border-top:1px solid var(--line);
+  }
+  .dbb-btn{
+    flex:1;display:flex;align-items:center;justify-content:center;gap:8px;
+    padding:13px;border-radius:13px;font-weight:700;font-size:14.5px;color:var(--text);
+    background:rgba(255,255,255,.08);transition:transform .15s ease,background .15s ease;
+  }
+  .dbb-btn:active{transform:scale(.96);}
+  .dbb-btn svg{width:16px;height:16px;stroke:var(--text);fill:none;stroke-width:2.2;}
+  .dbb-watchlist.saved{background:var(--accent);color:#fff;}
+  .dbb-watchlist.saved svg{fill:#fff;stroke:#fff;}
 
   .tabs{display:flex;gap:20px;border-bottom:1px solid var(--line);padding:0 2px;margin-bottom:16px;overflow-x:auto;scrollbar-width:none;}
   .tabs::-webkit-scrollbar{display:none;}
@@ -423,9 +456,14 @@
 
   <div class="topbar">
     <div class="logo"><span class="go">GO</span><span class="flix">FLIX</span></div>
-    <button class="icon-btn" id="topSearchBtn" aria-label="Search">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-    </button>
+    <div class="top-actions">
+      <button class="icon-btn" id="topThemeBtn" aria-label="Appearance">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <button class="icon-btn" id="topSearchBtn" aria-label="Search">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      </button>
+    </div>
   </div>
 
   <!-- ============ HOME ============ -->
@@ -482,6 +520,10 @@
   <!-- ============ BROWSE ============ -->
   <div class="view" id="view-browse">
     <div class="view-header" id="browseHeader"><div class="view-title">Browse</div></div>
+    <div class="section" id="upcomingSection">
+      <div class="section-head"><div class="section-title">Upcoming</div></div>
+      <div class="row" id="upcomingRow"></div>
+    </div>
     <div class="browse-subtabs" id="browseSubtabs">
       <button class="browse-subtab active" data-subtab="genres">Genres</button>
       <button class="browse-subtab" data-subtab="languages">Languages</button>
@@ -573,8 +615,17 @@
       <div class="tab-panel" id="tab-reviews"><div id="reviewsList"></div></div>
       <div class="tab-panel" id="tab-recommended"><div class="poster-grid" id="recommendedGrid"></div></div>
 
-      <button class="dbtn secondary" id="detailAddListBtn" style="width:100%;margin-top:4px;"><svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span id="addListLabel">Add to List</span></button>
+      <div class="detail-bottom-spacer"></div>
     </div>
+  </div>
+
+  <div class="detail-bottom-bar" id="detailBottomBar">
+    <button class="dbb-btn dbb-back" id="detailBottomBack">
+      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg><span>Back</span>
+    </button>
+    <button class="dbb-btn dbb-watchlist" id="detailBottomWatchlist">
+      <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span id="detailBottomWatchlistLabel">Add to List</span>
+    </button>
   </div>
 
   <nav class="bottom-nav">
@@ -704,10 +755,14 @@ const IMG_BASE = "https://image.tmdb.org/t/p";
 const GENRES = [
   { id: 28, name: "Action", color: "#e50914" },
   { id: 35, name: "Comedy", color: "#ffb020" },
-  { id: 27, name: "Horror", color: "#6b21a8" },
+  { id: 18, name: "Drama", color: "#2563eb" },
+  { id: 27, name: "Horror", color: "#b91c1c" },
+  { id: 878, name: "Sci-Fi", color: "#0f766e" },
   { id: 10749, name: "Romance", color: "#e0447c" },
-  { id: 878, name: "Sci-Fi", color: "#2563eb" },
-  { id: 53, name: "Thriller", color: "#0f766e" }
+  { id: 16, name: "Animation", color: "#f97316" },
+  { id: 53, name: "Thriller", color: "#166534" },
+  { id: 14, name: "Fantasy", color: "#7c3aed" },
+  { id: 9648, name: "Mystery", color: "#4338ca" }
 ];
 
 let heroItems = [], heroIndex = 0, autoTimer = null;
@@ -798,6 +853,9 @@ function switchView(name, opts = {}) {
   window.scrollTo(0, 0);
   if (name === "browse" && !opts.keepGenreResults) showGenreGrid();
   if (name === "home") renderContinueRow();
+  // Detail view gets its own fixed Back/Watchlist bar instead of the main tab bar.
+  document.querySelector(".bottom-nav").style.display = (name === "detail") ? "none" : "flex";
+  document.getElementById("detailBottomBar").style.display = (name === "detail") ? "flex" : "none";
 }
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -992,6 +1050,10 @@ function renderRecentSearches(){
   });
 }
 const searchInput = document.getElementById("searchInput");
+document.getElementById("topThemeBtn").addEventListener("click", () => {
+  tg?.HapticFeedback?.impactOccurred("light");
+  openSettingsSheet();
+});
 document.getElementById("topSearchBtn").addEventListener("click", () => {
   tg?.HapticFeedback?.impactOccurred("light");
   switchView("search");
@@ -1036,6 +1098,7 @@ document.querySelectorAll(".browse-subtab").forEach(btn => {
 
 /* ---------- Browse (genres) ---------- */
 function showGenreGrid(){
+  document.getElementById("upcomingSection").classList.remove("hidden");
   document.getElementById("browseSubtabs").classList.remove("hidden");
   document.getElementById("genreGrid").classList.remove("hidden");
   document.getElementById("langGrid").classList.add("hidden");
@@ -1044,7 +1107,8 @@ function showGenreGrid(){
   document.getElementById("browseHeader").innerHTML = `<div class="view-title">Browse</div>`;
 }
 const GENRE_ICONS = {
-  28: "💥", 35: "😂", 27: "👻", 10749: "❤️", 878: "🚀", 53: "🔪"
+  28: "💥", 35: "😂", 18: "🎭", 27: "👻", 878: "🚀",
+  10749: "❤️", 16: "🎨", 53: "🔪", 14: "🐉", 9648: "🕵️"
 };
 function renderGenreGrid(){
   const grid = document.getElementById("genreGrid");
@@ -1053,27 +1117,36 @@ function renderGenreGrid(){
     const tile = document.createElement("div");
     tile.className = "genre-tile";
     tile.style.setProperty("--d", `${i * 45}ms`);
-    tile.style.background = g.color;
-    tile.innerHTML = `<span class="genre-icon">${GENRE_ICONS[g.id] || "🎬"}</span><span>${g.name}</span>`;
+    tile.style.setProperty("--tint", g.color);
+    tile.style.background = g.color; // instant fallback colour while the collage loads
+    tile.innerHTML = `
+      <div class="genre-collage"></div>
+      <div class="genre-tile-tint"></div>
+      <div class="genre-tile-shade"></div>
+      <div class="genre-tile-text">
+        <span class="genre-icon">${GENRE_ICONS[g.id] || "🎬"}</span>
+        <span class="genre-tile-name">${g.name}</span>
+        <span class="genre-tile-explore">Explore
+          <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </span>
+      </div>`;
     tile.addEventListener("click", () => openGenre(g));
     grid.appendChild(tile);
-    // Fill in a real backdrop image behind the tile, non-blocking — falls
-    // back to the flat colour above if the request is slow or fails.
+    // Fill in a poster collage behind the tile, non-blocking — the flat
+    // colour above stays visible immediately, image fades in once loaded.
     tmdb("/discover/movie", { with_genres: g.id, sort_by: "popularity.desc" }).then(data => {
-      const pick = (data.results || []).find(r => r.backdrop_path);
-      if (!pick) return;
-      const img = new Image();
-      img.onload = () => {
-        tile.style.backgroundImage = `linear-gradient(180deg, rgba(0,0,0,.15) 0%, rgba(0,0,0,.7) 100%), url('${img.src}')`;
-        tile.style.backgroundSize = "cover";
-        tile.style.backgroundPosition = "center";
-        tile.classList.add("genre-tile-imaged");
-      };
-      img.src = IMG_BASE + "/w500" + pick.backdrop_path;
+      const pics = (data.results || []).filter(r => r.poster_path).slice(0, 3);
+      if (!pics.length) return;
+      const collage = tile.querySelector(".genre-collage");
+      collage.innerHTML = pics.map(p =>
+        `<div class="collage-img" style="background-image:url('${IMG_BASE}/w342${p.poster_path}')"></div>`
+      ).join("");
+      requestAnimationFrame(() => tile.classList.add("genre-tile-imaged"));
     }).catch(() => {});
   });
 }
 async function openGenre(genre){
+  document.getElementById("upcomingSection").classList.add("hidden");
   document.getElementById("browseSubtabs").classList.add("hidden");
   document.getElementById("genreGrid").classList.add("hidden");
   const resultsEl = document.getElementById("genreResults");
@@ -1104,6 +1177,7 @@ async function fetchLanguages(){
   } catch (e) { console.error("Couldn't load languages", e); }
 }
 function showLangGrid(){
+  document.getElementById("upcomingSection").classList.remove("hidden");
   document.getElementById("browseSubtabs").classList.remove("hidden");
   document.getElementById("langGrid").classList.remove("hidden");
   document.getElementById("genreGrid").classList.add("hidden");
@@ -1163,6 +1237,7 @@ async function playRawFile(file){
   }
 }
 async function openLanguage(lang){
+  document.getElementById("upcomingSection").classList.add("hidden");
   document.getElementById("browseSubtabs").classList.add("hidden");
   document.getElementById("langGrid").classList.add("hidden");
   const resultsEl = document.getElementById("langResults");
@@ -1207,6 +1282,7 @@ document.querySelectorAll(".menu-item").forEach(btn => {
 });
 async function openCatalog(title, tmdbPath){
   switchView("browse", { keepGenreResults: true });
+  document.getElementById("upcomingSection").classList.add("hidden");
   document.getElementById("browseSubtabs").classList.add("hidden");
   document.getElementById("genreGrid").classList.add("hidden");
   document.getElementById("langGrid").classList.add("hidden");
@@ -1227,6 +1303,7 @@ async function openCatalog(title, tmdbPath){
 }
 function openWatchlistView(){
   switchView("browse", { keepGenreResults: true });
+  document.getElementById("upcomingSection").classList.add("hidden");
   document.getElementById("browseSubtabs").classList.add("hidden");
   document.getElementById("genreGrid").classList.add("hidden");
   document.getElementById("langGrid").classList.add("hidden");
@@ -1456,8 +1533,12 @@ function errorMessageFor(err){
 }
 
 /* ---------- Detail view ---------- */
+let detailReturnView = "home"; // where the Back button in the sticky bar should go
 async function openDetail(item){
   detailItem = item;
+  // Remember which tab we were on so "Back" returns there instead of always Home.
+  const current = document.querySelector(".view.active");
+  if (current && current.id !== "view-detail") detailReturnView = current.id.replace("view-", "");
   switchView("detail");
   const type = item.media_type === "tv" || item.first_air_date ? "tv" : "movie";
 
@@ -1517,7 +1598,8 @@ async function openDetail(item){
     console.error(e);
   }
 }
-document.getElementById("detailBack").addEventListener("click", () => history.length ? switchView("home") : switchView("home"));
+document.getElementById("detailBack").addEventListener("click", () => switchView(detailReturnView));
+document.getElementById("detailBottomBack").addEventListener("click", () => switchView(detailReturnView));
 document.getElementById("detailWatchBtn").addEventListener("click", () => openWatchSheet(detailItem, "watch"));
 document.getElementById("detailDownloadBtn").addEventListener("click", () => openWatchSheet(detailItem, "download"));
 document.getElementById("detailTrailerBtn").addEventListener("click", () => {
@@ -1536,10 +1618,12 @@ document.getElementById("detailShareBtn").addEventListener("click", () => {
   }
 });
 function updateAddListBtn(){
-  const label = document.getElementById("addListLabel");
-  label.textContent = isInWatchlist(detailItem) ? "In Your List ✓" : "Add to List";
+  const saved = isInWatchlist(detailItem);
+  const label = document.getElementById("detailBottomWatchlistLabel");
+  label.textContent = saved ? "In Your List" : "Add to List";
+  document.getElementById("detailBottomWatchlist").classList.toggle("saved", saved);
 }
-document.getElementById("detailAddListBtn").addEventListener("click", () => {
+document.getElementById("detailBottomWatchlist").addEventListener("click", () => {
   toggleWatchlist(detailItem);
   updateAddListBtn();
   tg?.HapticFeedback?.impactOccurred("light");
@@ -1678,9 +1762,7 @@ document.getElementById("settingsClose").addEventListener("click", closeSettings
 settingsBackdrop.addEventListener("click", closeSettingsSheet);
 
 /* ---------- Boot ---------- */
-async function boot(){
-  serverConfigPromise = loadServerConfig(); // fire in parallel — CONFIG.STREAM_BASE_URL updates as soon as it resolves
-  renderContinueRow();
+async function refreshDynamicContent(isFirstLoad){
   try {
     const trending = await tmdb("/trending/all/week");
     heroItems = trending.results.slice(0, 10);
@@ -1692,13 +1774,32 @@ async function boot(){
 
     const nowPlaying = await tmdb("/movie/now_playing");
     renderRow("newRow", nowPlaying.results.slice(0, 15));
+
+    // Upcoming: unreleased movies + shows airing today, for the Browse tab.
+    const [upcomingMovies, airingTv] = await Promise.all([
+      tmdb("/movie/upcoming"),
+      tmdb("/tv/airing_today")
+    ]);
+    const upcoming = [...(upcomingMovies.results || []), ...(airingTv.results || [])];
+    renderRow("upcomingRow", upcoming.slice(0, 15));
   } catch (err) {
-    console.error(err);
-    document.getElementById("heroTrack").innerHTML =
-      `<div class="hero-slide" style="display:flex;align-items:center;justify-content:center;color:#9aa0ae;font-size:14px;">
-         Couldn't load TMDB data — check the /api/tmdb proxy
-       </div>`;
+    console.error("TMDB refresh failed", err);
+    if (isFirstLoad) {
+      document.getElementById("heroTrack").innerHTML =
+        `<div class="hero-slide" style="display:flex;align-items:center;justify-content:center;color:#9aa0ae;font-size:14px;">
+           Couldn't load TMDB data — check the /api/tmdb proxy
+         </div>`;
+    }
   }
+}
+
+async function boot(){
+  serverConfigPromise = loadServerConfig(); // fire in parallel — CONFIG.STREAM_BASE_URL updates as soon as it resolves
+  renderContinueRow();
+  await refreshDynamicContent(true);
+  // Keep Trending/New/Upcoming fresh without needing a reopen — TMDB's own
+  // data changes slowly, so once an hour is plenty.
+  setInterval(() => refreshDynamicContent(false), 60 * 60 * 1000);
 }
 boot();
 </script>
