@@ -217,6 +217,9 @@
     transition:transform .18s cubic-bezier(.22,.61,.36,1),box-shadow .18s ease;
   }
   .genre-tile span{position:relative;z-index:2;}
+  .genre-icon{display:block;font-size:22px;margin-bottom:4px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4));}
+  .genre-tile{transition:background-image .5s ease,transform .18s cubic-bezier(.22,.61,.36,1),box-shadow .18s ease;}
+  .genre-tile-imaged::before{opacity:1;}
   .genre-tile::before{content:"";position:absolute;inset:0;opacity:.85;transition:opacity .18s ease;}
   .genre-tile::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg, transparent 30%, rgba(0,0,0,.55));}
   .genre-tile:active{transform:scale(.95);box-shadow:var(--shadow);}
@@ -297,7 +300,25 @@
   .nav-item.active svg{fill:var(--accent);stroke:var(--accent);}
   .nav-item.bounce svg{transform:scale(1.25) translateY(-3px);}
 
-  /* ---------- Theme picker ---------- */
+  /* ---------- Search: recent searches ---------- */
+  .recent-search-head{font-size:13px;font-weight:700;color:var(--text-dim);padding:14px 16px 8px;text-transform:uppercase;letter-spacing:.04em;}
+  .recent-search-chips{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 16px;}
+  .recent-chip{
+    display:flex;align-items:center;gap:6px;padding:8px 8px 8px 14px;border-radius:999px;
+    background:var(--card);border:1px solid var(--line);font-size:13px;font-weight:600;
+    animation:tileIn .35s cubic-bezier(.22,.61,.36,1) both;
+  }
+  .recent-chip-text{color:var(--text);}
+  .recent-chip-x{width:16px;height:16px;padding:3px;box-sizing:content-box;border-radius:50%;stroke:var(--text-dim);fill:none;stroke-width:2.4;background:rgba(255,255,255,.06);}
+  .recent-chip-x:active{background:rgba(229,9,20,.25);stroke:var(--accent);}
+
+  /* ---------- Language step in watch sheet ---------- */
+  .sheet-back{
+    position:absolute;left:20px;top:22px;width:28px;height:28px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.06);
+  }
+  .sheet-back svg{width:14px;height:14px;stroke:var(--text);fill:none;stroke-width:2.2;}
+
   .theme-options{display:flex;gap:12px;margin-bottom:8px;}
   .theme-opt{flex:1;border-radius:14px;overflow:hidden;border:2px solid var(--line);text-align:left;transition:border-color .2s ease,transform .15s ease;}
   .theme-opt:active{transform:scale(.96);}
@@ -747,6 +768,12 @@ async function resolveStream(item, fileId) {
   }
   if (res.status === 404) { const err = new Error("not_found"); throw err; }
   if (res.status === 401) { const err = new Error("auth_failed"); throw err; }
+  if (res.status === 502) {
+    const data = await res.json().catch(() => ({}));
+    const err = new Error("file_corrupted");
+    err.corruptedMessage = data.message;
+    throw err;
+  }
   if (!res.ok) throw new Error("server_error");
   return res.json(); // { id, hash, name }
 }
@@ -868,23 +895,39 @@ function posterCard(item, opts = {}){
   const poster = document.createElement("div");
   poster.className = "poster";
   const img = item.poster_path ? IMG_BASE + "/w342" + item.poster_path : "";
+  const isRemoveMode = opts.mode === "continue";
   poster.innerHTML = `
     <img src="${img}" alt="${item.title || item.name || ""}" loading="lazy">
     <div class="poster-rating"><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.6 7.2.9-5.3 5 1.4 7.1L12 18.3 5.6 21.6 7 14.5 1.7 9.5l7.2-.9z"/></svg>${(item.vote_average || 0).toFixed(1)}</div>
-    <button class="poster-save${isInWatchlist(item) ? " saved" : ""}" aria-label="Save to watchlist">
-      <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+    <button class="poster-save${!isRemoveMode && isInWatchlist(item) ? " saved" : ""}" aria-label="${isRemoveMode ? "Remove from Continue Watching" : "Save to watchlist"}">
+      ${isRemoveMode
+        ? `<svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>`
+        : `<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg>`}
     </button>
     <div class="poster-info">
       <div class="poster-title">${item.title || item.name || "Untitled"}</div>
       <div class="poster-year">${opts.subtitle || ((item.release_date || item.first_air_date || "").slice(0,4) || "—")}</div>
     </div>`;
-  poster.addEventListener("click", () => openDetail(item));
+  poster.addEventListener("click", () => {
+    // Continue-watching entries for a raw language-browse file (no TMDB id)
+    // replay directly instead of trying to open a TMDB detail page.
+    if (item.media_type === "file" && item._fileId) {
+      playRawFile({ file_id: item._fileId, name: item.title });
+    } else {
+      openDetail(item);
+    }
+  });
   const saveBtn = poster.querySelector(".poster-save");
   saveBtn.addEventListener("click", e => {
     e.stopPropagation();
-    toggleWatchlist(item);
-    saveBtn.classList.toggle("saved", isInWatchlist(item));
     tg?.HapticFeedback?.impactOccurred("light");
+    if (isRemoveMode) {
+      removeHistory(item.id);
+      renderContinueRow();
+    } else {
+      toggleWatchlist(item);
+      saveBtn.classList.toggle("saved", isInWatchlist(item));
+    }
   });
   return poster;
 }
@@ -903,10 +946,56 @@ function renderGrid(containerEl, items){
 }
 
 /* ---------- Search ---------- */
+const RECENT_SEARCH_KEY = "goflix_recent_searches";
+const RECENT_SEARCH_MAX = 8;
+function getRecentSearches(){
+  try { return JSON.parse(localStorage.getItem(RECENT_SEARCH_KEY) || "[]"); }
+  catch { return []; }
+}
+function addRecentSearch(q){
+  q = (q || "").trim();
+  if (!q) return;
+  let list = getRecentSearches().filter(x => x.toLowerCase() !== q.toLowerCase());
+  list.unshift(q);
+  localStorage.setItem(RECENT_SEARCH_KEY, JSON.stringify(list.slice(0, RECENT_SEARCH_MAX)));
+}
+function removeRecentSearch(q){
+  localStorage.setItem(RECENT_SEARCH_KEY, JSON.stringify(getRecentSearches().filter(x => x !== q)));
+}
+function renderRecentSearches(){
+  const resultsEl = document.getElementById("searchResults");
+  const recents = getRecentSearches();
+  if (!recents.length) {
+    resultsEl.innerHTML = `<div class="empty-state">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><br>Search for a movie or show</div>`;
+    return;
+  }
+  resultsEl.innerHTML = `
+    <div class="recent-search-head">Recent Searches</div>
+    <div class="recent-search-chips" id="recentSearchChips"></div>`;
+  const chipsWrap = document.getElementById("recentSearchChips");
+  recents.forEach(q => {
+    const chip = document.createElement("div");
+    chip.className = "recent-chip";
+    chip.innerHTML = `<span class="recent-chip-text">${q}</span>
+      <svg class="recent-chip-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
+    chip.querySelector(".recent-chip-text").addEventListener("click", () => {
+      searchInput.value = q;
+      searchInput.dispatchEvent(new Event("input"));
+    });
+    chip.querySelector(".recent-chip-x").addEventListener("click", e => {
+      e.stopPropagation();
+      removeRecentSearch(q);
+      renderRecentSearches();
+    });
+    chipsWrap.appendChild(chip);
+  });
+}
 const searchInput = document.getElementById("searchInput");
 document.getElementById("topSearchBtn").addEventListener("click", () => {
   tg?.HapticFeedback?.impactOccurred("light");
   switchView("search");
+  if (!searchInput.value.trim()) renderRecentSearches();
   setTimeout(() => searchInput.focus(), 100);
 });
 searchInput.addEventListener("input", () => {
@@ -914,8 +1003,7 @@ searchInput.addEventListener("input", () => {
   const q = searchInput.value.trim();
   const resultsEl = document.getElementById("searchResults");
   if (!q) {
-    resultsEl.innerHTML = `<div class="empty-state">
-      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><br>Search for a movie or show</div>`;
+    renderRecentSearches();
     return;
   }
   searchDebounce = setTimeout(async () => {
@@ -928,6 +1016,7 @@ searchInput.addEventListener("input", () => {
       resultsEl.innerHTML = "";
       resultsEl.appendChild(grid);
       renderGrid(grid, items);
+      addRecentSearch(q); // remember it whether or not it found results
     } catch (e) {
       resultsEl.innerHTML = `<div class="empty-state">Search failed. Try again.</div>`;
     }
@@ -954,6 +1043,9 @@ function showGenreGrid(){
   document.getElementById("langResults").classList.add("hidden");
   document.getElementById("browseHeader").innerHTML = `<div class="view-title">Browse</div>`;
 }
+const GENRE_ICONS = {
+  28: "💥", 35: "😂", 27: "👻", 10749: "❤️", 878: "🚀", 53: "🔪"
+};
 function renderGenreGrid(){
   const grid = document.getElementById("genreGrid");
   grid.innerHTML = "";
@@ -961,10 +1053,24 @@ function renderGenreGrid(){
     const tile = document.createElement("div");
     tile.className = "genre-tile";
     tile.style.setProperty("--d", `${i * 45}ms`);
-    tile.innerHTML = `<span>${g.name}</span>`;
     tile.style.background = g.color;
+    tile.innerHTML = `<span class="genre-icon">${GENRE_ICONS[g.id] || "🎬"}</span><span>${g.name}</span>`;
     tile.addEventListener("click", () => openGenre(g));
     grid.appendChild(tile);
+    // Fill in a real backdrop image behind the tile, non-blocking — falls
+    // back to the flat colour above if the request is slow or fails.
+    tmdb("/discover/movie", { with_genres: g.id, sort_by: "popularity.desc" }).then(data => {
+      const pick = (data.results || []).find(r => r.backdrop_path);
+      if (!pick) return;
+      const img = new Image();
+      img.onload = () => {
+        tile.style.backgroundImage = `linear-gradient(180deg, rgba(0,0,0,.15) 0%, rgba(0,0,0,.7) 100%), url('${img.src}')`;
+        tile.style.backgroundSize = "cover";
+        tile.style.backgroundPosition = "center";
+        tile.classList.add("genre-tile-imaged");
+      };
+      img.src = IMG_BASE + "/w500" + pick.backdrop_path;
+    }).catch(() => {});
   });
 }
 async function openGenre(genre){
@@ -1019,6 +1125,9 @@ function renderLangGrid(){
     grid.appendChild(tile);
   });
 }
+function stripExt(name){
+  return (name || "").replace(/\.(mkv|mp4|avi|mov|webm)$/i, "").trim();
+}
 function fileCard(file, i){
   const card = document.createElement("button");
   card.className = "file-card";
@@ -1036,11 +1145,16 @@ function fileCard(file, i){
 async function playRawFile(file){
   tg?.HapticFeedback?.impactOccurred("light");
   try {
-    const resolved = await resolveStream({}, file.file_id);
+    // Pass the file's own (cleaned) name as a fallback "title" — if this
+    // exact file_id turns out to be stale/corrupted on Telegram's end, the
+    // backend can still find a working copy of the same upload instead of
+    // just failing outright.
+    const resolved = await resolveStream({ title: stripExt(file.name) }, file.file_id);
     const { webPlayerUrl } = buildStreamUrls(resolved);
     recordHistory({
       id: `file:${file.file_id}`, media_type: "file",
-      title: file.name, poster_path: null, vote_average: 0
+      title: file.name, poster_path: null, vote_average: 0,
+      _fileId: file.file_id
     });
     if (tg) tg.openLink(webPlayerUrl); else window.open(webPlayerUrl, "_blank");
   } catch (err) {
@@ -1154,7 +1268,7 @@ function toggleWatchlist(item){
 
 /* ---------- Continue Watching / history (stored on-device) ---------- */
 const HISTORY_KEY = "goflix_history";
-const HISTORY_MAX = 20;
+const HISTORY_MAX = 5; // "Continue Watching" always shows just the last 5
 function getHistory(){
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); }
   catch { return []; }
@@ -1168,9 +1282,14 @@ function recordHistory(item){
     poster_path: item.poster_path, vote_average: item.vote_average,
     release_date: item.release_date, first_air_date: item.first_air_date,
     _watchedAt: Date.now(),
-    _episodeLabel: item._episodeLabel || null
+    _episodeLabel: item._episodeLabel || null,
+    _fileId: item._fileId || null
   });
   localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
+}
+function removeHistory(id){
+  const list = getHistory().filter(w => w.id !== id);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
 }
 function timeAgo(ts){
   if (!ts) return "";
@@ -1186,36 +1305,52 @@ function timeAgo(ts){
 }
 function renderContinueRow(){
   const section = document.getElementById("continueSection");
-  const history = getHistory();
+  const history = getHistory().slice(0, HISTORY_MAX);
   if (!history.length) { section.classList.add("hidden"); return; }
   section.classList.remove("hidden");
   const row = document.getElementById("continueRow");
   row.innerHTML = "";
   history.forEach(item => {
     row.appendChild(posterCard(item, {
-      subtitle: (item._episodeLabel ? "" : "") + timeAgo(item._watchedAt)
+      subtitle: timeAgo(item._watchedAt),
+      mode: "continue"
     }));
   });
 }
 
-/* ---------- Watch sheet (Quality -> Web / VLC / MX, or Quality -> Download) ---------- */
+/* ---------- Watch sheet (Language -> Quality -> Web / VLC / MX, or Download) ---------- */
 const sheet = document.getElementById("sheet");
 const sheetBackdrop = document.getElementById("sheetBackdrop");
 const qualityStep = document.getElementById("qualityStep");
+const sheetTitleEl = document.getElementById("sheetTitle");
 let pendingAction = "watch"; // "watch" opens the web player, "download" downloads
+let sheetFiles = [];         // full file list for the title currently open in the sheet
+
+function langLabel(code){
+  const found = LANGUAGES.find(l => l.code === code);
+  return found ? found.label : code.toUpperCase();
+}
 
 async function openWatchSheet(item, action = "watch"){
   activeItem = item;
   pendingAction = action;
   if (serverConfigPromise) await serverConfigPromise;
-  document.getElementById("sheetTitle").textContent = "Choose quality";
+  sheetTitleEl.textContent = "Choose quality";
   qualityStep.innerHTML = '<div class="play-opt skeleton" style="height:58px"></div>'.repeat(3);
   sheet.classList.add("open"); sheetBackdrop.classList.add("open");
   tg?.HapticFeedback?.impactOccurred("light");
 
   try {
     const { files } = await fetchQualities(item);
-    renderQualityOptions(files || []);
+    sheetFiles = files || [];
+    // If this title has files tagged with more than one language (dual-audio
+    // uploads etc.), let the user pick a language first, then quality.
+    const langsPresent = [...new Set(sheetFiles.flatMap(f => f.languages || []))];
+    if (langsPresent.length > 1) {
+      renderLanguageStep(langsPresent);
+    } else {
+      renderQualityOptions(sheetFiles);
+    }
   } catch (err) {
     tg?.HapticFeedback?.notificationOccurred("error");
     alert(errorMessageFor(err));
@@ -1223,15 +1358,55 @@ async function openWatchSheet(item, action = "watch"){
   }
 }
 
-function renderQualityOptions(files){
+function renderLanguageStep(langCodes){
+  sheetTitleEl.textContent = "Choose language";
+  qualityStep.innerHTML = "";
+  langCodes.forEach((code, i) => {
+    const count = sheetFiles.filter(f => (f.languages || []).includes(code)).length;
+    const opt = document.createElement("button");
+    opt.className = "play-opt quality";
+    opt.style.setProperty("--d", `${i * 40}ms`);
+    opt.innerHTML = `
+      <div class="oicon">${LANG_FLAGS[code] || "🌐"}</div>
+      <div class="otext"><div class="otitle">${langLabel(code)}</div><div class="osub">${count} file${count === 1 ? "" : "s"}</div></div>`;
+    opt.addEventListener("click", () => {
+      tg?.HapticFeedback?.impactOccurred("light");
+      renderQualityOptions(sheetFiles.filter(f => (f.languages || []).includes(code)), { showBack: true, langCodes });
+    });
+    qualityStep.appendChild(opt);
+  });
+  const anyOpt = document.createElement("button");
+  anyOpt.className = "play-opt quality";
+  anyOpt.style.setProperty("--d", `${langCodes.length * 40}ms`);
+  anyOpt.innerHTML = `
+    <div class="oicon">🌐</div>
+    <div class="otext"><div class="otitle">Any language</div><div class="osub">Show all ${sheetFiles.length} files</div></div>`;
+  anyOpt.addEventListener("click", () => {
+    tg?.HapticFeedback?.impactOccurred("light");
+    renderQualityOptions(sheetFiles, { showBack: true, langCodes });
+  });
+  qualityStep.appendChild(anyOpt);
+}
+
+function renderQualityOptions(files, opts = {}){
+  sheetTitleEl.innerHTML = "";
+  if (opts.showBack) {
+    const back = document.createElement("button");
+    back.className = "sheet-back";
+    back.innerHTML = `<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>`;
+    back.addEventListener("click", () => renderLanguageStep(opts.langCodes));
+    sheet.appendChild(back);
+  }
+  sheetTitleEl.textContent = "Choose quality";
   if (!files.length) {
     qualityStep.innerHTML = `<div class="empty-state" style="padding:20px 4px">No files found for this title yet.</div>`;
     return;
   }
   qualityStep.innerHTML = "";
-  files.forEach(f => {
+  files.forEach((f, i) => {
     const opt = document.createElement("button");
     opt.className = "play-opt quality";
+    opt.style.setProperty("--d", `${i * 40}ms`);
     opt.innerHTML = `
       <div class="oicon">${f.quality}</div>
       <div class="otext"><div class="otitle">${f.quality}</div><div class="osub">${[f.size, f.name].filter(Boolean).join(" · ")}</div></div>`;
@@ -1258,6 +1433,7 @@ async function selectQuality(file){
 
 function closeSheet(){
   sheet.classList.remove("open"); sheetBackdrop.classList.remove("open");
+  sheet.querySelectorAll(".sheet-back").forEach(b => b.remove());
   pendingAction = "watch";
 }
 sheetBackdrop.addEventListener("click", closeSheet);
@@ -1275,6 +1451,7 @@ function errorMessageFor(err){
   if (err.message === "premium_required") return err.premiumMessage || "This is a Premium-only feature. Use /plan in the bot to unlock it.";
   if (err.message === "not_found") return "This title isn't in the GOFLIX catalog yet — it may not have been uploaded.";
   if (err.message === "auth_failed") return "Couldn't verify your Telegram session. Try reopening the Mini App from the bot.";
+  if (err.message === "file_corrupted") return err.corruptedMessage || "This file looks corrupted or was removed. Try another quality.";
   return "Something went wrong preparing this stream. Try again in a moment.";
 }
 
