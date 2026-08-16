@@ -58,6 +58,15 @@ async def goflix_app(request: web.Request):
     return web.FileResponse(os.path.join(WEBAPP_DIR, "goflix_home.html"))
 
 
+# ---------------- CONFIG: tell the frontend the real, configured stream URL ----------------
+# URL comes from info.py's environment variable — this is the source of truth
+# for wherever streaming/watch actually lives, set by you on Koyeb. The
+# frontend should never hardcode or guess this.
+@routes.get("/api/config", allow_head=True)
+async def app_config(request: web.Request):
+    return web.json_response({"stream_base_url": URL.rstrip("/")})
+
+
 # ---------------- TMDB PROXY (keeps TMDB_API_KEY off the client) ----------------
 @routes.get(r"/api/tmdb/{endpoint:\S+}", allow_head=True)
 async def tmdb_proxy(request: web.Request):
