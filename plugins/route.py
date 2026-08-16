@@ -181,6 +181,30 @@ def format_size(num_bytes):
         size /= 1024
     return f"{size:.2f}TB"
 
+# ---------------- LANGUAGE TAGS (for language browsing) ----------------
+# "aliases" are the words that actually show up in your uploaded filenames
+# (e.g. "...HIN ENG..." or "...Kannada..."). Add/edit freely — the frontend
+# pulls this list live from GET /api/languages, nothing is hardcoded there.
+LANGUAGES = [
+    {"code": "eng", "label": "English",   "aliases": ["english", "eng"]},
+    {"code": "hin", "label": "Hindi",     "aliases": ["hindi", "hin"]},
+    {"code": "tam", "label": "Tamil",     "aliases": ["tamil", "tam"]},
+    {"code": "tel", "label": "Telugu",    "aliases": ["telugu", "tel"]},
+    {"code": "kan", "label": "Kannada",   "aliases": ["kannada", "kan"]},
+    {"code": "mal", "label": "Malayalam", "aliases": ["malayalam", "mal"]},
+    {"code": "guj", "label": "Gujarati",  "aliases": ["gujarati", "guj"]},
+    {"code": "mar", "label": "Marathi",   "aliases": ["marathi", "mar"]},
+    {"code": "ben", "label": "Bengali",   "aliases": ["bengali", "bangla", "ben"]},
+    {"code": "pun", "label": "Punjabi",   "aliases": ["punjabi", "pun"]},
+    {"code": "jap", "label": "Japanese",  "aliases": ["japanese", "jap", "jpn"]},
+    {"code": "kor", "label": "Korean",    "aliases": ["korean", "kor"]},
+    {"code": "chi", "label": "Chinese",   "aliases": ["chinese", "mandarin", "chi"]},
+    {"code": "spa", "label": "Spanish",   "aliases": ["spanish", "esp", "spa"]},
+    {"code": "fre", "label": "French",    "aliases": ["french", "fra", "fre"]},
+]
+_LANGUAGES_BY_CODE = {l["code"]: l for l in LANGUAGES}
+
+
 def normalize_query(title):
     """Match the normalization auto_filter applies to search text, so a
     TMDB title with punctuation Telegram filenames don't have (colons,
@@ -255,6 +279,80 @@ async def list_qualities(request: web.Request):
     results.sort(key=lambda r: order.get(r["quality"], 9))
 
     return web.json_response({"files": results})
+
+
+# ---------------- LANGUAGES: list configured languages for the picker ----------------
+@routes.get("/api/languages", allow_head=True)
+async def list_languages(request: web.Request):
+    return web.json_response(
+        {"languages": [{"code": l["code"], "label": l["label"]} for l in LANGUAGES]}
+    )
+
+
+async def _search_language_files(user_id, aliases, limit):
+    """Search every alias for a language and merge the hits, de-duplicated by
+    file_id. get_search_results does a fuzzy/text match, so we re-check each
+    hit's actual filename for a whole-word alias match (not just a substring
+    match) to avoid e.g. "kan" matching inside an unrelated word."""
+    seen = {}
+    for alias in aliases:
+        try:
+            batch, _, _ = await get_search_results(
+                user_id, alias, max_results=max(limit * 3, 30), need_count=False
+            )
+        except Exception as e:
+            logging.warning(f"language search failed for alias={alias!r}: {e}")
+            continue
+        pattern = re.compile(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", re.IGNORECASE)
+        for f in batch:
+            name = f.get("file_name", "") or ""
+            if not pattern.search(name):
+                continue
+            fid = f.get("file_id")
+            if fid and fid not in seen:
+                seen[fid] = f
+        if len(seen) >= limit:
+            break
+    return list(seen.values())[:limit]
+
+
+# ---------------- LANGUAGE: browse files by language tag ----------------
+@routes.post("/api/language")
+async def browse_language(request: web.Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="expected JSON body")
+
+    code = (body.get("code") or "").strip().lower()
+    lang = _LANGUAGES_BY_CODE.get(code)
+    if not lang:
+        raise web.HTTPBadRequest(text="unknown language code")
+
+    user = validate_init_data(body.get("init_data", ""))
+    if not user:
+        raise web.HTTPUnauthorized(text="invalid or missing Telegram initData")
+    user_id = user.get("id")
+
+    # Browsing/listing doesn't need Premium — same as browsing TMDB genres.
+    # The Premium gate stays where it already is: /api/resolve, when the
+    # user actually taps to stream or download one of these files.
+    try:
+        limit = min(int(body.get("limit") or 30), 60)
+    except (TypeError, ValueError):
+        limit = 30
+
+    files = await _search_language_files(user_id, lang["aliases"], limit)
+    results = [
+        {
+            "file_id": f["file_id"],
+            "name": f.get("file_name", ""),
+            "quality": parse_quality(f.get("file_size")),
+            "size": format_size(f.get("file_size")),
+        }
+        for f in files
+    ]
+    return web.json_response({"code": code, "label": lang["label"], "files": results})
 
 
 # ---------------- RESOLVE: TMDB title -> live stream id/hash ----------------
