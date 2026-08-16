@@ -237,6 +237,23 @@ def _build_queries(title, year, season, episode):
     return queries
 
 
+_LANGUAGE_PATTERNS = [
+    (l["code"], [re.compile(rf"(?<![a-z0-9]){re.escape(a)}(?![a-z0-9])", re.IGNORECASE) for a in l["aliases"]])
+    for l in LANGUAGES
+]
+
+def _detect_languages(filename):
+    """Best-effort: which configured languages are tagged in this filename
+    (e.g. "...HIN ENG..." -> ["hin","eng"]). A file can match more than one
+    (dual-audio releases)."""
+    name = filename or ""
+    found = []
+    for code, patterns in _LANGUAGE_PATTERNS:
+        if any(p.search(name) for p in patterns):
+            found.append(code)
+    return found
+
+
 # ---------------- QUALITIES: list every matching file for a title ----------------
 @routes.post("/api/qualities")
 async def list_qualities(request: web.Request):
@@ -271,6 +288,7 @@ async def list_qualities(request: web.Request):
             "name": f.get("file_name", ""),
             "quality": parse_quality(f.get("file_size")),
             "size": format_size(f.get("file_size")),
+            "languages": _detect_languages(f.get("file_name", "")),
         }
         for f in files
     ]
@@ -279,6 +297,7 @@ async def list_qualities(request: web.Request):
     results.sort(key=lambda r: order.get(r["quality"], 9))
 
     return web.json_response({"files": results})
+
 
 
 # ---------------- LANGUAGES: list configured languages for the picker ----------------
@@ -413,9 +432,37 @@ async def resolve_stream(request: web.Request):
             logging.warning(f"send_cached_media failed for a candidate, trying next: {e}")
             continue
 
+    # If the exact file the user tapped was bad (stale/corrupted file_id —
+    # this is what "MEDIA_EMPTY" means) and we haven't already tried a
+    # title search, fall back to one now so a single bad copy doesn't kill
+    # the whole request when a working copy of the same title exists.
+    if log_msg is None and title:
+        already_tried = {c.get("file_id") for c in candidates}
+        queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
+        fallback_candidates = []
+        for q in queries:
+            found, _, _ = await get_search_results(user_id, q, max_results=8, need_count=False)
+            fallback_candidates = [f for f in found if f.get("file_id") not in already_tried]
+            if fallback_candidates:
+                break
+        for candidate in fallback_candidates:
+            try:
+                log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=candidate["file_id"])
+                break
+            except Exception as e:
+                last_error = e
+                logging.warning(f"send_cached_media failed for a fallback candidate, trying next: {e}")
+                continue
+
     if log_msg is None:
         logging.exception(last_error)
-        raise web.HTTPInternalServerError(text="failed to prepare stream")
+        # Every candidate we tried was rejected by Telegram (MEDIA_EMPTY etc.)
+        # — that's "found it, but it's corrupted/deleted", not a server crash,
+        # so tell the frontend clearly instead of a bare 500.
+        return web.json_response(
+            {"message": "This file looks corrupted or was removed from Telegram. Try another quality, or contact the admin to re-upload it."},
+            status=502,
+        )
 
     return web.json_response(
         {
