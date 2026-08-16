@@ -18,6 +18,40 @@
     --accent:#e50914;
     --gold:#ffb020;
     --radius:16px;
+    --skel-hi:#1e2130;
+    --shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+
+  /* ---------- Theme: Light ---------- */
+  html[data-theme="light"]{
+    --bg:#f5f6f8;
+    --bg-elev:#ffffff;
+    --card:#ffffff;
+    --line:rgba(10,12,20,.1);
+    --text:#12131a;
+    --text-dim:#6b7080;
+    --go:#12131a;
+    --flix:#e50914;
+    --accent:#e50914;
+    --gold:#c98400;
+    --skel-hi:#eceef2;
+    --shadow:0 10px 24px rgba(20,20,30,.08);
+  }
+
+  /* ---------- Theme: GOFLIX (signature red/black, max contrast) ---------- */
+  html[data-theme="goflix"]{
+    --bg:#000000;
+    --bg-elev:#0c0000;
+    --card:#160303;
+    --line:rgba(229,9,20,.28);
+    --text:#ffffff;
+    --text-dim:#d8a3a6;
+    --go:#ffffff;
+    --flix:#ff0a16;
+    --accent:#ff0a16;
+    --gold:#ffb020;
+    --skel-hi:#2a0606;
+    --shadow:0 10px 30px rgba(255,10,22,.18);
   }
 
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
@@ -26,6 +60,7 @@
     background:var(--bg);color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     overflow-x:hidden;padding-bottom:78px;
+    transition:background .35s ease,color .35s ease;
   }
   img{display:block;}
   button{font-family:inherit;border:none;cursor:pointer;background:none;color:inherit;}
@@ -127,6 +162,22 @@
   .poster-info{padding:8px 2px 0;}
   .poster-title{font-size:13px;font-weight:700;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .poster-year{font-size:12px;color:var(--text-dim);margin-top:2px;}
+  .poster-save{
+    position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:50%;
+    background:rgba(0,0,0,.55);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;
+    transition:transform .18s ease,background .18s ease;
+  }
+  .poster-save svg{width:13px;height:13px;stroke:#fff;fill:none;stroke-width:2;transition:fill .18s ease;}
+  .poster-save.saved{background:rgba(229,9,20,.85);}
+  .poster-save.saved svg{fill:#fff;}
+  .poster-save:active{transform:scale(.85);}
+  .poster-progress{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(255,255,255,.2);}
+  .poster-progress-fill{height:100%;background:var(--accent);}
+  .poster-remove{
+    position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:50%;
+    background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;
+  }
+  .poster-remove svg{width:12px;height:12px;stroke:#fff;fill:none;stroke-width:2.4;}
 
   /* poster grid (search / genre / more results) */
   .poster-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:0 16px 16px;}
@@ -146,15 +197,58 @@
   .search-bar input{flex:1;background:none;border:none;color:var(--text);font-size:15px;outline:none;}
   .search-bar input::placeholder{color:var(--text-dim);}
 
-  /* ---------- Browse (genres) ---------- */
+  /* ---------- Browse (genres / languages) ---------- */
+  .browse-subtabs{display:flex;gap:8px;padding:0 16px 14px;}
+  .browse-subtab{
+    flex:1;padding:10px;border-radius:12px;background:var(--card);border:1px solid var(--line);
+    font-size:13.5px;font-weight:700;color:var(--text-dim);text-align:center;transition:transform .15s ease;
+  }
+  .browse-subtab.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .browse-subtab:active{transform:scale(.96);}
+
+  @keyframes tileIn{from{opacity:0;transform:translateY(14px) scale(.96);}to{opacity:1;transform:translateY(0) scale(1);}}
+
   .genre-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:8px 16px 16px;}
   .genre-tile{
     position:relative;height:100px;border-radius:14px;overflow:hidden;
     display:flex;align-items:flex-end;padding:14px;font-size:17px;font-weight:800;
+    animation:tileIn .45s cubic-bezier(.22,.61,.36,1) both;
+    animation-delay:var(--d, 0ms);
+    transition:transform .18s cubic-bezier(.22,.61,.36,1),box-shadow .18s ease;
   }
   .genre-tile span{position:relative;z-index:2;}
-  .genre-tile::before{content:"";position:absolute;inset:0;opacity:.85;}
+  .genre-tile::before{content:"";position:absolute;inset:0;opacity:.85;transition:opacity .18s ease;}
   .genre-tile::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg, transparent 30%, rgba(0,0,0,.55));}
+  .genre-tile:active{transform:scale(.95);box-shadow:var(--shadow);}
+  .genre-tile:active::before{opacity:1;}
+
+  .lang-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:8px 16px 16px;}
+  .lang-tile{
+    position:relative;height:88px;border-radius:14px;overflow:hidden;
+    display:flex;align-items:center;gap:10px;padding:0 16px;
+    background:var(--card);border:1px solid var(--line);
+    animation:tileIn .45s cubic-bezier(.22,.61,.36,1) both;
+    animation-delay:var(--d, 0ms);
+    transition:transform .18s cubic-bezier(.22,.61,.36,1),border-color .18s ease,box-shadow .18s ease;
+  }
+  .lang-tile:active{transform:scale(.95);border-color:var(--accent);box-shadow:var(--shadow);}
+  .lang-flag{font-size:26px;flex:0 0 auto;filter:drop-shadow(0 2px 4px rgba(0,0,0,.3));}
+  .lang-name{font-size:15px;font-weight:800;}
+  .lang-sub{font-size:11.5px;color:var(--text-dim);margin-top:2px;}
+
+  .file-card{
+    display:flex;align-items:center;gap:12px;width:100%;padding:12px;border-radius:14px;
+    background:var(--card);border:1px solid var(--line);margin-bottom:10px;text-align:left;
+    animation:tileIn .4s cubic-bezier(.22,.61,.36,1) both;animation-delay:var(--d, 0ms);
+  }
+  .file-card:active{transform:scale(.98);}
+  .file-icon{
+    width:44px;height:44px;border-radius:10px;background:rgba(229,9,20,.14);color:var(--accent);
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-weight:800;font-size:11px;
+  }
+  .file-text{flex:1;min-width:0;}
+  .file-name{font-size:13.5px;font-weight:700;line-height:1.3;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+  .file-meta{font-size:11.5px;color:var(--text-dim);margin-top:3px;}
 
   /* ---------- More menu ---------- */
   .menu-list{padding:8px 16px;}
@@ -193,13 +287,30 @@
     position:fixed;left:0;right:0;bottom:0;z-index:50;
     display:flex;justify-content:space-around;align-items:center;
     padding:10px 6px calc(10px + env(safe-area-inset-bottom));
-    background:rgba(12,13,20,.92);backdrop-filter:blur(14px);border-top:1px solid var(--line);
+    background:var(--bg-elev);opacity:.97;backdrop-filter:blur(14px);border-top:1px solid var(--line);
+    transition:background .35s ease;
   }
   .nav-item{display:flex;flex-direction:column;align-items:center;gap:4px;color:var(--text-dim);flex:1;}
-  .nav-item svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;}
+  .nav-item svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;transition:transform .3s cubic-bezier(.34,1.56,.64,1);}
   .nav-item span{font-size:11px;font-weight:600;}
-  .nav-item.active{color:var(--go);}
-  .nav-item.active svg{fill:var(--go);stroke:var(--go);}
+  .nav-item.active{color:var(--accent);}
+  .nav-item.active svg{fill:var(--accent);stroke:var(--accent);}
+  .nav-item.bounce svg{transform:scale(1.25) translateY(-3px);}
+
+  /* ---------- Theme picker ---------- */
+  .theme-options{display:flex;gap:12px;margin-bottom:8px;}
+  .theme-opt{flex:1;border-radius:14px;overflow:hidden;border:2px solid var(--line);text-align:left;transition:border-color .2s ease,transform .15s ease;}
+  .theme-opt:active{transform:scale(.96);}
+  .theme-opt.active{border-color:var(--accent);}
+  .theme-swatch{height:54px;display:flex;align-items:center;justify-content:center;gap:6px;}
+  .theme-swatch .sw{width:14px;height:14px;border-radius:50%;}
+  .theme-opt-label{padding:8px 10px;font-size:12.5px;font-weight:700;background:var(--card);}
+  .theme-swatch.sw-dark{background:#07080d;}
+  .theme-swatch.sw-dark .sw{background:#e50914;}
+  .theme-swatch.sw-light{background:#f5f6f8;}
+  .theme-swatch.sw-light .sw{background:#e50914;border:1px solid #ddd;}
+  .theme-swatch.sw-goflix{background:#000;}
+  .theme-swatch.sw-goflix .sw{background:#ff0a16;}
 
   /* ---------- Watch sheet ---------- */
   .sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:90;opacity:0;pointer-events:none;transition:opacity .25s;}
@@ -306,6 +417,11 @@
     </div>
     <div class="dots" id="heroDots"></div>
 
+    <div class="section hidden" id="continueSection">
+      <div class="section-head"><div class="section-title">Continue Watching</div></div>
+      <div class="row" id="continueRow"></div>
+    </div>
+
     <div class="section">
       <div class="section-head">
         <svg class="flame" viewBox="0 0 24 24"><path d="M12 2c1 4-3 5-3 9a3 3 0 0 0 6 0c1 1 1 3 1 3a5 5 0 0 1-10 0c0-6 6-7 6-12z"/></svg>
@@ -345,8 +461,14 @@
   <!-- ============ BROWSE ============ -->
   <div class="view" id="view-browse">
     <div class="view-header" id="browseHeader"><div class="view-title">Browse</div></div>
+    <div class="browse-subtabs" id="browseSubtabs">
+      <button class="browse-subtab active" data-subtab="genres">Genres</button>
+      <button class="browse-subtab" data-subtab="languages">Languages</button>
+    </div>
     <div class="genre-grid" id="genreGrid"></div>
+    <div class="lang-grid hidden" id="langGrid"></div>
     <div class="poster-grid hidden" id="genreResults"></div>
+    <div class="hidden" id="langResults" style="padding:4px 16px 16px;"></div>
   </div>
 
   <!-- ============ MORE ============ -->
@@ -486,6 +608,28 @@
     <button class="sheet-cancel" id="profileClose">Close</button>
   </div>
 
+  <!-- Settings sheet -->
+  <div class="sheet-backdrop" id="settingsBackdrop"></div>
+  <div class="sheet" id="settingsSheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Appearance</div>
+    <div class="theme-options" id="themeOptions">
+      <button class="theme-opt" data-theme="dark">
+        <div class="theme-swatch sw-dark"><span class="sw"></span></div>
+        <div class="theme-opt-label">Dark</div>
+      </button>
+      <button class="theme-opt" data-theme="light">
+        <div class="theme-swatch sw-light"><span class="sw"></span></div>
+        <div class="theme-opt-label">Light</div>
+      </button>
+      <button class="theme-opt" data-theme="goflix">
+        <div class="theme-swatch sw-goflix"><span class="sw"></span></div>
+        <div class="theme-opt-label">GOFLIX</div>
+      </button>
+    </div>
+    <button class="sheet-cancel" id="settingsClose">Done</button>
+  </div>
+
 <script>
 const CONFIG = {
   TMDB_PROXY_BASE: "/api/tmdb",
@@ -493,8 +637,16 @@ const CONFIG = {
   ME_ENDPOINT: "/api/me",
   QUALITIES_ENDPOINT: "/api/qualities",
   CONFIG_ENDPOINT: "/api/config",
+  LANGUAGES_ENDPOINT: "/api/languages",
+  LANGUAGE_ENDPOINT: "/api/language",
   // Filled in on boot from the server's own info.py URL value — see loadServerConfig().
   STREAM_BASE_URL: window.location.origin
+};
+
+const LANG_FLAGS = {
+  eng: "🇬🇧", hin: "🇮🇳", tam: "🇮🇳", tel: "🇮🇳", kan: "🇮🇳", mal: "🇮🇳",
+  guj: "🇮🇳", mar: "🇮🇳", ben: "🇮🇳", pun: "🇮🇳",
+  jap: "🇯🇵", kor: "🇰🇷", chi: "🇨🇳", spa: "🇪🇸", fre: "🇫🇷"
 };
 
 let serverConfigPromise = null;
@@ -511,6 +663,21 @@ async function loadServerConfig() {
 
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
+
+/* ---------- Theme (Dark / Light / GOFLIX) ---------- */
+function applyTheme(name){
+  if (name === "dark") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", name);
+  localStorage.setItem("goflix_theme", name);
+  document.querySelectorAll(".theme-opt").forEach(b => b.classList.toggle("active", b.dataset.theme === name));
+}
+applyTheme(localStorage.getItem("goflix_theme") || "dark");
+document.querySelectorAll(".theme-opt").forEach(btn => {
+  btn.addEventListener("click", () => {
+    tg?.HapticFeedback?.impactOccurred("light");
+    applyTheme(btn.dataset.theme);
+  });
+});
 
 const IMG_BASE = "https://image.tmdb.org/t/p";
 const GENRES = [
@@ -603,11 +770,15 @@ function switchView(name, opts = {}) {
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   window.scrollTo(0, 0);
   if (name === "browse" && !opts.keepGenreResults) showGenreGrid();
+  if (name === "home") renderContinueRow();
 }
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
     tg?.HapticFeedback?.impactOccurred("light");
     switchView(btn.dataset.tab);
+    // little bounce animation on the tapped tab icon
+    btn.classList.add("bounce");
+    setTimeout(() => btn.classList.remove("bounce"), 300);
   });
 });
 
@@ -693,24 +864,34 @@ document.getElementById("heroNext").addEventListener("click", () => goToHero(her
 })();
 
 /* ---------- Poster rows / grids ---------- */
-function posterCard(item){
+function posterCard(item, opts = {}){
   const poster = document.createElement("div");
   poster.className = "poster";
   const img = item.poster_path ? IMG_BASE + "/w342" + item.poster_path : "";
   poster.innerHTML = `
     <img src="${img}" alt="${item.title || item.name || ""}" loading="lazy">
     <div class="poster-rating"><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.6 7.2.9-5.3 5 1.4 7.1L12 18.3 5.6 21.6 7 14.5 1.7 9.5l7.2-.9z"/></svg>${(item.vote_average || 0).toFixed(1)}</div>
+    <button class="poster-save${isInWatchlist(item) ? " saved" : ""}" aria-label="Save to watchlist">
+      <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+    </button>
     <div class="poster-info">
       <div class="poster-title">${item.title || item.name || "Untitled"}</div>
-      <div class="poster-year">${(item.release_date || item.first_air_date || "").slice(0,4) || "—"}</div>
+      <div class="poster-year">${opts.subtitle || ((item.release_date || item.first_air_date || "").slice(0,4) || "—")}</div>
     </div>`;
   poster.addEventListener("click", () => openDetail(item));
+  const saveBtn = poster.querySelector(".poster-save");
+  saveBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    toggleWatchlist(item);
+    saveBtn.classList.toggle("saved", isInWatchlist(item));
+    tg?.HapticFeedback?.impactOccurred("light");
+  });
   return poster;
 }
-function renderRow(containerId, items){
+function renderRow(containerId, items, opts = {}){
   const row = document.getElementById(containerId);
   row.innerHTML = "";
-  items.forEach(item => row.appendChild(posterCard(item)));
+  items.forEach(item => row.appendChild(posterCard(item, opts)));
 }
 function renderGrid(containerEl, items){
   containerEl.innerHTML = "";
@@ -753,20 +934,33 @@ searchInput.addEventListener("input", () => {
   }, 400);
 });
 
+/* ---------- Browse: subtabs (Genres / Languages) ---------- */
+let browseMode = "genres"; // "genres" | "languages"
+document.querySelectorAll(".browse-subtab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    tg?.HapticFeedback?.impactOccurred("light");
+    browseMode = btn.dataset.subtab;
+    document.querySelectorAll(".browse-subtab").forEach(b => b.classList.toggle("active", b === btn));
+    if (browseMode === "genres") showGenreGrid(); else showLangGrid();
+  });
+});
+
 /* ---------- Browse (genres) ---------- */
 function showGenreGrid(){
+  document.getElementById("browseSubtabs").classList.remove("hidden");
   document.getElementById("genreGrid").classList.remove("hidden");
+  document.getElementById("langGrid").classList.add("hidden");
   document.getElementById("genreResults").classList.add("hidden");
+  document.getElementById("langResults").classList.add("hidden");
   document.getElementById("browseHeader").innerHTML = `<div class="view-title">Browse</div>`;
 }
 function renderGenreGrid(){
   const grid = document.getElementById("genreGrid");
   grid.innerHTML = "";
-  GENRES.forEach(g => {
+  GENRES.forEach((g, i) => {
     const tile = document.createElement("div");
     tile.className = "genre-tile";
-    tile.style.setProperty("background", g.color);
-    tile.querySelector; // no-op
+    tile.style.setProperty("--d", `${i * 45}ms`);
     tile.innerHTML = `<span>${g.name}</span>`;
     tile.style.background = g.color;
     tile.addEventListener("click", () => openGenre(g));
@@ -774,6 +968,7 @@ function renderGenreGrid(){
   });
 }
 async function openGenre(genre){
+  document.getElementById("browseSubtabs").classList.add("hidden");
   document.getElementById("genreGrid").classList.add("hidden");
   const resultsEl = document.getElementById("genreResults");
   resultsEl.classList.remove("hidden");
@@ -791,6 +986,100 @@ async function openGenre(genre){
 }
 renderGenreGrid();
 
+/* ---------- Browse (languages) ---------- */
+let LANGUAGES = [];
+async function fetchLanguages(){
+  try {
+    const res = await fetch(CONFIG.LANGUAGES_ENDPOINT);
+    if (!res.ok) return;
+    const data = await res.json();
+    LANGUAGES = data.languages || [];
+    renderLangGrid();
+  } catch (e) { console.error("Couldn't load languages", e); }
+}
+function showLangGrid(){
+  document.getElementById("browseSubtabs").classList.remove("hidden");
+  document.getElementById("langGrid").classList.remove("hidden");
+  document.getElementById("genreGrid").classList.add("hidden");
+  document.getElementById("genreResults").classList.add("hidden");
+  document.getElementById("langResults").classList.add("hidden");
+  document.getElementById("browseHeader").innerHTML = `<div class="view-title">Browse</div>`;
+}
+function renderLangGrid(){
+  const grid = document.getElementById("langGrid");
+  grid.innerHTML = "";
+  LANGUAGES.forEach((l, i) => {
+    const tile = document.createElement("button");
+    tile.className = "lang-tile";
+    tile.style.setProperty("--d", `${i * 45}ms`);
+    tile.innerHTML = `
+      <div class="lang-flag">${LANG_FLAGS[l.code] || "🌐"}</div>
+      <div><div class="lang-name">${l.label}</div><div class="lang-sub">Tap to browse</div></div>`;
+    tile.addEventListener("click", () => openLanguage(l));
+    grid.appendChild(tile);
+  });
+}
+function fileCard(file, i){
+  const card = document.createElement("button");
+  card.className = "file-card";
+  card.style.setProperty("--d", `${Math.min(i, 12) * 35}ms`);
+  card.innerHTML = `
+    <div class="file-icon">${file.quality}</div>
+    <div class="file-text">
+      <div class="file-name">${file.name}</div>
+      <div class="file-meta">${[file.size, file.quality].filter(Boolean).join(" · ")}</div>
+    </div>
+    <div class="episode-watch-btn" style="flex:0 0 auto;"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>Play</div>`;
+  card.addEventListener("click", () => playRawFile(file));
+  return card;
+}
+async function playRawFile(file){
+  tg?.HapticFeedback?.impactOccurred("light");
+  try {
+    const resolved = await resolveStream({}, file.file_id);
+    const { webPlayerUrl } = buildStreamUrls(resolved);
+    recordHistory({
+      id: `file:${file.file_id}`, media_type: "file",
+      title: file.name, poster_path: null, vote_average: 0
+    });
+    if (tg) tg.openLink(webPlayerUrl); else window.open(webPlayerUrl, "_blank");
+  } catch (err) {
+    tg?.HapticFeedback?.notificationOccurred("error");
+    alert(errorMessageFor(err));
+  }
+}
+async function openLanguage(lang){
+  document.getElementById("browseSubtabs").classList.add("hidden");
+  document.getElementById("langGrid").classList.add("hidden");
+  const resultsEl = document.getElementById("langResults");
+  resultsEl.classList.remove("hidden");
+  resultsEl.innerHTML = '<div class="file-card skeleton" style="height:66px"></div>'.repeat(6);
+  document.getElementById("browseHeader").innerHTML = `
+    <button class="back-btn" id="langBackBtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <div class="view-title">${LANG_FLAGS[lang.code] || ""} ${lang.label}</div>`;
+  document.getElementById("langBackBtn").addEventListener("click", showLangGrid);
+  try {
+    const res = await fetch(CONFIG.LANGUAGE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ init_data: tg?.initData || "", code: lang.code, limit: 30 })
+    });
+    if (res.status === 401) { resultsEl.innerHTML = `<div class="empty-state">Couldn't verify your Telegram session. Try reopening the Mini App from the bot.</div>`; return; }
+    if (!res.ok) throw new Error("server_error");
+    const data = await res.json();
+    const files = data.files || [];
+    resultsEl.innerHTML = "";
+    if (!files.length) {
+      resultsEl.innerHTML = `<div class="empty-state">No ${lang.label} titles found yet.</div>`;
+      return;
+    }
+    files.forEach((f, i) => resultsEl.appendChild(fileCard(f, i)));
+  } catch (e) {
+    resultsEl.innerHTML = `<div class="empty-state">Couldn't load ${lang.label} titles.</div>`;
+  }
+}
+fetchLanguages();
+
 /* ---------- More menu ---------- */
 document.querySelectorAll(".menu-item").forEach(btn => {
   btn.addEventListener("click", async () => {
@@ -799,12 +1088,15 @@ document.querySelectorAll(".menu-item").forEach(btn => {
     if (kind === "series") return openCatalog("Series", "/discover/tv");
     if (kind === "watchlist") return openWatchlistView();
     if (kind === "upgrade") return openUpgrade();
-    if (kind === "settings") return alert("Settings coming soon.");
+    if (kind === "settings") return openSettingsSheet();
   });
 });
 async function openCatalog(title, tmdbPath){
   switchView("browse", { keepGenreResults: true });
+  document.getElementById("browseSubtabs").classList.add("hidden");
   document.getElementById("genreGrid").classList.add("hidden");
+  document.getElementById("langGrid").classList.add("hidden");
+  document.getElementById("langResults").classList.add("hidden");
   const resultsEl = document.getElementById("genreResults");
   resultsEl.classList.remove("hidden");
   resultsEl.innerHTML = '<div class="poster skeleton" style="height:190px"></div>'.repeat(6);
@@ -821,7 +1113,10 @@ async function openCatalog(title, tmdbPath){
 }
 function openWatchlistView(){
   switchView("browse", { keepGenreResults: true });
+  document.getElementById("browseSubtabs").classList.add("hidden");
   document.getElementById("genreGrid").classList.add("hidden");
+  document.getElementById("langGrid").classList.add("hidden");
+  document.getElementById("langResults").classList.add("hidden");
   const resultsEl = document.getElementById("genreResults");
   resultsEl.classList.remove("hidden");
   document.getElementById("browseHeader").innerHTML = `
@@ -855,6 +1150,52 @@ function toggleWatchlist(item){
     });
   }
   localStorage.setItem("goflix_watchlist", JSON.stringify(list));
+}
+
+/* ---------- Continue Watching / history (stored on-device) ---------- */
+const HISTORY_KEY = "goflix_history";
+const HISTORY_MAX = 20;
+function getHistory(){
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); }
+  catch { return []; }
+}
+function recordHistory(item){
+  if (!item || !item.id) return;
+  let list = getHistory().filter(w => w.id !== item.id);
+  list.unshift({
+    id: item.id, media_type: item.media_type,
+    title: item.title, name: item.name,
+    poster_path: item.poster_path, vote_average: item.vote_average,
+    release_date: item.release_date, first_air_date: item.first_air_date,
+    _watchedAt: Date.now(),
+    _episodeLabel: item._episodeLabel || null
+  });
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
+}
+function timeAgo(ts){
+  if (!ts) return "";
+  const diff = Math.max(0, Date.now() - ts);
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+function renderContinueRow(){
+  const section = document.getElementById("continueSection");
+  const history = getHistory();
+  if (!history.length) { section.classList.add("hidden"); return; }
+  section.classList.remove("hidden");
+  const row = document.getElementById("continueRow");
+  row.innerHTML = "";
+  history.forEach(item => {
+    row.appendChild(posterCard(item, {
+      subtitle: (item._episodeLabel ? "" : "") + timeAgo(item._watchedAt)
+    }));
+  });
 }
 
 /* ---------- Watch sheet (Quality -> Web / VLC / MX, or Quality -> Download) ---------- */
@@ -906,6 +1247,7 @@ async function selectQuality(file){
     const resolved = await resolveStream(activeItem, file.file_id);
     const { webPlayerUrl, downloadUrl } = buildStreamUrls(resolved);
     const url = pendingAction === "download" ? downloadUrl : webPlayerUrl;
+    if (pendingAction !== "download") recordHistory(activeItem); // Continue Watching row
     if (tg) tg.openLink(url); else window.open(url, "_blank");
   } catch (err) {
     tg?.HapticFeedback?.notificationOccurred("error");
@@ -1144,9 +1486,24 @@ document.getElementById("profileSwitch").addEventListener("click", () => {
   alert("To switch accounts, use Telegram's own account switcher, then reopen the GOFLIX bot.");
 });
 
+/* ---------- Settings sheet (theme picker) ---------- */
+const settingsSheet = document.getElementById("settingsSheet");
+const settingsBackdrop = document.getElementById("settingsBackdrop");
+function openSettingsSheet(){
+  tg?.HapticFeedback?.impactOccurred("light");
+  applyTheme(localStorage.getItem("goflix_theme") || "dark"); // sync active swatch
+  settingsSheet.classList.add("open"); settingsBackdrop.classList.add("open");
+}
+function closeSettingsSheet(){
+  settingsSheet.classList.remove("open"); settingsBackdrop.classList.remove("open");
+}
+document.getElementById("settingsClose").addEventListener("click", closeSettingsSheet);
+settingsBackdrop.addEventListener("click", closeSettingsSheet);
+
 /* ---------- Boot ---------- */
 async function boot(){
   serverConfigPromise = loadServerConfig(); // fire in parallel — CONFIG.STREAM_BASE_URL updates as soon as it resolves
+  renderContinueRow();
   try {
     const trending = await tmdb("/trending/all/week");
     heroItems = trending.results.slice(0, 10);
