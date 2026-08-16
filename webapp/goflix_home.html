@@ -492,11 +492,22 @@ const CONFIG = {
   RESOLVE_ENDPOINT: "/api/resolve",
   ME_ENDPOINT: "/api/me",
   QUALITIES_ENDPOINT: "/api/qualities",
-  // This same server already has working /watch, /download, and streaming
-  // routes built in — no need to hardcode a domain, just use wherever
-  // this page is currently being served from.
+  CONFIG_ENDPOINT: "/api/config",
+  // Filled in on boot from the server's own info.py URL value — see loadServerConfig().
   STREAM_BASE_URL: window.location.origin
 };
+
+let serverConfigPromise = null;
+async function loadServerConfig() {
+  try {
+    const res = await fetch(CONFIG.CONFIG_ENDPOINT);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.stream_base_url) CONFIG.STREAM_BASE_URL = data.stream_base_url;
+  } catch (e) {
+    console.error("Couldn't load server config, falling back to same-origin", e);
+  }
+}
 
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
@@ -855,6 +866,7 @@ let pendingAction = "watch"; // "watch" opens the web player, "download" downloa
 async function openWatchSheet(item, action = "watch"){
   activeItem = item;
   pendingAction = action;
+  if (serverConfigPromise) await serverConfigPromise;
   document.getElementById("sheetTitle").textContent = "Choose quality";
   qualityStep.innerHTML = '<div class="play-opt skeleton" style="height:58px"></div>'.repeat(3);
   sheet.classList.add("open"); sheetBackdrop.classList.add("open");
@@ -1134,6 +1146,7 @@ document.getElementById("profileSwitch").addEventListener("click", () => {
 
 /* ---------- Boot ---------- */
 async function boot(){
+  serverConfigPromise = loadServerConfig(); // fire in parallel — CONFIG.STREAM_BASE_URL updates as soon as it resolves
   try {
     const trending = await tmdb("/trending/all/week");
     heroItems = trending.results.slice(0, 10);
