@@ -48,7 +48,14 @@ async def watch_page(request: web.Request):
             text=await render_page(id, secure_hash),
             content_type="text/html"
         )
-    except Exception:
+    except InvalidHash:
+        raise web.HTTPForbidden()
+    except FIleNotFound:
+        raise web.HTTPNotFound()
+    except Exception as e:
+        # Was silently turning every failure (network hiccup, TMDB timeout,
+        # etc.) into an indistinguishable 404 with no trace in the logs.
+        logging.exception(f"watch_page failed for id={id}: {e}")
         raise web.HTTPNotFound()
 
 
@@ -321,6 +328,31 @@ async def resolve_stream(request: web.Request):
     )
 
 
+# ---------------- DOWNLOAD ----------------
+# NOTE: this MUST be registered before the catch-all direct_stream_handler
+# below. aiohttp matches routes in registration order, not by specificity —
+# if the catch-all "/{path:\S+}" came first (as it previously did), it would
+# swallow every "/download/..." request itself, streaming it inline instead
+# of as an attachment. That's why Download was opening the web player.
+@routes.get(r"/download/{path:\S+}", allow_head=True)
+async def download_handler(request: web.Request):
+    path = request.match_info["path"]
+    match = re.search(r"(\d+)", path)
+    if not match:
+        raise web.HTTPNotFound()
+    try:
+        id = int(match.group(1))
+        secure_hash = request.rel_url.query.get("hash")
+        return await media_streamer(request, id, secure_hash, inline=False)
+    except InvalidHash:
+        raise web.HTTPForbidden()
+    except FIleNotFound:
+        raise web.HTTPNotFound()
+    except Exception as e:
+        logging.exception(e)
+        raise web.HTTPInternalServerError()
+
+
 # ---------------- DIRECT STREAM (ROOT PATH – REQUIRED FOR VLC/MX) ----------------
 @routes.get(r"/{path:\S+}", allow_head=True)
 async def direct_stream_handler(request: web.Request):
@@ -334,26 +366,6 @@ async def direct_stream_handler(request: web.Request):
         id = int(match.group(1))
         secure_hash = request.rel_url.query.get("hash")
         return await media_streamer(request, id, secure_hash, inline=True)
-    except InvalidHash:
-        raise web.HTTPForbidden()
-    except FIleNotFound:
-        raise web.HTTPNotFound()
-    except Exception as e:
-        logging.exception(e)
-        raise web.HTTPInternalServerError()
-
-
-# ---------------- DOWNLOAD ----------------
-@routes.get(r"/download/{path:\S+}", allow_head=True)
-async def download_handler(request: web.Request):
-    path = request.match_info["path"]
-    match = re.search(r"(\d+)", path)
-    if not match:
-        raise web.HTTPNotFound()
-    try:
-        id = int(match.group(1))
-        secure_hash = request.rel_url.query.get("hash")
-        return await media_streamer(request, id, secure_hash, inline=False)
     except InvalidHash:
         raise web.HTTPForbidden()
     except FIleNotFound:
