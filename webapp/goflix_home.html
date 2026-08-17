@@ -1176,6 +1176,12 @@ function truncate(str, n){ return str && str.length > n ? str.slice(0, n).trim()
 
 /* ---------- View router ---------- */
 function switchView(name, opts = {}) {
+  // Problem-1 fix: navigating to any view other than the detail page itself
+  // must fully stop whatever is playing — otherwise the previous title keeps
+  // running in the background (audio and all) after Back/tab navigation.
+  // (Opening a *different* detail page is handled separately in openDetail,
+  // since that's "detail" -> "detail" and wouldn't trigger this branch.)
+  if (name !== "detail" && goEl.player.classList.contains("open")) closeGoflixPlayer();
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
   document.getElementById("view-" + name).classList.add("active");
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
@@ -2098,6 +2104,12 @@ async function openGoflixPlayer(item, resolved, file){
   }
 }
 function closeGoflixPlayer(){
+  // Invalidate any load/quality-switch still in flight for this session —
+  // if a slow resolveStream()/goLoadSource() from before Close was tapped
+  // finally resolves after the player is gone, its generation token no
+  // longer matches and it's dropped as "superseded" instead of silently
+  // reopening/resuming playback the person already backed out of.
+  ++goLoadGeneration;
   goEl.video.pause();
   goEl.video.removeAttribute("src");
   goEl.video.load();
@@ -2289,6 +2301,17 @@ function goNoAudioNotice(show){
 // its own internal muted retry — see the backstop error listener above.
 let goLoadingInProgress = false;
 
+// Bumped on every *new* load request (a fresh Watch tap, a quality switch —
+// anything the user or app initiates). goLoadSource's own internal muted-audio
+// retry reuses the SAME generation it was given, since it's still servicing
+// the original request, not starting a new one. Any in-flight attempt whose
+// generation no longer matches when it finally settles has been superseded —
+// its .then()/.catch() sees a "superseded" rejection and does nothing, so a
+// slow first quality tap can never clobber a faster second one. This is the
+// fix for "quality switching sometimes fails / picks the wrong quality when
+// tapped quickly."
+let goLoadGeneration = 0;
+
 /* Shared "load this URL into the player" routine — used by the initial
    open, the quality switcher, and the fast "Watch" path. Explicitly calls
    .load() (just setting .src is not reliably enough to reset a stalled
@@ -2308,7 +2331,10 @@ let goLoadingInProgress = false;
    instead of failing outright. A visible "no audio" banner explains why,
    with a one-tap way to open it in VLC/MX for real audio. Only if even the
    muted attempt fails do we treat it as a genuine unplayable file. */
-function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _retryMuted = false, resetUI = true } = {}){
+function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _retryMuted = false, resetUI = true, _generation = null } = {}){
+  // A fresh request (not an internal muted-retry continuation) claims a new
+  // generation and immediately becomes the one true "current" request.
+  const myGen = _generation !== null ? _generation : ++goLoadGeneration;
   goLoadingInProgress = true;
   return new Promise((resolve, reject) => {
     if (resetUI) {
@@ -2332,8 +2358,8 @@ function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _
       if (settled) return;
       settled = true;
       cleanup();
-      goLoadingInProgress = false;
-      reject(new Error("timeout"));
+      if (myGen === goLoadGeneration) goLoadingInProgress = false; // else a newer request owns that flag now
+      reject(new Error(myGen === goLoadGeneration ? "timeout" : "superseded"));
     }, timeoutMs);
 
     function cleanup(){
@@ -2346,6 +2372,7 @@ function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _
       settled = true;
       cleanup();
       goLoadingInProgress = false;
+      if (myGen !== goLoadGeneration) { reject(new Error("superseded")); return; }
       if (resumeAt) goEl.video.currentTime = resumeAt;
       if (_retryMuted) goNoAudioNotice(true);
       if (autoplay) {
@@ -2368,8 +2395,9 @@ function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _
       if (settled) return;
       settled = true;
       cleanup();
+      if (myGen !== goLoadGeneration) { goLoadingInProgress = false; reject(new Error("superseded")); return; }
       if (!_retryMuted) {
-        goLoadSource(url, { resumeAt, autoplay, timeoutMs, _retryMuted: true, resetUI }).then(resolve, reject);
+        goLoadSource(url, { resumeAt, autoplay, timeoutMs, _retryMuted: true, resetUI, _generation: myGen }).then(resolve, reject);
         return;
       }
       goLoadingInProgress = false;
@@ -2399,13 +2427,22 @@ goEl.qualityBtn.addEventListener("click", () => {
       const resumeAt = goEl.video.currentTime;
       const prevQualityLabel = goEl.qualityBtn.textContent;
       goEl.qualityBtn.textContent = "…";
+      // Claim the generation token HERE — at click time, before the async
+      // resolveStream() call — not inside goLoadSource. Otherwise, tapping
+      // 1080p then quickly 720p could have the *1080p* request's network
+      // round-trip finish last and win purely by chance, silently reverting
+      // the person's actual last choice. Claiming by click order (not
+      // network-resolve order) is what makes "last tap wins" reliable.
+      const myGen = ++goLoadGeneration;
       try {
         const resolved = await resolveStream(goCurrentItem, f.file_id);
+        if (myGen !== goLoadGeneration) return; // a newer quality tap already superseded this one
         const { directStreamUrl } = buildStreamUrls(resolved);
-        goEl.external.dataset.url = directStreamUrl;
-        await goLoadSource(directStreamUrl, { resumeAt, autoplay: wasPlaying });
+        goEl.external.dataset.url = directStreamUrl; // keep VLC/MX pointed at the *current* selection
+        await goLoadSource(directStreamUrl, { resumeAt, autoplay: wasPlaying, _generation: myGen });
         goEl.qualityBtn.textContent = f.quality;
       } catch (err) {
+        if (err.message === "superseded") return; // a newer request already took over — nothing to show
         goEl.spinner.classList.remove("show");
         goEl.qualityBtn.textContent = prevQualityLabel;
         if (err.message === "timeout" || err.message === "media_error") {
@@ -2466,6 +2503,12 @@ function errorMessageFor(err){
 /* ---------- Detail view ---------- */
 let detailReturnView = "home"; // where the Back button in the sticky bar should go
 async function openDetail(item){
+  // Problem-1 fix: opening a title's detail page — including tapping a
+  // "Recommended" card while already on another title's detail page — must
+  // never let the previous title's video keep playing. Show the new
+  // poster/details first; playback only (re)starts once the person taps
+  // Watch again, per spec.
+  if (goEl.player.classList.contains("open")) closeGoflixPlayer();
   detailItem = item;
   // Remember which tab we were on so "Back" returns there instead of always Home.
   const current = document.querySelector(".view.active");
