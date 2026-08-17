@@ -1991,8 +1991,24 @@ goEl.external.addEventListener("click", goOpenExternal);
 goEl.errorExternal.addEventListener("click", goOpenExternal);
 goEl.errorClose.addEventListener("click", closeGoflixPlayer);
 
-goEl.video.addEventListener("waiting", () => goEl.spinner.classList.add("show"));
-goEl.video.addEventListener("canplay", () => goEl.spinner.classList.remove("show"));
+// Stall watchdog: "waiting" alone (buffering mid-playback) is normal and
+// just shows the spinner. But if playback never actually starts/resumes
+// within 20s of buffering — a genuinely stuck stream (dead byte-range
+// response from the server, network drop, etc.) — surface the error
+// overlay instead of spinning forever with no explanation.
+let goStallTimer = null;
+goEl.video.addEventListener("waiting", () => {
+  goEl.spinner.classList.add("show");
+  clearTimeout(goStallTimer);
+  goStallTimer = setTimeout(() => {
+    if (goEl.video.paused || goEl.video.readyState < 3) {
+      goEl.spinner.classList.remove("show");
+      goEl.error.classList.remove("hidden");
+    }
+  }, 20000);
+});
+goEl.video.addEventListener("canplay", () => { goEl.spinner.classList.remove("show"); clearTimeout(goStallTimer); });
+goEl.video.addEventListener("playing", () => clearTimeout(goStallTimer));
 goEl.video.addEventListener("playing", () => {
   goEl.spinner.classList.remove("show");
   goEl.playPause.innerHTML = `<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>`;
@@ -2146,7 +2162,19 @@ function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000 } 
       settled = true;
       cleanup();
       if (resumeAt) goEl.video.currentTime = resumeAt;
-      if (autoplay) goEl.video.play().catch(() => {});
+      if (autoplay) {
+        // Some mobile WebViews (Telegram's in-app browser included) block
+        // autoplay-with-sound outright, even right after a tap, and reject
+        // the play() promise — which the old bare .catch(()=>{}) swallowed
+        // silently, leaving the video permanently paused at 0:00 with no
+        // visible sign anything went wrong (looked exactly like "stuck").
+        // Muted autoplay is essentially always allowed, so retry muted and
+        // let the person unmute via the volume swipe zone or a tap.
+        goEl.video.play().catch(() => {
+          goEl.video.muted = true;
+          goEl.video.play().then(() => goFlash("🔇 Muted — swipe right side to unmute")).catch(() => {});
+        });
+      }
       goEl.spinner.classList.remove("show");
       resolve();
     }
