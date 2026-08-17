@@ -76,11 +76,17 @@
     border-bottom:1px solid var(--line);
     transition:background .35s ease;
   }
-  .logo{font-size:25px;font-weight:900;letter-spacing:.3px;animation:logoPop .6s cubic-bezier(.34,1.56,.64,1) both;}
+  .logo{
+    font-family:'Arial Black',Impact,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    font-size:27px;font-weight:900;letter-spacing:-.5px;
+  }
   .logo .go{color:var(--go);}
-  .logo .flix{color:var(--flix);display:inline-block;animation:logoGlow 3.2s ease-in-out .6s infinite;}
-  @keyframes logoPop{from{opacity:0;transform:scale(.7) translateY(-6px);}to{opacity:1;transform:scale(1) translateY(0);}}
-  @keyframes logoGlow{0%,100%{text-shadow:0 0 0 rgba(229,9,20,0);}50%{text-shadow:0 0 10px rgba(229,9,20,.65);}}
+  .logo .flix{color:var(--flix);}
+  /* Letter-by-letter reveal instead of a glow pulse — each <span> is one
+     character (see the split markup + stagger script near the bottom of
+     the page) and pops in with a small stagger delay. */
+  .logo .letter{display:inline-block;opacity:0;transform:translateY(10px) scale(.6);animation:letterIn .45s cubic-bezier(.34,1.56,.64,1) forwards;animation-delay:var(--ld,0ms);}
+  @keyframes letterIn{to{opacity:1;transform:translateY(0) scale(1);}}
   .top-actions{display:flex;align-items:center;gap:10px;}
   .icon-btn{
     width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.08);
@@ -100,7 +106,7 @@
   .view-title{font-size:19px;font-weight:800;}
 
   /* ---------- Hero carousel ---------- */
-  .hero{position:relative;width:100%;height:70vh;min-height:480px;overflow:hidden;}
+  .hero{position:relative;width:100%;height:46vh;min-height:340px;max-height:420px;overflow:hidden;}
   .hero-track{display:flex;height:100%;transition:transform .45s cubic-bezier(.22,.61,.36,1);}
   .hero-slide{position:relative;flex:0 0 100%;height:100%;}
   .hero-slide img{width:100%;height:100%;object-fit:cover;}
@@ -349,6 +355,19 @@
   .theme-swatch.sw-goflix{background:#000;}
   .theme-swatch.sw-goflix .sw{background:#ff0a16;}
 
+  /* Settings: playback preference rows */
+  .settings-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 2px;border-bottom:1px solid var(--line);}
+  .settings-row:last-of-type{border-bottom:none;}
+  .settings-row-label{font-size:14.5px;font-weight:700;color:var(--text);}
+  .settings-row-sub{display:block;font-size:12px;font-weight:500;color:var(--text-dim);margin-top:2px;}
+  .pref-chip-group{display:flex;gap:6px;flex-wrap:wrap;}
+  .pref-chip{padding:7px 12px;border-radius:20px;background:var(--card);border:1px solid var(--line);font-size:12.5px;font-weight:700;color:var(--text-dim);}
+  .pref-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .pref-toggle{width:46px;height:27px;border-radius:20px;background:var(--card);border:1px solid var(--line);position:relative;flex:0 0 auto;transition:background .2s ease;}
+  .pref-toggle.on{background:var(--accent);border-color:var(--accent);}
+  .pref-toggle-knob{position:absolute;top:2px;left:2px;width:21px;height:21px;border-radius:50%;background:#fff;transition:transform .2s ease;box-shadow:0 1px 3px rgba(0,0,0,.3);}
+  .pref-toggle.on .pref-toggle-knob{transform:translateX(19px);}
+
   /* ---------- Watch sheet ---------- */
   .sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:90;opacity:0;pointer-events:none;transition:opacity .25s;}
   .sheet-backdrop.open{opacity:1;pointer-events:auto;}
@@ -451,6 +470,21 @@
   .episode-watch-btn{display:inline-flex;align-items:center;gap:5px;background:rgba(229,9,20,.16);color:#ff6b73;padding:5px 12px;border-radius:16px;font-size:11.5px;font-weight:700;}
   .episode-watch-btn svg{width:10px;height:10px;fill:#ff6b73;}
 
+  /* ---------- Trailer modal (inline YouTube embed) ---------- */
+  .trailer-modal{
+    position:fixed;inset:0;z-index:210;background:rgba(0,0,0,.94);
+    display:none;align-items:center;justify-content:center;padding:16px;
+  }
+  .trailer-modal.open{display:flex;}
+  .trailer-frame-wrap{position:relative;width:100%;max-width:900px;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden;}
+  .trailer-frame-wrap iframe{position:absolute;inset:0;width:100%;height:100%;}
+  .trailer-close{
+    position:absolute;top:calc(16px + env(safe-area-inset-top));right:16px;z-index:2;
+    width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .trailer-close svg{width:18px;height:18px;fill:none;stroke:#fff;stroke-width:2;}
+
   /* ---------- GOFLIX in-app player ---------- */
   .goplayer{
     position:fixed;inset:0;z-index:200;background:#000;
@@ -458,6 +492,12 @@
   }
   .goplayer.open{display:flex;}
   .goplayer video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;}
+  /* Inline mode: video plays where the poster/backdrop was (top of the
+     detail page, Netflix-style), title/overview/buttons stay visible and
+     scrollable underneath. Tapping the fullscreen button promotes the
+     same player element to the fixed full-screen overlay below. */
+  .goplayer.inline{position:absolute;inset:0;z-index:2;border-radius:0;}
+  .goplayer.inline .goplayer-top{padding-top:calc(10px + env(safe-area-inset-top));}
 
   .goplayer-gesture-layer{position:absolute;inset:0;display:flex;z-index:2;}
   .goplayer-gesture-zone{flex:1;touch-action:none;}
@@ -476,10 +516,18 @@
   @keyframes gpSpin{to{transform:rotate(360deg);}}
 
   .goplayer-ui{
+    /* Note: pointer-events:none on the wrapper itself — only the actual
+       top bar / center button / bottom bar re-enable it below. This is
+       what lets brightness/volume swipes reach the gesture layer even
+       while the chrome is visible (a full-area pointer-events:auto here
+       used to swallow every touch, so only the center play button worked). */
     position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;justify-content:space-between;
     opacity:0;pointer-events:none;transition:opacity .2s ease;
   }
-  .goplayer-ui.show{opacity:1;pointer-events:auto;}
+  .goplayer-ui.show{opacity:1;}
+  .goplayer-ui.show .goplayer-top,
+  .goplayer-ui.show .goplayer-center-play,
+  .goplayer-ui.show .goplayer-bottom{pointer-events:auto;}
   .goplayer-top{
     display:flex;align-items:center;gap:10px;padding:calc(12px + env(safe-area-inset-top)) 14px 30px;
     background:linear-gradient(180deg, rgba(0,0,0,.75), transparent);
@@ -563,7 +611,27 @@
 <body>
 
   <div class="topbar">
-    <div class="logo"><span class="go">GO</span><span class="flix">FLIX</span></div>
+    <div class="logo" id="goflixLogo"><span class="go">GO</span><span class="flix">FLIX</span></div>
+    <script>
+      // Letter-by-letter reveal (replaces the old glow pulse): split GO / FLIX
+      // into one <span class="letter"> per character with a staggered delay.
+      (function(){
+        const logo = document.getElementById("goflixLogo");
+        let i = 0;
+        logo.querySelectorAll(".go, .flix").forEach(part => {
+          const text = part.textContent;
+          part.textContent = "";
+          [...text].forEach(ch => {
+            const s = document.createElement("span");
+            s.className = "letter";
+            s.style.setProperty("--ld", (i * 55) + "ms");
+            s.textContent = ch;
+            part.appendChild(s);
+            i++;
+          });
+        });
+      })();
+    </script>
     <div class="top-actions">
       <button class="icon-btn" id="topThemeBtn" aria-label="Appearance">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
@@ -605,6 +673,11 @@
     <div class="section">
       <div class="section-head"><div class="section-title">New Releases</div></div>
       <div class="row" id="newRow"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-head"><div class="section-title">Upcoming</div></div>
+      <div class="row" id="homeUpcomingRow"></div>
     </div>
   </div>
 
@@ -807,7 +880,35 @@
         <div class="theme-opt-label">GOFLIX</div>
       </button>
     </div>
+
+    <div class="sheet-title" style="margin-top:22px;">Playback</div>
+    <div class="settings-row">
+      <div class="settings-row-label">Preferred quality</div>
+      <div class="pref-chip-group" id="qualityPrefChips">
+        <button class="pref-chip" data-quality="auto">Auto</button>
+        <button class="pref-chip" data-quality="1080p">1080p</button>
+        <button class="pref-chip" data-quality="720p">720p</button>
+        <button class="pref-chip" data-quality="480p">480p</button>
+      </div>
+    </div>
+    <div class="settings-row">
+      <div class="settings-row-label">Haptic feedback</div>
+      <button class="pref-toggle" id="hapticsToggle" role="switch"><span class="pref-toggle-knob"></span></button>
+    </div>
+    <div class="settings-row">
+      <div class="settings-row-label">Data saver <span class="settings-row-sub">Start playback at 480p on mobile data</span></div>
+      <button class="pref-toggle" id="dataSaverToggle" role="switch"><span class="pref-toggle-knob"></span></button>
+    </div>
+
     <button class="sheet-cancel" id="settingsClose">Done</button>
+  </div>
+
+  <!-- ============ TRAILER MODAL (inline YouTube embed) ============ -->
+  <div class="trailer-modal" id="trailerModal">
+    <button class="trailer-close" id="trailerClose"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+    <div class="trailer-frame-wrap">
+      <iframe id="trailerFrame" src="" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+    </div>
   </div>
 
   <!-- ============ GOFLIX PLAYER ============ -->
@@ -926,6 +1027,24 @@ async function loadServerConfig() {
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
 
+/* ---------- Preferences (Settings sheet customization) ---------- */
+function getPref(key, fallback){
+  const v = localStorage.getItem("goflix_pref_" + key);
+  return v === null ? fallback : v;
+}
+function setPref(key, value){
+  localStorage.setItem("goflix_pref_" + key, value);
+}
+/* Haptics wrapper — every haptic call in the app routes through here so the
+   "Haptic Feedback" settings toggle actually mutes them app-wide instead of
+   only affecting one or two spots. */
+function goHaptic(kind, style){
+  if (getPref("haptics", "on") !== "on") return;
+  if (!tg?.HapticFeedback) return;
+  if (kind === "notification") tg.HapticFeedback.notificationOccurred(style);
+  else tg.HapticFeedback.impactOccurred(style || "light");
+}
+
 /* ---------- Theme (Dark / Light / GOFLIX) ---------- */
 function applyTheme(name){
   if (name === "dark") document.documentElement.removeAttribute("data-theme");
@@ -936,7 +1055,7 @@ function applyTheme(name){
 applyTheme(localStorage.getItem("goflix_theme") || "dark");
 document.querySelectorAll(".theme-opt").forEach(btn => {
   btn.addEventListener("click", () => {
-    tg?.HapticFeedback?.impactOccurred("light");
+    goHaptic("impact","light");
     applyTheme(btn.dataset.theme);
   });
 });
@@ -1043,13 +1162,18 @@ function switchView(name, opts = {}) {
   window.scrollTo(0, 0);
   if (name === "browse" && !opts.keepGenreResults) showGenreGrid();
   if (name === "home") renderContinueRow();
+  // Bug fix: only the top-bar search icon used to trigger the recent-searches
+  // view — the bottom nav's own Search tab bypassed it, so opening Search
+  // from the tab bar just showed whatever was left over from before instead
+  // of a clean recent-searches list.
+  if (name === "search" && !searchInput.value.trim()) renderRecentSearches();
   // Detail view gets its own fixed Back/Watchlist bar instead of the main tab bar.
   document.querySelector(".bottom-nav").style.display = (name === "detail") ? "none" : "flex";
   document.getElementById("detailBottomBar").style.display = (name === "detail") ? "flex" : "none";
 }
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
-    tg?.HapticFeedback?.impactOccurred("light");
+    goHaptic("impact","light");
     switchView(btn.dataset.tab);
     // little bounce animation on the tapped tab icon
     btn.classList.add("bounce");
@@ -1111,7 +1235,7 @@ function attachHeroButtonEvents(){
     const item = heroItems[+b.dataset.idx];
     toggleWatchlist(item);
     b.classList.toggle("saved", isInWatchlist(item));
-    tg?.HapticFeedback?.impactOccurred("light");
+    goHaptic("impact","light");
   }));
 }
 
@@ -1168,7 +1292,7 @@ function posterCard(item, opts = {}){
   const saveBtn = poster.querySelector(".poster-save");
   saveBtn.addEventListener("click", e => {
     e.stopPropagation();
-    tg?.HapticFeedback?.impactOccurred("light");
+    goHaptic("impact","light");
     if (isRemoveMode) {
       removeHistory(item.id);
       renderContinueRow();
@@ -1241,11 +1365,11 @@ function renderRecentSearches(){
 }
 const searchInput = document.getElementById("searchInput");
 document.getElementById("topThemeBtn").addEventListener("click", () => {
-  tg?.HapticFeedback?.impactOccurred("light");
+  goHaptic("impact","light");
   openSettingsSheet();
 });
 document.getElementById("topSearchBtn").addEventListener("click", () => {
-  tg?.HapticFeedback?.impactOccurred("light");
+  goHaptic("impact","light");
   switchView("search");
   if (!searchInput.value.trim()) renderRecentSearches();
   setTimeout(() => searchInput.focus(), 100);
@@ -1279,7 +1403,7 @@ searchInput.addEventListener("input", () => {
 let browseMode = "genres"; // "genres" | "languages"
 document.querySelectorAll(".browse-subtab").forEach(btn => {
   btn.addEventListener("click", () => {
-    tg?.HapticFeedback?.impactOccurred("light");
+    goHaptic("impact","light");
     browseMode = btn.dataset.subtab;
     document.querySelectorAll(".browse-subtab").forEach(b => b.classList.toggle("active", b === btn));
     if (browseMode === "genres") showGenreGrid(); else showLangGrid();
@@ -1407,7 +1531,7 @@ function fileCard(file, i){
   return card;
 }
 async function playRawFile(file){
-  tg?.HapticFeedback?.impactOccurred("light");
+  goHaptic("impact","light");
   try {
     // Pass the file's own (cleaned) name as a fallback "title" — if this
     // exact file_id turns out to be stale/corrupted on Telegram's end, the
@@ -1422,7 +1546,7 @@ async function playRawFile(file){
     sheetFiles = [file]; // so the in-player quality menu has something to show
     openGoflixPlayer(pseudoItem, resolved, file);
   } catch (err) {
-    tg?.HapticFeedback?.notificationOccurred("error");
+    goHaptic("notification","error");
     alert(errorMessageFor(err));
   }
 }
@@ -1605,7 +1729,7 @@ async function openWatchSheet(item, action = "watch"){
   sheetTitleEl.textContent = "Choose quality";
   qualityStep.innerHTML = '<div class="play-opt skeleton" style="height:58px"></div>'.repeat(3);
   sheet.classList.add("open"); sheetBackdrop.classList.add("open");
-  tg?.HapticFeedback?.impactOccurred("light");
+  goHaptic("impact","light");
 
   try {
     const { files } = await fetchQualities(item);
@@ -1619,7 +1743,7 @@ async function openWatchSheet(item, action = "watch"){
       renderQualityOptions(sheetFiles);
     }
   } catch (err) {
-    tg?.HapticFeedback?.notificationOccurred("error");
+    goHaptic("notification","error");
     alert(errorMessageFor(err));
     closeSheet();
   }
@@ -1637,7 +1761,7 @@ function renderLanguageStep(langCodes){
       <div class="oicon">${LANG_FLAGS[code] || "🌐"}</div>
       <div class="otext"><div class="otitle">${langLabel(code)}</div><div class="osub">${count} file${count === 1 ? "" : "s"}</div></div>`;
     opt.addEventListener("click", () => {
-      tg?.HapticFeedback?.impactOccurred("light");
+      goHaptic("impact","light");
       renderQualityOptions(sheetFiles.filter(f => (f.languages || []).includes(code)), { showBack: true, langCodes });
     });
     qualityStep.appendChild(opt);
@@ -1649,10 +1773,19 @@ function renderLanguageStep(langCodes){
     <div class="oicon">🌐</div>
     <div class="otext"><div class="otitle">Any language</div><div class="osub">Show all ${sheetFiles.length} files</div></div>`;
   anyOpt.addEventListener("click", () => {
-    tg?.HapticFeedback?.impactOccurred("light");
+    goHaptic("impact","light");
     renderQualityOptions(sheetFiles, { showBack: true, langCodes });
   });
   qualityStep.appendChild(anyOpt);
+}
+
+/* Preferred-quality preference from Settings — Data Saver overrides it to
+   480p outright; otherwise "auto" means no preference (server's own
+   best-first ordering is left alone). */
+function effectivePreferredQuality(){
+  if (getPref("dataSaver", "off") === "on") return "480p";
+  const q = getPref("quality", "auto");
+  return q === "auto" ? null : q;
 }
 
 function renderQualityOptions(files, opts = {}){
@@ -1669,21 +1802,26 @@ function renderQualityOptions(files, opts = {}){
     qualityStep.innerHTML = `<div class="empty-state" style="padding:20px 4px">No files found for this title yet.</div>`;
     return;
   }
+  const preferred = effectivePreferredQuality();
+  if (preferred) {
+    files = [...files].sort((a, b) => (a.quality === preferred ? -1 : 0) - (b.quality === preferred ? -1 : 0));
+  }
   qualityStep.innerHTML = "";
   files.forEach((f, i) => {
     const opt = document.createElement("button");
     opt.className = "play-opt quality";
     opt.style.setProperty("--d", `${i * 40}ms`);
+    const isPreferred = preferred && f.quality === preferred;
     opt.innerHTML = `
       <div class="oicon">${f.quality}</div>
-      <div class="otext"><div class="otitle">${f.quality}</div><div class="osub">${[f.size, f.name].filter(Boolean).join(" · ")}</div></div>`;
+      <div class="otext"><div class="otitle">${f.quality}${isPreferred ? ' <span style="color:var(--accent);font-weight:800;">· Preferred</span>' : ""}</div><div class="osub">${[f.size, f.name].filter(Boolean).join(" · ")}</div></div>`;
     opt.addEventListener("click", () => selectQuality(f));
     qualityStep.appendChild(opt);
   });
 }
 
 async function selectQuality(file){
-  tg?.HapticFeedback?.impactOccurred("light");
+  goHaptic("impact","light");
   qualityStep.innerHTML = `<div class="empty-state" style="padding:20px 4px">Preparing your stream…</div>`;
   try {
     const resolved = await resolveStream(activeItem, file.file_id);
@@ -1696,7 +1834,7 @@ async function selectQuality(file){
       return;
     }
   } catch (err) {
-    tg?.HapticFeedback?.notificationOccurred("error");
+    goHaptic("notification","error");
     alert(errorMessageFor(err));
   }
   closeSheet();
@@ -1766,6 +1904,9 @@ const goEl = {
 let goCurrentItem = null;
 let goHideTimer = null;
 let goBrightness = 1;
+let goInline = false; // true while the player lives inside the detail-page poster slot
+const goBodyParent = document.body; // the player's normal fixed-overlay home
+const goDetailHero = document.querySelector("#view-detail .detail-hero");
 
 function goFmtTime(s){
   if (!isFinite(s) || s < 0) s = 0;
@@ -1796,7 +1937,6 @@ function goCloseAllPopovers(){
 async function openGoflixPlayer(item, resolved, file){
   goCurrentItem = item;
   const { directStreamUrl, webPlayerUrl } = buildStreamUrls(resolved);
-  goEl.video.src = directStreamUrl;
   goEl.video.playbackRate = 1;
   goEl.video.style.filter = "";
   goBrightness = 1;
@@ -1806,10 +1946,34 @@ async function openGoflixPlayer(item, resolved, file){
   goEl.qualityBtn.textContent = file?.quality || "Auto";
   goEl.error.classList.add("hidden");
   goCloseAllPopovers();
+
+  // Netflix-style: if we're already on the detail page, play the video
+  // right in the poster/backdrop slot instead of an immediate full-screen
+  // takeover — title, overview, and buttons stay visible below it. Any
+  // other entry point (e.g. a quick-play from a home row) still opens the
+  // classic full-screen overlay.
+  const detailOpen = document.getElementById("view-detail").classList.contains("active") && goDetailHero;
+  if (detailOpen) {
+    goInline = true;
+    goDetailHero.appendChild(goEl.player);
+    goEl.player.classList.add("inline");
+    document.body.style.overflow = "";
+  } else {
+    goInline = false;
+    goBodyParent.appendChild(goEl.player);
+    goEl.player.classList.remove("inline");
+    document.body.style.overflow = "hidden";
+  }
+
   goEl.player.classList.add("open");
-  document.body.style.overflow = "hidden";
   goShowControls();
-  try { await goEl.video.play(); } catch (e) { /* autoplay blocked — center play button still works */ }
+  try {
+    await goLoadSource(directStreamUrl, { autoplay: true });
+  } catch (e) {
+    // Genuinely unplayable in-browser (bad codec, dead link, etc.) — the
+    // error overlay with the VLC/MX fallback is the right call here.
+    goEl.error.classList.remove("hidden");
+  }
   recordHistory(item);
 }
 function closeGoflixPlayer(){
@@ -1819,6 +1983,9 @@ function closeGoflixPlayer(){
   goEl.player.classList.remove("open");
   document.body.style.overflow = "";
   if (document.fullscreenElement) (document.exitFullscreen || (() => {})).call(document);
+  // Put the player back in its normal fixed-overlay home so the next
+  // full-screen-only open (e.g. from a home row) isn't stuck inside detailHero.
+  if (goInline) { goEl.player.classList.remove("inline"); goBodyParent.appendChild(goEl.player); goInline = false; }
 }
 goEl.close.addEventListener("click", closeGoflixPlayer);
 function goOpenExternal(){
@@ -1892,6 +2059,8 @@ function goSetupGestureZone(el, isVolume){
   el.addEventListener("pointerdown", e => {
     dragY = e.clientY;
     dragStart = isVolume ? goEl.video.volume : goBrightness;
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    goShowControls(true);
   });
   el.addEventListener("pointermove", e => {
     if (dragY === null) return;
@@ -1956,6 +2125,57 @@ goEl.speedBtn.addEventListener("click", () => {
   goShowControls();
 });
 
+/* Shared "load this URL into the player" routine — used by both the initial
+   open and the quality switcher. Explicitly calls .load() (just setting
+   .src is not reliably enough to reset a stalled buffer on some mobile
+   WebViews), resets the seek UI so it doesn't show a stale position from
+   the previous quality while the new source is loading, and times out the
+   spinner instead of spinning forever if metadata never arrives (flaky
+   network / server hiccup) so it visibly falls through to the error state. */
+function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000 } = {}){
+  return new Promise((resolve, reject) => {
+    goEl.seekFill.style.width = "0%";
+    goEl.seekBuffer.style.width = "0%";
+    goEl.seekThumb.style.left = "0%";
+    goEl.timeCur.textContent = "0:00";
+    goEl.spinner.classList.add("show");
+    goEl.video.pause();
+    goEl.video.src = url;
+    goEl.video.load();
+
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("timeout"));
+    }, timeoutMs);
+
+    function cleanup(){
+      clearTimeout(timer);
+      goEl.video.removeEventListener("loadedmetadata", onMeta);
+      goEl.video.removeEventListener("error", onErr);
+    }
+    function onMeta(){
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (resumeAt) goEl.video.currentTime = resumeAt;
+      if (autoplay) goEl.video.play().catch(() => {});
+      goEl.spinner.classList.remove("show");
+      resolve();
+    }
+    function onErr(){
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("media_error"));
+    }
+    goEl.video.addEventListener("loadedmetadata", onMeta);
+    goEl.video.addEventListener("error", onErr);
+  });
+}
+
 /* Quality switcher — swaps source, keeps position + play state */
 goEl.qualityBtn.addEventListener("click", () => {
   const wasHidden = goEl.qualityMenu.classList.contains("hidden");
@@ -1973,22 +2193,22 @@ goEl.qualityBtn.addEventListener("click", () => {
       goEl.qualityMenu.classList.add("hidden");
       const wasPlaying = !goEl.video.paused;
       const resumeAt = goEl.video.currentTime;
-      goEl.spinner.classList.add("show");
+      const prevQualityLabel = goEl.qualityBtn.textContent;
+      goEl.qualityBtn.textContent = "…";
       try {
         const resolved = await resolveStream(goCurrentItem, f.file_id);
         const { directStreamUrl, webPlayerUrl } = buildStreamUrls(resolved);
-        goEl.video.src = directStreamUrl;
         goEl.external.dataset.url = webPlayerUrl;
+        await goLoadSource(directStreamUrl, { resumeAt, autoplay: wasPlaying });
         goEl.qualityBtn.textContent = f.quality;
-        const onMeta = () => {
-          goEl.video.currentTime = resumeAt;
-          if (wasPlaying) goEl.video.play();
-          goEl.video.removeEventListener("loadedmetadata", onMeta);
-        };
-        goEl.video.addEventListener("loadedmetadata", onMeta);
       } catch (err) {
         goEl.spinner.classList.remove("show");
-        alert(errorMessageFor(err));
+        goEl.qualityBtn.textContent = prevQualityLabel;
+        if (err.message === "timeout" || err.message === "media_error") {
+          goEl.error.classList.remove("hidden");
+        } else {
+          alert(errorMessageFor(err));
+        }
       }
     });
     goEl.qualityMenu.appendChild(opt);
@@ -1997,12 +2217,37 @@ goEl.qualityBtn.addEventListener("click", () => {
   goShowControls(true);
 });
 
-/* Fullscreen */
-goEl.fullscreenBtn.addEventListener("click", () => {
+/* Fullscreen — also rotates to landscape, like every other video app.
+   screen.orientation.lock only works inside a fullscreen element on most
+   mobile browsers, so we request fullscreen first, then lock. */
+async function goEnterFullscreenLandscape(){
+  // Promote out of the inline poster slot into the normal fixed overlay
+  // first — you can't usefully fullscreen a 52vh-tall container.
+  if (goInline) { goEl.player.classList.remove("inline"); goBodyParent.appendChild(goEl.player); document.body.style.overflow = "hidden"; }
   const req = goEl.player.requestFullscreen || goEl.player.webkitRequestFullscreen;
+  try { if (req) await req.call(goEl.player); } catch (err) {}
+  try { await screen.orientation.lock("landscape"); } catch (err) { /* iOS Safari has no orientation.lock — fullscreen video still rotates natively there */ }
+}
+async function goExitFullscreenPortrait(){
+  try { await screen.orientation.unlock(); } catch (err) {}
   const exit = document.exitFullscreen || document.webkitExitFullscreen;
-  if (!document.fullscreenElement) { if (req) req.call(goEl.player); }
-  else { if (exit) exit.call(document); }
+  try { if (exit) await exit.call(document); } catch (err) {}
+}
+goEl.fullscreenBtn.addEventListener("click", () => {
+  if (!document.fullscreenElement) goEnterFullscreenLandscape();
+  else goExitFullscreenPortrait();
+});
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) {
+    try { screen.orientation.unlock(); } catch (err) {}
+    // Coming back out of fullscreen: if this session started inline on the
+    // detail page (and we're still there), drop back into the poster slot.
+    if (goInline && document.getElementById("view-detail").classList.contains("active") && goDetailHero) {
+      goEl.player.classList.add("inline");
+      goDetailHero.appendChild(goEl.player);
+      document.body.style.overflow = "";
+    }
+  }
 });
 
 function errorMessageFor(err){
@@ -2083,10 +2328,23 @@ document.getElementById("detailBack").addEventListener("click", () => switchView
 document.getElementById("detailBottomBack").addEventListener("click", () => switchView(detailReturnView));
 document.getElementById("detailWatchBtn").addEventListener("click", () => openWatchSheet(detailItem, "watch"));
 document.getElementById("detailDownloadBtn").addEventListener("click", () => openWatchSheet(detailItem, "download"));
+const trailerModal = document.getElementById("trailerModal");
+const trailerFrame = document.getElementById("trailerFrame");
+function openTrailerModal(key){
+  trailerFrame.src = `https://www.youtube.com/embed/${key}?autoplay=1&playsinline=1&rel=0`;
+  trailerModal.classList.add("open");
+  document.body.style.overflow = "hidden";
+}
+function closeTrailerModal(){
+  trailerModal.classList.remove("open");
+  trailerFrame.src = ""; // stop playback
+  document.body.style.overflow = "";
+}
+document.getElementById("trailerClose").addEventListener("click", closeTrailerModal);
+trailerModal.addEventListener("click", e => { if (e.target === trailerModal) closeTrailerModal(); });
 document.getElementById("detailTrailerBtn").addEventListener("click", () => {
   if (!detailItem?._trailerKey) { alert("No trailer available for this title."); return; }
-  const url = `https://www.youtube.com/watch?v=${detailItem._trailerKey}`;
-  if (tg) tg.openLink(url); else window.open(url, "_blank");
+  openTrailerModal(detailItem._trailerKey);
 });
 document.getElementById("detailShareBtn").addEventListener("click", () => {
   const title = detailItem?.title || detailItem?.name || "this title";
@@ -2107,7 +2365,7 @@ function updateAddListBtn(){
 document.getElementById("detailBottomWatchlist").addEventListener("click", () => {
   toggleWatchlist(detailItem);
   updateAddListBtn();
-  tg?.HapticFeedback?.impactOccurred("light");
+  goHaptic("impact","light");
 });
 
 /* seasons / episodes */
@@ -2180,7 +2438,7 @@ const profileSheet = document.getElementById("profileSheet");
 const profileBackdrop = document.getElementById("profileBackdrop");
 async function openProfileSheet(){
   profileSheet.classList.add("open"); profileBackdrop.classList.add("open");
-  tg?.HapticFeedback?.impactOccurred("light");
+  goHaptic("impact","light");
 
   // Optimistic paint from the client-side hint (unverified, just for instant feedback).
   const hint = tg?.initDataUnsafe?.user;
@@ -2231,9 +2489,34 @@ document.getElementById("profileSwitch").addEventListener("click", () => {
 /* ---------- Settings sheet (theme picker) ---------- */
 const settingsSheet = document.getElementById("settingsSheet");
 const settingsBackdrop = document.getElementById("settingsBackdrop");
-function openSettingsSheet(){
-  tg?.HapticFeedback?.impactOccurred("light");
+function syncSettingsControls(){
   applyTheme(localStorage.getItem("goflix_theme") || "dark"); // sync active swatch
+  const q = getPref("quality", "auto");
+  document.querySelectorAll("#qualityPrefChips .pref-chip").forEach(c => c.classList.toggle("active", c.dataset.quality === q));
+  document.getElementById("hapticsToggle").classList.toggle("on", getPref("haptics", "on") === "on");
+  document.getElementById("dataSaverToggle").classList.toggle("on", getPref("dataSaver", "off") === "on");
+}
+document.querySelectorAll("#qualityPrefChips .pref-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    setPref("quality", chip.dataset.quality);
+    goHaptic("impact","light");
+    syncSettingsControls();
+  });
+});
+document.getElementById("hapticsToggle").addEventListener("click", () => {
+  const next = getPref("haptics", "on") === "on" ? "off" : "on";
+  setPref("haptics", next);
+  syncSettingsControls();
+  if (next === "on") goHaptic("impact","light"); // little confirmation buzz when turning it back on
+});
+document.getElementById("dataSaverToggle").addEventListener("click", () => {
+  setPref("dataSaver", getPref("dataSaver", "off") === "on" ? "off" : "on");
+  goHaptic("impact","light");
+  syncSettingsControls();
+});
+function openSettingsSheet(){
+  goHaptic("impact","light");
+  syncSettingsControls();
   settingsSheet.classList.add("open"); settingsBackdrop.classList.add("open");
 }
 function closeSettingsSheet(){
@@ -2256,13 +2539,19 @@ async function refreshDynamicContent(isFirstLoad){
     const nowPlaying = await tmdb("/movie/now_playing");
     renderRow("newRow", nowPlaying.results.slice(0, 15));
 
-    // Upcoming: unreleased movies + shows airing today, for the Browse tab.
-    const [upcomingMovies, airingTv] = await Promise.all([
-      tmdb("/movie/upcoming"),
-      tmdb("/tv/airing_today")
-    ]);
-    const upcoming = [...(upcomingMovies.results || []), ...(airingTv.results || [])];
+    // Upcoming: movies that genuinely haven't released yet. TMDB's
+    // /movie/upcoming is region-gated (defaults to US) and can include
+    // titles already out elsewhere, and /tv/airing_today is shows airing
+    // TODAY (i.e. already out) — not upcoming — so that was the bug: mixing
+    // in already-released/airing titles. We now request the IN region and
+    // also hard-filter by release_date so nothing already released slips in.
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const upcomingMovies = await tmdb("/movie/upcoming?region=IN");
+    const upcoming = (upcomingMovies.results || [])
+      .filter(m => m.release_date && m.release_date > todayISO)
+      .sort((a, b) => a.release_date.localeCompare(b.release_date));
     renderRow("upcomingRow", upcoming.slice(0, 15));
+    renderRow("homeUpcomingRow", upcoming.slice(0, 15));
   } catch (err) {
     console.error("TMDB refresh failed", err);
     if (isFirstLoad) {
