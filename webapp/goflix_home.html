@@ -404,7 +404,15 @@
   .detail-hero img{width:100%;height:100%;object-fit:cover;}
   .detail-hero .hero-fade{position:absolute;inset:0;background:linear-gradient(180deg, rgba(7,8,13,.1) 0%, rgba(7,8,13,.2) 40%, var(--bg) 96%);}
   .detail-back{position:absolute;top:16px;left:16px;z-index:5;width:38px;height:38px;border-radius:50%;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;}
-  .detail-body{padding:0 18px;margin-top:-56px;position:relative;z-index:2;}
+  .detail-body{padding:0 18px;margin-top:-56px;position:relative;z-index:2;transition:margin-top .25s ease;}
+  /* While the GOFLIX in-app player is playing inline inside the hero
+     (Netflix-style — see goInline in the script), cancel the -56px "climb
+     into the poster fade" pull. That negative margin is only meant to tuck
+     the title into the backdrop image's gradient; with a live video there,
+     it instead dragged the title/rating/genre-tags/Watch-Download buttons
+     up on top of the player's own bottom control bar (seek bar, «10s/play/
+     10s», 1x, quality, fullscreen) — exactly the overlap bug being fixed. */
+  #view-detail.player-inline .detail-body{margin-top:0;}
   .detail-title{font-size:24px;font-weight:800;line-height:1.15;margin-bottom:8px;}
   .detail-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:14px;color:var(--text-dim);margin-bottom:10px;}
   .detail-meta .rating{font-size:14px;}
@@ -1940,11 +1948,13 @@ async function openGoflixPlayer(item, resolved, file){
     goInline = true;
     goDetailHero.appendChild(goEl.player);
     goEl.player.classList.add("inline");
+    document.getElementById("view-detail").classList.add("player-inline");
     document.body.style.overflow = "";
   } else {
     goInline = false;
     goBodyParent.appendChild(goEl.player);
     goEl.player.classList.remove("inline");
+    document.getElementById("view-detail").classList.remove("player-inline");
     document.body.style.overflow = "hidden";
   }
 
@@ -1964,6 +1974,7 @@ function closeGoflixPlayer(){
   goEl.video.removeAttribute("src");
   goEl.video.load();
   goEl.player.classList.remove("open");
+  document.getElementById("view-detail").classList.remove("player-inline");
   document.body.style.overflow = "";
   if (document.fullscreenElement) (document.exitFullscreen || (() => {})).call(document);
   // Put the player back in its normal fixed-overlay home so the next
@@ -2197,7 +2208,7 @@ goEl.qualityBtn.addEventListener("click", () => {
 async function goEnterFullscreenLandscape(){
   // Promote out of the inline poster slot into the normal fixed overlay
   // first — you can't usefully fullscreen a 52vh-tall container.
-  if (goInline) { goEl.player.classList.remove("inline"); goBodyParent.appendChild(goEl.player); document.body.style.overflow = "hidden"; }
+  if (goInline) { goEl.player.classList.remove("inline"); goBodyParent.appendChild(goEl.player); document.getElementById("view-detail").classList.remove("player-inline"); document.body.style.overflow = "hidden"; }
   const req = goEl.player.requestFullscreen || goEl.player.webkitRequestFullscreen;
   try { if (req) await req.call(goEl.player); } catch (err) {}
   try { await screen.orientation.lock("landscape"); } catch (err) { /* iOS Safari has no orientation.lock — fullscreen video still rotates natively there */ }
@@ -2219,6 +2230,7 @@ document.addEventListener("fullscreenchange", () => {
     if (goInline && document.getElementById("view-detail").classList.contains("active") && goDetailHero) {
       goEl.player.classList.add("inline");
       goDetailHero.appendChild(goEl.player);
+      document.getElementById("view-detail").classList.add("player-inline");
       document.body.style.overflow = "";
     }
   }
