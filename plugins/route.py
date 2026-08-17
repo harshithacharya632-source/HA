@@ -149,13 +149,16 @@ async def me(request: web.Request):
 # ---------------- QUALITY LABEL PARSING (by file size) ----------------
 # Same thresholds as plugins/pm_filter.py's QUALITY_RANGES, kept in sync
 # manually to avoid importing the whole pm_filter module here.
+# Buckets requested: 4000MB / 3000MB / 2000MB / 1000MB / 500MB breakpoints.
+# Anything below 500MB has no matching range and falls through to the "SD"
+# default at the bottom of parse_quality() — no explicit entry needed for it.
 _MB = 1024 * 1024
 QUALITY_RANGES = {
-    "4k":   (3000 * _MB, 40000 * _MB),
-    "2k":   (2000 * _MB, 3000 * _MB),
-    "1080": (1300 * _MB, 2000 * _MB),
-    "720":  (500 * _MB, 1300 * _MB),
-    "480":  (0, 500 * _MB),
+    "4k":   (4000 * _MB, 100000 * _MB),
+    "2k":   (3000 * _MB, 4000 * _MB),
+    "1080": (2000 * _MB, 3000 * _MB),
+    "720":  (1000 * _MB, 2000 * _MB),
+    "480":  (500 * _MB, 1000 * _MB),
 }
 QUALITY_LABELS = {"4k": "4K", "2k": "2K", "1080": "1080p", "720": "720p", "480": "480p"}
 QUALITY_ORDER = ["4k", "2k", "1080", "720", "480"]
