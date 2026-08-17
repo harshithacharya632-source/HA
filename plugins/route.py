@@ -529,16 +529,37 @@ async def media_streamer(
 ):
     range_header = request.headers.get("Range", None)
 
-    # pick least-loaded client
-    index = min(work_loads, key=work_loads.get)
-    client = multi_clients[index]
+    # pick least-loaded client, but don't let one flaky client session turn
+    # into a false 404 — if it can't resolve the file, try the others before
+    # giving up. (This is the fix for "file forwarded to the log channel
+    # fine, but the stream/watch URL still 404s": a single client's session
+    # occasionally can't resolve a very-recently-forwarded message yet.)
+    tried = set()
+    file_id = None
+    last_err = None
+    ordered_indexes = sorted(work_loads, key=work_loads.get)
+    for index in ordered_indexes:
+        if index in tried:
+            continue
+        tried.add(index)
+        client = multi_clients[index]
+        tg = class_cache.get(client)
+        if not tg:
+            tg = ByteStreamer(client)
+            class_cache[client] = tg
+        try:
+            file_id = await tg.get_file_properties(id)
+            break
+        except FIleNotFound:
+            raise
+        except Exception as e:
+            last_err = e
+            logging.warning(f"get_file_properties failed on client {index} for id={id}, trying next: {e}")
+            continue
 
-    tg = class_cache.get(client)
-    if not tg:
-        tg = ByteStreamer(client)
-        class_cache[client] = tg
-
-    file_id = await tg.get_file_properties(id)
+    if file_id is None:
+        logging.exception(last_err)
+        raise FIleNotFound
 
     if file_id.unique_id[:6] != secure_hash:
         raise InvalidHash
@@ -576,17 +597,32 @@ async def media_streamer(
     part_count = math.ceil((end + 1) / chunk_size) - math.floor(offset / chunk_size)
     length = end - start + 1
 
-    # ---------------- MIME FIX (CRITICAL FOR VLC/MX) ----------------
+    # ---------------- MIME FIX (CRITICAL FOR VLC/MX AND THE IN-BROWSER PLAYER) ----------------
+    # Telegram frequently drops/mangles mime_type on video uploads (or hands
+    # back a generic "application/octet-stream"). The old fallback only
+    # covered .mp4/.mkv/.avi and defaulted everything else — including a
+    # perfectly playable .mov/.webm/.m4v/.ts, or an mp4 with a weird mime —
+    # to application/octet-stream. Browsers refuse to even attempt inline
+    # playback for that content-type, so the <video> tag fires an instant
+    # "error" event and the app wrongly falls back to "open in VLC/MX" for
+    # files that could have played fine in-browser. Trust an existing
+    # video/* mime as-is; otherwise map by extension; otherwise assume
+    # video/mp4 (this bot only ever serves videos) instead of a type that
+    # guarantees browser refusal.
     mime = file_id.mime_type
-    if not mime or mime == "application/octet-stream":
-        if file_name.lower().endswith(".mp4"):
-            mime = "video/mp4"
-        elif file_name.lower().endswith(".mkv"):
-            mime = "video/x-matroska"
-        elif file_name.lower().endswith(".avi"):
-            mime = "video/x-msvideo"
-        else:
-            mime = "application/octet-stream"
+    if not mime or not mime.startswith("video/"):
+        ext_map = {
+            ".mp4": "video/mp4", ".m4v": "video/mp4",
+            ".mkv": "video/x-matroska",
+            ".avi": "video/x-msvideo",
+            ".mov": "video/quicktime",
+            ".webm": "video/webm",
+            ".ts": "video/mp2t",
+            ".flv": "video/x-flv",
+            ".3gp": "video/3gpp",
+        }
+        lower_name = file_name.lower()
+        mime = next((v for ext, v in ext_map.items() if lower_name.endswith(ext)), "video/mp4")
 
     response = web.StreamResponse(
         status=status,
