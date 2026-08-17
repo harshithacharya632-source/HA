@@ -183,12 +183,38 @@ class ByteStreamer:
         current_part = 1
         location = await self.get_location(file_id)
 
-        try:
-            r = await media_session.send(
-                raw.functions.upload.GetFile(
-                    location=location, offset=offset, limit=chunk_size
-                ),
+        # A transient MTProto hiccup (dropped connection, a session that
+        # needs re-auth, a momentary Telegram-side timeout) used to just
+        # silently end the generator here with no log line at all — the
+        # HTTP response would stop short of its promised Content-Length and
+        # the browser/player would sit there "loading" forever with zero
+        # trace of why. Retry each chunk fetch a few times with a short
+        # backoff before actually giving up, and always log the final
+        # failure so a stuck stream is diagnosable instead of a silent
+        # black hole.
+        async def _get_file(off):
+            last_exc = None
+            for attempt in range(3):
+                try:
+                    return await media_session.send(
+                        raw.functions.upload.GetFile(
+                            location=location, offset=off, limit=chunk_size
+                        ),
+                    )
+                except (TimeoutError, ConnectionError, OSError, AttributeError) as e:
+                    last_exc = e
+                    logging.warning(
+                        f"GetFile failed for id-ish offset={off} (attempt {attempt + 1}/3), "
+                        f"client {index}: {e!r}"
+                    )
+                    await asyncio.sleep(0.5 * (attempt + 1))
+            logging.exception(
+                f"GetFile permanently failed at offset={off} after 3 attempts, client {index}: {last_exc!r}"
             )
+            raise last_exc
+
+        try:
+            r = await _get_file(offset)
             if isinstance(r, raw.types.upload.File):
                 while True:
                     chunk = r.bytes
@@ -209,13 +235,9 @@ class ByteStreamer:
                     if current_part > part_count:
                         break
 
-                    r = await media_session.send(
-                        raw.functions.upload.GetFile(
-                            location=location, offset=offset, limit=chunk_size
-                        ),
-                    )
-        except (TimeoutError, AttributeError):
-            pass
+                    r = await _get_file(offset)
+        except (TimeoutError, ConnectionError, OSError, AttributeError) as e:
+            logging.exception(f"yield_file aborted early for client {index}: {e!r}")
         finally:
             logging.debug("Finished yielding file with {current_part} parts.")
             work_loads[index] -= 1
