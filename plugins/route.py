@@ -303,6 +303,52 @@ async def list_qualities(request: web.Request):
 
 
 
+# ---------------- SEARCH: your own Telegram catalog (checked before/alongside TMDB) ----------------
+# The frontend's search box was TMDB-only (title metadata/posters), which
+# means a file that's actually sitting in the DB could still show up as "no
+# results" if TMDB's public search doesn't have a great match for what was
+# typed (regional titles, alt spellings, etc). This lets the frontend check
+# our own catalog too — same normalize_query() + get_search_results() used
+# everywhere else — and merge that in alongside the TMDB grid. No premium
+# gate here: like /api/language, this is just browsing/listing; the gate
+# stays on /api/resolve where a file actually gets streamed/downloaded.
+@routes.post("/api/search")
+async def search_catalog(request: web.Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="expected JSON body")
+
+    query = (body.get("query") or "").strip()
+    if not query:
+        raise web.HTTPBadRequest(text="missing 'query'")
+
+    user = validate_init_data(body.get("init_data", ""))
+    if not user:
+        raise web.HTTPUnauthorized(text="invalid or missing Telegram initData")
+    user_id = user.get("id")
+
+    try:
+        limit = min(int(body.get("limit") or 20), 40)
+    except (TypeError, ValueError):
+        limit = 20
+
+    files, _, _ = await get_search_results(
+        user_id, normalize_query(query), max_results=limit, need_count=False
+    )
+    results = [
+        {
+            "file_id": f["file_id"],
+            "name": f.get("file_name", ""),
+            "quality": parse_quality(f.get("file_size")),
+            "size": format_size(f.get("file_size")),
+            "languages": _detect_languages(f.get("file_name", "")),
+        }
+        for f in files
+    ]
+    return web.json_response({"query": query, "files": results})
+
+
 # ---------------- LANGUAGES: list configured languages for the picker ----------------
 @routes.get("/api/languages", allow_head=True)
 async def list_languages(request: web.Request):
