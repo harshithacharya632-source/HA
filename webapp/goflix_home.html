@@ -569,6 +569,10 @@
   /* While actually playing, the big center circle hides — it only reappears
      when paused, or briefly while the chrome is toggled visible again. */
   .goplayer.is-playing .goplayer-center-play{opacity:0;transform:scale(.8);pointer-events:none;}
+  /* Don't show the "tap to play" button underneath the loading spinner —
+     they're both centered in the same spot and stacking both looked like
+     a broken double-loading indicator. Spinner wins while it's up. */
+  .goplayer-spinner.show ~ .goplayer-ui .goplayer-center-play{opacity:0;pointer-events:none;}
 
   .goplayer-bottom{
     padding:24px 16px calc(14px + env(safe-area-inset-bottom));
@@ -1808,8 +1812,13 @@ async function openWatchSheet(item, action = "watch"){
       const preferred = effectivePreferredQuality();
       const best = (preferred && sheetFiles.find(f => f.quality === preferred)) || sheetFiles[0];
       const resolved = await resolveStream(item, best.file_id);
-      const { directStreamUrl, webPlayerUrl } = buildStreamUrls(resolved);
-      goEl.external.dataset.url = webPlayerUrl;
+      const { directStreamUrl } = buildStreamUrls(resolved);
+      // The VLC/MX button (and the error-card fallback) needs the raw
+      // media URL, same one the in-page <video> tag uses — NOT the /watch
+      // HTML wrapper page. That page is a browser-only fallback UI, not a
+      // playable media stream, so handing it to an external player app
+      // just 404s/fails there. This was the "VLC says 404" bug.
+      goEl.external.dataset.url = directStreamUrl;
       goEl.qualityBtn.textContent = best.quality || "Auto";
       await goLoadSource(directStreamUrl, { autoplay: true });
     } catch (err) {
@@ -2074,8 +2083,9 @@ function openGoflixPlayerShell(item){
 
 async function openGoflixPlayer(item, resolved, file){
   openGoflixPlayerShell(item);
-  const { directStreamUrl, webPlayerUrl } = buildStreamUrls(resolved);
-  goEl.external.dataset.url = webPlayerUrl;
+  const { directStreamUrl } = buildStreamUrls(resolved);
+  // Raw media URL for VLC/MX, not the /watch HTML wrapper — see note above.
+  goEl.external.dataset.url = directStreamUrl;
   goEl.qualityBtn.textContent = file?.quality || "Auto";
   try {
     await goLoadSource(directStreamUrl, { autoplay: true });
@@ -2111,14 +2121,31 @@ goEl.noAudioExternal.addEventListener("click", goOpenExternal);
 goEl.errorClose.addEventListener("click", closeGoflixPlayer);
 
 // Stall watchdog: "waiting" alone (buffering mid-playback) is normal and
-// just shows the spinner. But if playback never actually starts/resumes
-// within 20s of buffering — a genuinely stuck stream (dead byte-range
-// response from the server, network drop, etc.) — surface the error
-// overlay instead of spinning forever with no explanation.
+// just shows the spinner. Most real-world "stuck, spinning forever" cases
+// are a transient hiccup — a dead byte-range response, a Telegram media
+// session that needs re-establishing — not a genuinely unplayable file. So
+// before giving up: at ~8s, silently reload the exact same URL at the
+// current position in the background (no error shown, spinner just keeps
+// spinning) and see if that clears it. Only if that ALSO doesn't recover
+// within 20s total do we surface the error overlay — a stream that's
+// really dead, not just stuttering.
 let goStallTimer = null;
+let goStallRetryTimer = null;
+let goStallRetried = false;
 goEl.video.addEventListener("waiting", () => {
   goEl.spinner.classList.add("show");
   clearTimeout(goStallTimer);
+  clearTimeout(goStallRetryTimer);
+  goStallRetryTimer = setTimeout(() => {
+    if ((goEl.video.paused || goEl.video.readyState < 3) && !goStallRetried && goEl.video.currentSrc) {
+      goStallRetried = true;
+      goLoadSource(goEl.video.currentSrc, {
+        resumeAt: goEl.video.currentTime,
+        autoplay: true,
+        resetUI: false,
+      }).catch(() => {});
+    }
+  }, 8000);
   goStallTimer = setTimeout(() => {
     if (goEl.video.paused || goEl.video.readyState < 3) {
       goEl.spinner.classList.remove("show");
@@ -2126,8 +2153,8 @@ goEl.video.addEventListener("waiting", () => {
     }
   }, 20000);
 });
-goEl.video.addEventListener("canplay", () => { goEl.spinner.classList.remove("show"); clearTimeout(goStallTimer); });
-goEl.video.addEventListener("playing", () => clearTimeout(goStallTimer));
+goEl.video.addEventListener("canplay", () => { goEl.spinner.classList.remove("show"); clearTimeout(goStallTimer); clearTimeout(goStallRetryTimer); });
+goEl.video.addEventListener("playing", () => { clearTimeout(goStallTimer); clearTimeout(goStallRetryTimer); goStallRetried = false; });
 goEl.video.addEventListener("playing", () => {
   goEl.spinner.classList.remove("show");
   goEl.playPause.innerHTML = `<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>`;
@@ -2281,13 +2308,15 @@ let goLoadingInProgress = false;
    instead of failing outright. A visible "no audio" banner explains why,
    with a one-tap way to open it in VLC/MX for real audio. Only if even the
    muted attempt fails do we treat it as a genuine unplayable file. */
-function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _retryMuted = false } = {}){
+function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _retryMuted = false, resetUI = true } = {}){
   goLoadingInProgress = true;
   return new Promise((resolve, reject) => {
-    goEl.seekFill.style.width = "0%";
-    goEl.seekBuffer.style.width = "0%";
-    goEl.seekThumb.style.left = "0%";
-    goEl.timeCur.textContent = "0:00";
+    if (resetUI) {
+      goEl.seekFill.style.width = "0%";
+      goEl.seekBuffer.style.width = "0%";
+      goEl.seekThumb.style.left = "0%";
+      goEl.timeCur.textContent = "0:00";
+    }
     goEl.spinner.classList.add("show");
     if (!_retryMuted) goNoAudioNotice(false);
     goEl.video.pause();
@@ -2340,7 +2369,7 @@ function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _
       settled = true;
       cleanup();
       if (!_retryMuted) {
-        goLoadSource(url, { resumeAt, autoplay, timeoutMs, _retryMuted: true }).then(resolve, reject);
+        goLoadSource(url, { resumeAt, autoplay, timeoutMs, _retryMuted: true, resetUI }).then(resolve, reject);
         return;
       }
       goLoadingInProgress = false;
@@ -2372,8 +2401,8 @@ goEl.qualityBtn.addEventListener("click", () => {
       goEl.qualityBtn.textContent = "…";
       try {
         const resolved = await resolveStream(goCurrentItem, f.file_id);
-        const { directStreamUrl, webPlayerUrl } = buildStreamUrls(resolved);
-        goEl.external.dataset.url = webPlayerUrl;
+        const { directStreamUrl } = buildStreamUrls(resolved);
+        goEl.external.dataset.url = directStreamUrl;
         await goLoadSource(directStreamUrl, { resumeAt, autoplay: wasPlaying });
         goEl.qualityBtn.textContent = f.quality;
       } catch (err) {
