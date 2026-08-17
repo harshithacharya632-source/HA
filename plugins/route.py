@@ -5,6 +5,7 @@ import logging
 import hashlib
 import hmac
 import json as _json
+import difflib
 from urllib.parse import parse_qsl
 
 import aiohttp
@@ -256,6 +257,89 @@ def _build_queries(title, year, season, episode):
     return queries
 
 
+# ---------------- MATCH RANKING: pick the right file, not just the first hit ----------------
+# get_search_results() does the actual DB text search (that ranking is out of
+# our hands — it lives in database/ia_filterdb.py) but the old code here just
+# trusted whatever came back first from the first query variant that returned
+# anything. For a title with a common/short name, or filenames with heavy
+# quality/codec/language tagging, that's not reliable enough — this adds an
+# explicit "does this filename actually look like the requested title/episode"
+# score on top, so a weak/unrelated hit doesn't get chosen over the real one.
+_EPISODE_TAG_PATTERNS_CACHE = {}
+
+def _episode_tag_patterns(season, episode):
+    key = (season, episode)
+    if key not in _EPISODE_TAG_PATTERNS_CACHE:
+        s, e = int(season), int(episode)
+        _EPISODE_TAG_PATTERNS_CACHE[key] = [
+            re.compile(rf"s0*{s}e0*{e}(?!\d)"),
+            re.compile(rf"s0*{s}\s*e0*{e}(?!\d)"),
+            re.compile(rf"(?<!\d){s}x0*{e}(?!\d)"),
+            re.compile(rf"(?<!\d)e0*{e}(?!\d)"),
+            re.compile(rf"ep0*{e}(?!\d)"),
+        ]
+    return _EPISODE_TAG_PATTERNS_CACHE[key]
+
+def _title_match_score(title, filename):
+    """0..1: how much does this filename actually look like the requested
+    title? Word overlap (robust against quality/codec tags mixed into the
+    filename) blended with a whole-string similarity (rewards matching word
+    order, not just matching word *set*)."""
+    clean_title = normalize_query(title)
+    clean_name = normalize_query(filename or "")
+    if not clean_title or not clean_name:
+        return 0.0
+    title_words = [w for w in clean_title.split() if len(w) > 1]  # drop single-char noise
+    if not title_words:
+        return 0.0
+    name_words = set(clean_name.split())
+    overlap = sum(1 for w in title_words if w in name_words) / len(title_words)
+    seq = difflib.SequenceMatcher(None, clean_title, clean_name[:len(clean_title) + 24]).ratio()
+    return 0.7 * overlap + 0.3 * seq
+
+def _rank_candidates(title, files, season=None, episode=None):
+    """Score + sort candidates best-match-first, dropping ones too weak to
+    trust. Returns a list of (score, file) tuples, highest score first."""
+    scored = []
+    for f in files:
+        name = f.get("file_name", "") or ""
+        score = _title_match_score(title, name)
+        if season and episode:
+            # A specific episode was asked for — a filename that doesn't
+            # actually carry that episode's tag is almost certainly the
+            # wrong file (season pack, different episode, the movie cut),
+            # even if the show's title matched perfectly. Penalize hard
+            # instead of silently accepting it.
+            name_norm = re.sub(r"[.\-_]", " ", name.lower())
+            if not any(p.search(name_norm) for p in _episode_tag_patterns(season, episode)):
+                score *= 0.15
+        scored.append((score, f))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    # Floor: anything scoring below this is more likely unrelated than
+    # correct, so it's better left out than silently offered as a "match."
+    return [pair for pair in scored if pair[0] >= 0.2]
+
+async def _search_and_rank(user_id, title, year, season, episode, max_results):
+    """Try each query variant (see _build_queries), rank what each returns,
+    and keep the best-scoring set overall — stopping early once a variant
+    returns a confident match instead of blindly trusting query order."""
+    queries = _build_queries(title, year, season, episode)
+    best_ranked, best_top_score = [], -1.0
+    for q in queries:
+        raw, _, _ = await get_search_results(user_id, q, max_results=max_results, need_count=False)
+        if not raw:
+            continue
+        ranked = _rank_candidates(title, raw, season, episode)
+        if not ranked:
+            continue
+        top_score = ranked[0][0]
+        if top_score > best_top_score:
+            best_top_score, best_ranked = top_score, ranked
+        if top_score >= 0.55:  # confident enough — no need to try weaker query variants
+            break
+    return [f for _score, f in best_ranked]
+
+
 _LANGUAGE_PATTERNS = [
     (l["code"], [re.compile(rf"(?<![a-z0-9]){re.escape(a)}(?![a-z0-9])", re.IGNORECASE) for a in l["aliases"]])
     for l in LANGUAGES
@@ -294,12 +378,12 @@ async def list_qualities(request: web.Request):
     if premium_block:
         return premium_block
 
-    queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
-    files = []
-    for q in queries:
-        files, _, _ = await get_search_results(user_id, q, max_results=10, need_count=False)
-        if files:
-            break
+    year, season, episode = body.get("year"), body.get("season"), body.get("episode")
+    files = await _search_and_rank(user_id, title, year, season, episode, max_results=10)
+    logging.info(
+        f"[qualities] title={title!r} year={year} s={season} e={episode} "
+        f"-> {len(files)} ranked candidate(s): {[f.get('file_name') for f in files][:5]}"
+    )
 
     results = [
         {
@@ -472,15 +556,17 @@ async def resolve_stream(request: web.Request):
         # A specific quality was already chosen via /api/qualities — just send that one.
         candidates = [{"file_id": explicit_file_id}]
     else:
-        # Fallback: no quality picker was used, search and try matches in order.
-        queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
-        candidates = []
-        for q in queries:
-            candidates, _, _ = await get_search_results(user_id, q, max_results=5, need_count=False)
-            if candidates:
-                break
+        # Fallback: no quality picker was used — rank-search instead of
+        # trusting the first query variant's raw (unranked) results.
+        candidates = await _search_and_rank(
+            user_id, title, body.get("year"), body.get("season"), body.get("episode"), max_results=5
+        )
         if not candidates:
             raise web.HTTPNotFound(text="no matching file found")
+    logging.info(
+        f"[resolve] title={title!r} explicit_file_id={'yes' if explicit_file_id else 'no'} "
+        f"-> {len(candidates)} candidate(s) to try"
+    )
 
     index = min(work_loads, key=work_loads.get)
     client = multi_clients[index]
@@ -503,13 +589,10 @@ async def resolve_stream(request: web.Request):
     # the whole request when a working copy of the same title exists.
     if log_msg is None and title:
         already_tried = {c.get("file_id") for c in candidates}
-        queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
-        fallback_candidates = []
-        for q in queries:
-            found, _, _ = await get_search_results(user_id, q, max_results=8, need_count=False)
-            fallback_candidates = [f for f in found if f.get("file_id") not in already_tried]
-            if fallback_candidates:
-                break
+        ranked = await _search_and_rank(
+            user_id, title, body.get("year"), body.get("season"), body.get("episode"), max_results=8
+        )
+        fallback_candidates = [f for f in ranked if f.get("file_id") not in already_tried]
         for candidate in fallback_candidates:
             try:
                 log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=candidate["file_id"])
@@ -529,6 +612,9 @@ async def resolve_stream(request: web.Request):
             status=502,
         )
 
+    logging.info(
+        f"[resolve] SUCCESS title={title!r} -> log_msg_id={log_msg.id} name={get_name(log_msg)!r}"
+    )
     return web.json_response(
         {
             "id": log_msg.id,
