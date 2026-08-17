@@ -231,9 +231,25 @@ async def _check_premium_or_402(user_id):
 
 def _build_queries(title, year, season, episode):
     clean = normalize_query(title)
-    queries = []
     if season and episode:
-        queries.append(f"{clean} S{int(season):02d}E{int(episode):02d}")
+        s, e = int(season), int(episode)
+        # Try the common episode-tag conventions uploaders actually use, in
+        # order. Crucially, we do NOT fall through to a bare-title (or
+        # title+year) query once a specific episode was asked for: that would
+        # happily match a totally different file for the same show -- a
+        # season pack, a different episode, even the movie cut -- and
+        # silently stream the wrong runtime (e.g. a 66m episode request
+        # ending up on a 4h52m file). Every candidate below still pins the
+        # episode.
+        return [
+            f"{clean} S{s:02d}E{e:02d}",
+            f"{clean} S{s:02d} E{e:02d}",
+            f"{clean} {s}x{e:02d}",
+            f"{clean} E{e:02d}",
+            f"{clean} EP{e:02d}",
+            f"{clean} episode {e}",
+        ]
+    queries = []
     if year:
         queries.append(f"{clean} {year}")
     queries.append(clean)
