@@ -540,8 +540,8 @@
   .gp-icon:active{transform:scale(.88);background:rgba(255,255,255,.25);}
   .gp-icon svg{width:18px;height:18px;fill:none;stroke:#fff;stroke-width:2;}
   .gp-icon.gp-play svg{fill:#fff;}
-  .gp-icon.gp-text{width:auto;padding:0 12px;font-size:12.5px;font-weight:800;}
-  .gp-spacer{flex:1;}
+  .gp-icon.gp-text{width:auto;min-width:0;padding:0 10px;font-size:12px;font-weight:800;white-space:nowrap;}
+  .gp-spacer{flex:1 1 auto;min-width:4px;}
   .gp-pill{
     display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;
     background:rgba(255,255,255,.14);color:#fff;font-size:12.5px;font-weight:700;flex:0 0 auto;
@@ -554,9 +554,13 @@
     align-self:center;margin:auto;width:64px;height:64px;border-radius:50%;
     background:rgba(0,0,0,.45);border:2px solid rgba(255,255,255,.5);
     display:flex;align-items:center;justify-content:center;
+    opacity:1;transition:opacity .18s ease,transform .18s ease;
   }
   .goplayer-center-play svg{width:26px;height:26px;fill:#fff;margin-left:3px;}
   .goplayer-center-play:active{transform:scale(.9);}
+  /* While actually playing, the big center circle hides — it only reappears
+     when paused, or briefly while the chrome is toggled visible again. */
+  .goplayer.is-playing .goplayer-center-play{opacity:0;transform:scale(.8);pointer-events:none;}
 
   .goplayer-bottom{
     padding:24px 16px calc(14px + env(safe-area-inset-bottom));
@@ -576,7 +580,7 @@
     transform:translate(-50%,-50%);box-shadow:0 0 0 4px rgba(229,9,20,.25);
   }
   .goplayer-time-row{display:flex;justify-content:space-between;color:rgba(255,255,255,.75);font-size:11.5px;font-weight:600;margin-top:6px;font-variant-numeric:tabular-nums;}
-  .goplayer-controls-row{display:flex;align-items:center;gap:8px;margin-top:10px;}
+  .goplayer-controls-row{display:flex;align-items:center;gap:6px;margin-top:10px;}
 
   .goplayer-inline-slider{
     display:flex;align-items:center;gap:10px;margin-top:12px;padding:8px 4px;
@@ -959,23 +963,9 @@
           <div class="gp-spacer"></div>
           <button class="gp-icon gp-text" id="goSpeedBtn">1x</button>
           <button class="gp-icon gp-text" id="goQualityBtn">Auto</button>
-          <button class="gp-icon" id="goVolumeBtn">
-            <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9z"/><path d="M17 8a5 5 0 0 1 0 8"/></svg>
-          </button>
-          <button class="gp-icon" id="goBrightBtn">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-          </button>
           <button class="gp-icon" id="goFullscreenBtn">
             <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
           </button>
-        </div>
-        <div class="goplayer-inline-slider hidden" id="goVolumeSliderRow">
-          <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9z"/></svg>
-          <input type="range" id="goVolumeRange" min="0" max="100" value="100">
-        </div>
-        <div class="goplayer-inline-slider hidden" id="goBrightSliderRow">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></svg>
-          <input type="range" id="goBrightRange" min="30" max="200" value="100">
         </div>
       </div>
     </div>
@@ -1885,12 +1875,6 @@ const goEl = {
   speedBtn: document.getElementById("goSpeedBtn"),
   qualityBtn: document.getElementById("goQualityBtn"),
   qualityMenu: document.getElementById("goQualityMenu"),
-  volumeBtn: document.getElementById("goVolumeBtn"),
-  volumeRow: document.getElementById("goVolumeSliderRow"),
-  volumeRange: document.getElementById("goVolumeRange"),
-  brightBtn: document.getElementById("goBrightBtn"),
-  brightRow: document.getElementById("goBrightSliderRow"),
-  brightRange: document.getElementById("goBrightRange"),
   fullscreenBtn: document.getElementById("goFullscreenBtn"),
   spinner: document.getElementById("goSpinner"),
   indicator: document.getElementById("goIndicator"),
@@ -1905,6 +1889,7 @@ let goCurrentItem = null;
 let goHideTimer = null;
 let goBrightness = 1;
 let goInline = false; // true while the player lives inside the detail-page poster slot
+let goHistoryRecorded = false; // per-item guard so recordHistory only fires once
 const goBodyParent = document.body; // the player's normal fixed-overlay home
 const goDetailHero = document.querySelector("#view-detail .detail-hero");
 
@@ -1930,8 +1915,6 @@ function goShowControls(persist){
 }
 function goCloseAllPopovers(){
   goEl.qualityMenu.classList.add("hidden");
-  goEl.volumeRow.classList.add("hidden");
-  goEl.brightRow.classList.add("hidden");
 }
 
 async function openGoflixPlayer(item, resolved, file){
@@ -1967,6 +1950,7 @@ async function openGoflixPlayer(item, resolved, file){
 
   goEl.player.classList.add("open");
   goShowControls();
+  goHistoryRecorded = false;
   try {
     await goLoadSource(directStreamUrl, { autoplay: true });
   } catch (e) {
@@ -1974,7 +1958,6 @@ async function openGoflixPlayer(item, resolved, file){
     // error overlay with the VLC/MX fallback is the right call here.
     goEl.error.classList.remove("hidden");
   }
-  recordHistory(item);
 }
 function closeGoflixPlayer(){
   goEl.video.pause();
@@ -2002,10 +1985,15 @@ goEl.video.addEventListener("canplay", () => goEl.spinner.classList.remove("show
 goEl.video.addEventListener("playing", () => {
   goEl.spinner.classList.remove("show");
   goEl.playPause.innerHTML = `<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>`;
+  // Big center button only makes sense as a "tap to play" affordance while
+  // paused — leaving a play triangle showing during active playback reads
+  // as "this is paused", which is exactly the confusion being fixed here.
+  goEl.player.classList.add("is-playing");
   goShowControls();
 });
 goEl.video.addEventListener("pause", () => {
   goEl.playPause.innerHTML = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
+  goEl.player.classList.remove("is-playing");
   goShowControls(true);
 });
 goEl.video.addEventListener("timeupdate", () => {
@@ -2014,6 +2002,16 @@ goEl.video.addEventListener("timeupdate", () => {
   goEl.seekFill.style.width = pct + "%";
   goEl.seekThumb.style.left = pct + "%";
   goEl.timeCur.textContent = goFmtTime(goEl.video.currentTime);
+  // Netflix-style: only show up in "Continue Watching" once the person has
+  // actually settled into the video (5 minutes in), not the instant they
+  // open it — otherwise every quick peek clutters the row.
+  if (!goHistoryRecorded && goCurrentItem) {
+    const threshold = Math.min(300, goEl.video.duration * 0.5); // handle sub-5-min clips gracefully
+    if (goEl.video.currentTime >= threshold) {
+      goHistoryRecorded = true;
+      recordHistory(goCurrentItem);
+    }
+  }
 });
 goEl.video.addEventListener("loadedmetadata", () => {
   goEl.timeDur.textContent = goFmtTime(goEl.video.duration);
@@ -2070,12 +2068,10 @@ function goSetupGestureZone(el, isVolume){
     if (isVolume) {
       goEl.video.volume = Math.min(1, Math.max(0, dragStart + delta));
       goEl.video.muted = false;
-      goEl.volumeRange.value = Math.round(goEl.video.volume * 100);
       goFlash("🔊 " + Math.round(goEl.video.volume * 100) + "%");
     } else {
       goBrightness = Math.min(2, Math.max(0.3, dragStart + delta));
       goEl.video.style.filter = `brightness(${goBrightness})`;
-      goEl.brightRange.value = Math.round(goBrightness * 100);
       goFlash("☀️ " + Math.round(goBrightness * 100) + "%");
     }
   });
@@ -2091,28 +2087,6 @@ function goSetupGestureZone(el, isVolume){
 }
 goSetupGestureZone(goEl.zoneLeft, false);
 goSetupGestureZone(goEl.zoneRight, true);
-
-/* Precise sliders (tap the icon to reveal) */
-goEl.volumeBtn.addEventListener("click", () => {
-  const wasHidden = goEl.volumeRow.classList.contains("hidden");
-  goCloseAllPopovers();
-  if (wasHidden) { goEl.volumeRow.classList.remove("hidden"); goEl.volumeRange.value = Math.round(goEl.video.volume * 100); }
-  goShowControls(true);
-});
-goEl.volumeRange.addEventListener("input", () => {
-  goEl.video.volume = goEl.volumeRange.value / 100;
-  goEl.video.muted = false;
-});
-goEl.brightBtn.addEventListener("click", () => {
-  const wasHidden = goEl.brightRow.classList.contains("hidden");
-  goCloseAllPopovers();
-  if (wasHidden) { goEl.brightRow.classList.remove("hidden"); goEl.brightRange.value = Math.round(goBrightness * 100); }
-  goShowControls(true);
-});
-goEl.brightRange.addEventListener("input", () => {
-  goBrightness = goEl.brightRange.value / 100;
-  goEl.video.style.filter = `brightness(${goBrightness})`;
-});
 
 /* Playback speed */
 const GO_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
