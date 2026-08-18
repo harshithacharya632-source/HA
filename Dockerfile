@@ -31,28 +31,30 @@ FROM python:3.10-slim-bookworm
 # means it isn't really about temp-dir location — dpkg stages whole
 # directories (usr/share/doc/X, etc/perl, etc.) and atomically renames them
 # into place, and that's failing regardless of where the staging area is.
-# Skipping doc/man/changelog generation reduces how often dpkg's
-# directory-rename path gets hit, but it does NOT eliminate the underlying
-# bug — it's a real kernel/overlayfs limitation (EXDEV on directory renames
-# across overlay layers in some sandboxed builders, Koyeb's included), not
-# something fixable from inside this Dockerfile. The doc-exclusion trick
-# alone still leaves plenty of packages failing.
-# `git` has been dropped from this install entirely: nothing in this
-# codebase calls git and requirements.txt has no `git+https://` entries,
-# so it isn't needed at runtime. Its dependency chain (perl, libcurl3-gnutls,
-# libssh2-1, libldap, libsasl2-2, librtmp1, libnghttp2-14, libpsl5,
-# libbrotli1, liberror-perl, git-man...) accounted for the large majority
-# of packages that were hitting the rename bug above. Installing only
-# libmediainfo0v5 and its small dependency chain (libzen0v5, libtinyxml2-9,
-# libmms0) cuts the number of packages exposed to the bug way down.
-RUN mkdir -p /etc/dpkg/dpkg.cfg.d \
-    && printf 'path-exclude=/usr/share/doc/*\npath-exclude=/usr/share/man/*\npath-exclude=/usr/share/groff/*\npath-exclude=/usr/share/info/*\n' > /etc/dpkg/dpkg.cfg.d/01-nodoc \
-    && apt-mark hold ca-certificates \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends libmediainfo0v5 \
+# CONFIRMED (see latest build log): this is not about docs, not about git,
+# not about any specific package. The failure now hits real library paths
+# too (./usr/lib/sasl2, ./usr/lib/x86_64-linux-gnu/sasl2) on packages that
+# have nothing to do with docs or git. Every single package dpkg tries to
+# --unpack on this builder fails the same way, because dpkg's install path
+# always does an atomic backup-link + rename into place, and Koyeb's
+# sandboxed builder's overlayfs can't do that rename (EXDEV) full stop.
+# No dpkg.cfg.d exclusion or package-list trimming can route around this;
+# it's a kernel/overlayfs limitation, not something this Dockerfile can
+# negotiate with dpkg about.
+# THE ACTUAL FIX: skip dpkg's install/unpack path entirely. `apt-get
+# --download-only` just fetches the .deb files to /var/cache/apt/archives
+# without touching them. `dpkg-deb -x` then extracts a .deb the same way
+# `tar -x` would - plain file writes into the target tree, no atomic
+# rename, no backup-link step - so it never executes the code path that's
+# failing. This intentionally skips dpkg's package database (no `dpkg -l`
+# entry, no apt upgrade tracking for these libs), which is a fine trade
+# for a handful of runtime-only shared libraries in a single-purpose image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --download-only libmediainfo0v5 \
+    && for deb in /var/cache/apt/archives/*.deb; do dpkg-deb -x "$deb" /; done \
     && ln -sf $(find /usr/lib -name "libmediainfo.so*" | head -1) /usr/local/lib/libmediainfo.so.0 \
     && ldconfig \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb
 
 # Copy requirements and install Python deps
 COPY requirements.txt /requirements.txt
