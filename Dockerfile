@@ -31,14 +31,25 @@ FROM python:3.10-slim-bookworm
 # means it isn't really about temp-dir location — dpkg stages whole
 # directories (usr/share/doc/X, etc/perl, etc.) and atomically renames them
 # into place, and that's failing regardless of where the staging area is.
-# Skipping doc/man/changelog generation removes most of the directories
-# dpkg tries to build+rename this way, so most of these packages should
-# install cleanly even if the underlying sandbox quirk isn't truly fixed.
+# Skipping doc/man/changelog generation reduces how often dpkg's
+# directory-rename path gets hit, but it does NOT eliminate the underlying
+# bug — it's a real kernel/overlayfs limitation (EXDEV on directory renames
+# across overlay layers in some sandboxed builders, Koyeb's included), not
+# something fixable from inside this Dockerfile. The doc-exclusion trick
+# alone still leaves plenty of packages failing.
+# `git` has been dropped from this install entirely: nothing in this
+# codebase calls git and requirements.txt has no `git+https://` entries,
+# so it isn't needed at runtime. Its dependency chain (perl, libcurl3-gnutls,
+# libssh2-1, libldap, libsasl2-2, librtmp1, libnghttp2-14, libpsl5,
+# libbrotli1, liberror-perl, git-man...) accounted for the large majority
+# of packages that were hitting the rename bug above. Installing only
+# libmediainfo0v5 and its small dependency chain (libzen0v5, libtinyxml2-9,
+# libmms0) cuts the number of packages exposed to the bug way down.
 RUN mkdir -p /etc/dpkg/dpkg.cfg.d \
     && printf 'path-exclude=/usr/share/doc/*\npath-exclude=/usr/share/man/*\npath-exclude=/usr/share/groff/*\npath-exclude=/usr/share/info/*\n' > /etc/dpkg/dpkg.cfg.d/01-nodoc \
     && apt-mark hold ca-certificates \
     && apt-get update \
-    && apt-get install -y --no-install-recommends git libmediainfo0v5 \
+    && apt-get install -y --no-install-recommends libmediainfo0v5 \
     && ln -sf $(find /usr/lib -name "libmediainfo.so*" | head -1) /usr/local/lib/libmediainfo.so.0 \
     && ldconfig \
     && rm -rf /var/lib/apt/lists/*
