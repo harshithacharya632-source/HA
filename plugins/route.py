@@ -5,7 +5,6 @@ import logging
 import hashlib
 import hmac
 import json as _json
-import difflib
 from urllib.parse import parse_qsl
 
 import aiohttp
@@ -150,16 +149,13 @@ async def me(request: web.Request):
 # ---------------- QUALITY LABEL PARSING (by file size) ----------------
 # Same thresholds as plugins/pm_filter.py's QUALITY_RANGES, kept in sync
 # manually to avoid importing the whole pm_filter module here.
-# Buckets requested: 4000MB / 3000MB / 2000MB / 1000MB / 500MB breakpoints.
-# Anything below 500MB has no matching range and falls through to the "SD"
-# default at the bottom of parse_quality() — no explicit entry needed for it.
 _MB = 1024 * 1024
 QUALITY_RANGES = {
-    "4k":   (4000 * _MB, 100000 * _MB),
-    "2k":   (3000 * _MB, 4000 * _MB),
-    "1080": (2000 * _MB, 3000 * _MB),
-    "720":  (1000 * _MB, 2000 * _MB),
-    "480":  (500 * _MB, 1000 * _MB),
+    "4k":   (3000 * _MB, 40000 * _MB),
+    "2k":   (2000 * _MB, 3000 * _MB),
+    "1080": (1300 * _MB, 2000 * _MB),
+    "720":  (500 * _MB, 1300 * _MB),
+    "480":  (0, 500 * _MB),
 }
 QUALITY_LABELS = {"4k": "4K", "2k": "2K", "1080": "1080p", "720": "720p", "480": "480p"}
 QUALITY_ORDER = ["4k", "2k", "1080", "720", "480"]
@@ -232,112 +228,13 @@ async def _check_premium_or_402(user_id):
 
 def _build_queries(title, year, season, episode):
     clean = normalize_query(title)
-    if season and episode:
-        s, e = int(season), int(episode)
-        # Try the common episode-tag conventions uploaders actually use, in
-        # order. Crucially, we do NOT fall through to a bare-title (or
-        # title+year) query once a specific episode was asked for: that would
-        # happily match a totally different file for the same show -- a
-        # season pack, a different episode, even the movie cut -- and
-        # silently stream the wrong runtime (e.g. a 66m episode request
-        # ending up on a 4h52m file). Every candidate below still pins the
-        # episode.
-        return [
-            f"{clean} S{s:02d}E{e:02d}",
-            f"{clean} S{s:02d} E{e:02d}",
-            f"{clean} {s}x{e:02d}",
-            f"{clean} E{e:02d}",
-            f"{clean} EP{e:02d}",
-            f"{clean} episode {e}",
-        ]
     queries = []
+    if season and episode:
+        queries.append(f"{clean} S{int(season):02d}E{int(episode):02d}")
     if year:
         queries.append(f"{clean} {year}")
     queries.append(clean)
     return queries
-
-
-# ---------------- MATCH RANKING: pick the right file, not just the first hit ----------------
-# get_search_results() does the actual DB text search (that ranking is out of
-# our hands — it lives in database/ia_filterdb.py) but the old code here just
-# trusted whatever came back first from the first query variant that returned
-# anything. For a title with a common/short name, or filenames with heavy
-# quality/codec/language tagging, that's not reliable enough — this adds an
-# explicit "does this filename actually look like the requested title/episode"
-# score on top, so a weak/unrelated hit doesn't get chosen over the real one.
-_EPISODE_TAG_PATTERNS_CACHE = {}
-
-def _episode_tag_patterns(season, episode):
-    key = (season, episode)
-    if key not in _EPISODE_TAG_PATTERNS_CACHE:
-        s, e = int(season), int(episode)
-        _EPISODE_TAG_PATTERNS_CACHE[key] = [
-            re.compile(rf"s0*{s}e0*{e}(?!\d)"),
-            re.compile(rf"s0*{s}\s*e0*{e}(?!\d)"),
-            re.compile(rf"(?<!\d){s}x0*{e}(?!\d)"),
-            re.compile(rf"(?<!\d)e0*{e}(?!\d)"),
-            re.compile(rf"ep0*{e}(?!\d)"),
-        ]
-    return _EPISODE_TAG_PATTERNS_CACHE[key]
-
-def _title_match_score(title, filename):
-    """0..1: how much does this filename actually look like the requested
-    title? Word overlap (robust against quality/codec tags mixed into the
-    filename) blended with a whole-string similarity (rewards matching word
-    order, not just matching word *set*)."""
-    clean_title = normalize_query(title)
-    clean_name = normalize_query(filename or "")
-    if not clean_title or not clean_name:
-        return 0.0
-    title_words = [w for w in clean_title.split() if len(w) > 1]  # drop single-char noise
-    if not title_words:
-        return 0.0
-    name_words = set(clean_name.split())
-    overlap = sum(1 for w in title_words if w in name_words) / len(title_words)
-    seq = difflib.SequenceMatcher(None, clean_title, clean_name[:len(clean_title) + 24]).ratio()
-    return 0.7 * overlap + 0.3 * seq
-
-def _rank_candidates(title, files, season=None, episode=None):
-    """Score + sort candidates best-match-first, dropping ones too weak to
-    trust. Returns a list of (score, file) tuples, highest score first."""
-    scored = []
-    for f in files:
-        name = f.get("file_name", "") or ""
-        score = _title_match_score(title, name)
-        if season and episode:
-            # A specific episode was asked for — a filename that doesn't
-            # actually carry that episode's tag is almost certainly the
-            # wrong file (season pack, different episode, the movie cut),
-            # even if the show's title matched perfectly. Penalize hard
-            # instead of silently accepting it.
-            name_norm = re.sub(r"[.\-_]", " ", name.lower())
-            if not any(p.search(name_norm) for p in _episode_tag_patterns(season, episode)):
-                score *= 0.15
-        scored.append((score, f))
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    # Floor: anything scoring below this is more likely unrelated than
-    # correct, so it's better left out than silently offered as a "match."
-    return [pair for pair in scored if pair[0] >= 0.2]
-
-async def _search_and_rank(user_id, title, year, season, episode, max_results):
-    """Try each query variant (see _build_queries), rank what each returns,
-    and keep the best-scoring set overall — stopping early once a variant
-    returns a confident match instead of blindly trusting query order."""
-    queries = _build_queries(title, year, season, episode)
-    best_ranked, best_top_score = [], -1.0
-    for q in queries:
-        raw, _, _ = await get_search_results(user_id, q, max_results=max_results, need_count=False)
-        if not raw:
-            continue
-        ranked = _rank_candidates(title, raw, season, episode)
-        if not ranked:
-            continue
-        top_score = ranked[0][0]
-        if top_score > best_top_score:
-            best_top_score, best_ranked = top_score, ranked
-        if top_score >= 0.55:  # confident enough — no need to try weaker query variants
-            break
-    return [f for _score, f in best_ranked]
 
 
 _LANGUAGE_PATTERNS = [
@@ -355,6 +252,65 @@ def _detect_languages(filename):
         if any(p.search(name) for p in patterns):
             found.append(code)
     return found
+
+
+def guess_title_from_filename(filename):
+    """Best-effort: turn a raw uploaded filename into a human title guess,
+    by cutting everything off starting at the first quality/year/season/
+    codec/release-group tag. Used by /api/search to turn real DB filenames
+    into title strings the frontend can cross-check against TMDB."""
+    name = (filename or "").rsplit(".", 1)[0]  # drop extension
+    name = name.replace(".", " ").replace("_", " ").replace("-", " ")
+    cut_pattern = re.compile(
+        r"\b(19\d{2}|20\d{2}|S\d{1,2}E\d{1,3}|S\d{1,2}|E\d{1,3}|"
+        r"480p|720p|1080p|2160p|4K|HDRip|WEB[- ]?DL|WEBRip|BluRay|BRRip|"
+        r"DVDRip|HDTV|x264|x265|HEVC|AVC|AAC|DDP?5?\.?1|ESub|Esubs?)\b",
+        re.IGNORECASE,
+    )
+    m = cut_pattern.search(name)
+    if m:
+        name = name[: m.start()]
+    name = re.sub(r"\s+", " ", name).strip(" -_.")
+    return name.title()
+
+
+# ---------------- SEARCH: query the GoFlix file database directly ----------------
+# This is the fix for search showing a TMDB poster + title for something that
+# isn't actually uploaded: instead of only searching TMDB and hoping a file
+# exists, we search the bot's own Mongo file DB first (the same engine the
+# /api/qualities lookup and the bot's inline search use) and only return
+# titles that are genuinely present, for the frontend to then enrich with a
+# TMDB poster. No file in the DB -> it never shows up in search at all.
+@routes.post("/api/search")
+async def search_database(request: web.Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="expected JSON body")
+
+    query = (body.get("query") or "").strip()
+    if len(query) < 2:
+        return web.json_response({"titles": []})
+
+    user = validate_init_data(body.get("init_data", ""))
+    if not user:
+        raise web.HTTPUnauthorized(text="invalid or missing Telegram initData")
+    user_id = user.get("id")
+
+    try:
+        files, _, _ = await get_search_results(user_id, normalize_query(query), max_results=40, need_count=False)
+    except Exception as e:
+        logging.warning(f"/api/search DB lookup failed for query={query!r}: {e}")
+        files = []
+
+    seen = {}
+    for f in files:
+        guess = guess_title_from_filename(f.get("file_name", ""))
+        key = guess.lower()
+        if key and key not in seen:
+            seen[key] = guess
+
+    return web.json_response({"titles": list(seen.values())[:15]})
 
 
 # ---------------- QUALITIES: list every matching file for a title ----------------
@@ -378,12 +334,12 @@ async def list_qualities(request: web.Request):
     if premium_block:
         return premium_block
 
-    year, season, episode = body.get("year"), body.get("season"), body.get("episode")
-    files = await _search_and_rank(user_id, title, year, season, episode, max_results=10)
-    logging.info(
-        f"[qualities] title={title!r} year={year} s={season} e={episode} "
-        f"-> {len(files)} ranked candidate(s): {[f.get('file_name') for f in files][:5]}"
-    )
+    queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
+    files = []
+    for q in queries:
+        files, _, _ = await get_search_results(user_id, q, max_results=10, need_count=False)
+        if files:
+            break
 
     results = [
         {
@@ -401,52 +357,6 @@ async def list_qualities(request: web.Request):
 
     return web.json_response({"files": results})
 
-
-
-# ---------------- SEARCH: your own Telegram catalog (checked before/alongside TMDB) ----------------
-# The frontend's search box was TMDB-only (title metadata/posters), which
-# means a file that's actually sitting in the DB could still show up as "no
-# results" if TMDB's public search doesn't have a great match for what was
-# typed (regional titles, alt spellings, etc). This lets the frontend check
-# our own catalog too — same normalize_query() + get_search_results() used
-# everywhere else — and merge that in alongside the TMDB grid. No premium
-# gate here: like /api/language, this is just browsing/listing; the gate
-# stays on /api/resolve where a file actually gets streamed/downloaded.
-@routes.post("/api/search")
-async def search_catalog(request: web.Request):
-    try:
-        body = await request.json()
-    except Exception:
-        raise web.HTTPBadRequest(text="expected JSON body")
-
-    query = (body.get("query") or "").strip()
-    if not query:
-        raise web.HTTPBadRequest(text="missing 'query'")
-
-    user = validate_init_data(body.get("init_data", ""))
-    if not user:
-        raise web.HTTPUnauthorized(text="invalid or missing Telegram initData")
-    user_id = user.get("id")
-
-    try:
-        limit = min(int(body.get("limit") or 20), 40)
-    except (TypeError, ValueError):
-        limit = 20
-
-    files, _, _ = await get_search_results(
-        user_id, normalize_query(query), max_results=limit, need_count=False
-    )
-    results = [
-        {
-            "file_id": f["file_id"],
-            "name": f.get("file_name", ""),
-            "quality": parse_quality(f.get("file_size")),
-            "size": format_size(f.get("file_size")),
-            "languages": _detect_languages(f.get("file_name", "")),
-        }
-        for f in files
-    ]
-    return web.json_response({"query": query, "files": results})
 
 
 # ---------------- LANGUAGES: list configured languages for the picker ----------------
@@ -556,17 +466,15 @@ async def resolve_stream(request: web.Request):
         # A specific quality was already chosen via /api/qualities — just send that one.
         candidates = [{"file_id": explicit_file_id}]
     else:
-        # Fallback: no quality picker was used — rank-search instead of
-        # trusting the first query variant's raw (unranked) results.
-        candidates = await _search_and_rank(
-            user_id, title, body.get("year"), body.get("season"), body.get("episode"), max_results=5
-        )
+        # Fallback: no quality picker was used, search and try matches in order.
+        queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
+        candidates = []
+        for q in queries:
+            candidates, _, _ = await get_search_results(user_id, q, max_results=5, need_count=False)
+            if candidates:
+                break
         if not candidates:
             raise web.HTTPNotFound(text="no matching file found")
-    logging.info(
-        f"[resolve] title={title!r} explicit_file_id={'yes' if explicit_file_id else 'no'} "
-        f"-> {len(candidates)} candidate(s) to try"
-    )
 
     index = min(work_loads, key=work_loads.get)
     client = multi_clients[index]
@@ -589,10 +497,13 @@ async def resolve_stream(request: web.Request):
     # the whole request when a working copy of the same title exists.
     if log_msg is None and title:
         already_tried = {c.get("file_id") for c in candidates}
-        ranked = await _search_and_rank(
-            user_id, title, body.get("year"), body.get("season"), body.get("episode"), max_results=8
-        )
-        fallback_candidates = [f for f in ranked if f.get("file_id") not in already_tried]
+        queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
+        fallback_candidates = []
+        for q in queries:
+            found, _, _ = await get_search_results(user_id, q, max_results=8, need_count=False)
+            fallback_candidates = [f for f in found if f.get("file_id") not in already_tried]
+            if fallback_candidates:
+                break
         for candidate in fallback_candidates:
             try:
                 log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=candidate["file_id"])
@@ -612,9 +523,6 @@ async def resolve_stream(request: web.Request):
             status=502,
         )
 
-    logging.info(
-        f"[resolve] SUCCESS title={title!r} -> log_msg_id={log_msg.id} name={get_name(log_msg)!r}"
-    )
     return web.json_response(
         {
             "id": log_msg.id,
