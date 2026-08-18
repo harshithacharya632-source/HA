@@ -404,15 +404,7 @@
   .detail-hero img{width:100%;height:100%;object-fit:cover;}
   .detail-hero .hero-fade{position:absolute;inset:0;background:linear-gradient(180deg, rgba(7,8,13,.1) 0%, rgba(7,8,13,.2) 40%, var(--bg) 96%);}
   .detail-back{position:absolute;top:16px;left:16px;z-index:5;width:38px;height:38px;border-radius:50%;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;}
-  .detail-body{padding:0 18px;margin-top:-56px;position:relative;z-index:2;transition:margin-top .25s ease;}
-  /* While the GOFLIX in-app player is playing inline inside the hero
-     (Netflix-style — see goInline in the script), cancel the -56px "climb
-     into the poster fade" pull. That negative margin is only meant to tuck
-     the title into the backdrop image's gradient; with a live video there,
-     it instead dragged the title/rating/genre-tags/Watch-Download buttons
-     up on top of the player's own bottom control bar (seek bar, «10s/play/
-     10s», 1x, quality, fullscreen) — exactly the overlap bug being fixed. */
-  #view-detail.player-inline .detail-body{margin-top:0;}
+  .detail-body{padding:0 18px;margin-top:-56px;position:relative;z-index:2;}
   .detail-title{font-size:24px;font-weight:800;line-height:1.15;margin-bottom:8px;}
   .detail-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:14px;color:var(--text-dim);margin-bottom:10px;}
   .detail-meta .rating{font-size:14px;}
@@ -496,16 +488,38 @@
   /* ---------- GOFLIX in-app player ---------- */
   .goplayer{
     position:fixed;inset:0;z-index:200;background:#000;
-    display:none;flex-direction:column;
+    display:none;flex-direction:column;overflow:hidden;
   }
   .goplayer.open{display:flex;}
   .goplayer video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;}
   /* Inline mode: video plays where the poster/backdrop was (top of the
      detail page, Netflix-style), title/overview/buttons stay visible and
      scrollable underneath. Tapping the fullscreen button promotes the
-     same player element to the fixed full-screen overlay below. */
-  .goplayer.inline{position:absolute;inset:0;z-index:2;border-radius:0;}
-  .goplayer.inline .goplayer-top{padding-top:calc(10px + env(safe-area-inset-top));}
+     same player element to the fixed full-screen overlay below.
+     Deliberately sized to a strict 16:9 box (not detail-hero's full
+     height) with overflow:hidden — every control (seek bar, top bar,
+     bottom bar, center button) lives inside .goplayer-ui which is
+     inset:0 to THIS box, so nothing can ever paint outside the video
+     frame onto the title/overview text below it. */
+  .goplayer.inline{
+    position:absolute;top:0;left:0;right:0;bottom:auto;inset:auto;
+    width:100%;aspect-ratio:16/9;z-index:2;border-radius:0;overflow:hidden;
+  }
+  .goplayer.inline .goplayer-top{padding-top:calc(6px + env(safe-area-inset-top));padding-bottom:16px;}
+  /* Compact chrome for the inline 16:9 box specifically — the full-size
+     padding below is comfortable in true fullscreen where there's a whole
+     landscape screen to work with, but was tall enough on its own (with
+     the top bar) to not fit inside a 360px-wide 16:9 frame at all, which
+     is what was pushing the seek bar / control row out past the video
+     frame in the first place. */
+  .goplayer.inline .goplayer-bottom{padding:10px 14px 8px;}
+  .goplayer.inline .goplayer-seek{height:14px;}
+  .goplayer.inline .goplayer-time-row{margin-top:4px;font-size:10.5px;}
+  .goplayer.inline .goplayer-controls-row{margin-top:6px;}
+  .goplayer.inline .gp-icon{width:32px;height:32px;}
+  .goplayer.inline .gp-icon svg{width:15px;height:15px;}
+  .goplayer.inline .goplayer-center-play{width:52px;height:52px;}
+  .goplayer.inline .goplayer-center-play svg{width:22px;height:22px;}
 
   .goplayer-gesture-layer{position:absolute;inset:0;display:flex;z-index:2;}
   .goplayer-gesture-zone{flex:1;touch-action:none;}
@@ -569,10 +583,6 @@
   /* While actually playing, the big center circle hides — it only reappears
      when paused, or briefly while the chrome is toggled visible again. */
   .goplayer.is-playing .goplayer-center-play{opacity:0;transform:scale(.8);pointer-events:none;}
-  /* Don't show the "tap to play" button underneath the loading spinner —
-     they're both centered in the same spot and stacking both looked like
-     a broken double-loading indicator. Spinner wins while it's up. */
-  .goplayer-spinner.show ~ .goplayer-ui .goplayer-center-play{opacity:0;pointer-events:none;}
 
   .goplayer-bottom{
     padding:24px 16px calc(14px + env(safe-area-inset-bottom));
@@ -614,18 +624,6 @@
   .goplayer-popover-item:active{background:rgba(255,255,255,.1);}
   .goplayer-popover-item.active{color:var(--accent);}
 
-  .goplayer-noaudio{
-    position:absolute;left:50%;bottom:96px;transform:translateX(-50%);z-index:5;
-    display:flex;align-items:center;gap:10px;max-width:92%;
-    background:rgba(20,20,20,.9);border:1px solid rgba(255,255,255,.12);
-    border-radius:12px;padding:9px 12px;color:#fff;font-size:12.5px;font-weight:600;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  }
-  .goplayer-noaudio.hidden{display:none;}
-  .goplayer-noaudio-btn{
-    flex:0 0 auto;background:var(--accent);color:#fff;font-size:12px;font-weight:700;
-    padding:6px 10px;border-radius:8px;white-space:nowrap;
-  }
   .goplayer-error{
     position:absolute;inset:0;z-index:7;display:none;flex-direction:column;align-items:center;justify-content:center;
     padding:32px;text-align:center;background:rgba(0,0,0,.92);
@@ -996,15 +994,10 @@
 
     <div class="goplayer-popover hidden" id="goQualityMenu"></div>
 
-    <div class="goplayer-noaudio hidden" id="goNoAudio">
-      <span>🔇 No audio in this file — playing video only.</span>
-      <button class="goplayer-noaudio-btn" id="goNoAudioExternal">Open in VLC for audio</button>
-    </div>
-
     <div class="goplayer-error hidden" id="goError">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v5M12 16h.01"/></svg>
       <div class="goplayer-error-title">Can't play this file in-browser</div>
-      <div class="goplayer-error-sub">This file's video format (HEVC, MKV container, or similar) isn't supported by mobile browsers — even with audio off. Try an external player instead.</div>
+      <div class="goplayer-error-sub">Some formats (HEVC, DTS/AC3 audio, MKV) aren't supported by mobile browsers. Try an external player instead.</div>
       <button class="gp-pill gp-pill-lg" id="goErrorExternal">
         <svg viewBox="0 0 24 24"><path d="M14 3h7v7M21 3l-9 9M5 5h6v2H7v10h10v-4h2v6H5z"/></svg>Open in VLC / MX Player
       </button>
@@ -1176,12 +1169,6 @@ function truncate(str, n){ return str && str.length > n ? str.slice(0, n).trim()
 
 /* ---------- View router ---------- */
 function switchView(name, opts = {}) {
-  // Problem-1 fix: navigating to any view other than the detail page itself
-  // must fully stop whatever is playing — otherwise the previous title keeps
-  // running in the background (audio and all) after Back/tab navigation.
-  // (Opening a *different* detail page is handled separately in openDetail,
-  // since that's "detail" -> "detail" and wouldn't trigger this branch.)
-  if (name !== "detail" && goEl.player.classList.contains("open")) closeGoflixPlayer();
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
   document.getElementById("view-" + name).classList.add("active");
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
@@ -1400,6 +1387,32 @@ document.getElementById("topSearchBtn").addEventListener("click", () => {
   if (!searchInput.value.trim()) renderRecentSearches();
   setTimeout(() => searchInput.focus(), 100);
 });
+async function fetchDbTitles(query) {
+  try {
+    const res = await fetch(CONFIG.SEARCH_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ init_data: tg?.initData || "", query })
+    });
+    if (!res.ok) return null; // fail open — see comment below
+    const data = await res.json();
+    return (data.titles || []).map(t => t.toLowerCase());
+  } catch (e) {
+    return null; // network hiccup — don't block search entirely over this
+  }
+}
+// A DB title guess ("Kantara Chapter 1") and a TMDB title ("Kantara: Chapter 1")
+// rarely match character-for-character, so this is a loose word-overlap check
+// rather than an exact-string one.
+function looksAvailable(tmdbTitle, dbTitlesLower) {
+  const words = tmdbTitle.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 2);
+  if (!words.length) return false;
+  return dbTitlesLower.some(dbTitle => {
+    const hits = words.filter(w => dbTitle.includes(w)).length;
+    return hits / words.length >= 0.6; // most of the significant words line up
+  });
+}
+
 searchInput.addEventListener("input", () => {
   clearTimeout(searchDebounce);
   const q = searchInput.value.trim();
@@ -1410,70 +1423,36 @@ searchInput.addEventListener("input", () => {
   }
   searchDebounce = setTimeout(async () => {
     resultsEl.innerHTML = `<div class="poster-grid">${'<div class="poster skeleton" style="height:190px"></div>'.repeat(6)}</div>`;
-    // Check our own GOFLIX catalog first (files that actually exist and can
-    // be played right now), then TMDB (posters/metadata) — a title can be
-    // in one and not the other, so both get shown rather than one hiding
-    // the other.
-    const [dbResult, tmdbResult] = await Promise.allSettled([
-      searchCatalog(q),
-      tmdb("/search/multi", { query: q, include_adult: "false" })
-    ]);
-
-    resultsEl.innerHTML = "";
-    let gotAny = false;
-
-    if (dbResult.status === "fulfilled" && dbResult.value.length) {
-      gotAny = true;
-      const dbSection = document.createElement("div");
-      dbSection.innerHTML = `<div class="recent-search-head">In GOFLIX</div>`;
-      const list = document.createElement("div");
-      dbResult.value.forEach((f, i) => list.appendChild(fileCard(f, i)));
-      dbSection.appendChild(list);
-      resultsEl.appendChild(dbSection);
-    }
-
-    if (tmdbResult.status === "fulfilled") {
-      const items = (tmdbResult.value.results || []).filter(r => r.media_type === "movie" || r.media_type === "tv");
-      if (items.length) {
-        gotAny = true;
-        const tmdbSection = document.createElement("div");
-        if (dbResult.status === "fulfilled" && dbResult.value.length) {
-          tmdbSection.innerHTML = `<div class="recent-search-head">More Results</div>`;
-        }
-        const grid = document.createElement("div");
-        grid.className = "poster-grid";
-        tmdbSection.appendChild(grid);
-        resultsEl.appendChild(tmdbSection);
+    try {
+      // Check the GoFlix file database FIRST — this is the fix for search
+      // showing a full TMDB poster + title for something that was never
+      // actually uploaded, which just looks broken when the user taps it
+      // and gets "no files found." dbTitles === null means the availability
+      // check itself failed (network/server issue), in which case we fail
+      // open and show TMDB results as before rather than showing nothing.
+      const [tmdbData, dbTitles] = await Promise.all([
+        tmdb("/search/multi", { query: q, include_adult: "false" }),
+        fetchDbTitles(q)
+      ]);
+      let items = (tmdbData.results || []).filter(r => r.media_type === "movie" || r.media_type === "tv");
+      if (dbTitles) {
+        items = items.filter(r => looksAvailable(r.title || r.name || "", dbTitles));
+      }
+      const grid = document.createElement("div");
+      grid.className = "poster-grid";
+      resultsEl.innerHTML = "";
+      resultsEl.appendChild(grid);
+      if (!items.length) {
+        resultsEl.innerHTML = `<div class="empty-state">Nothing in the GoFlix library matches "${q}".</div>`;
+      } else {
         renderGrid(grid, items);
       }
+      addRecentSearch(q); // remember it whether or not it found results
+    } catch (e) {
+      resultsEl.innerHTML = `<div class="empty-state">Search failed. Try again.</div>`;
     }
-
-    if (!gotAny) {
-      resultsEl.innerHTML = tmdbResult.status === "fulfilled"
-        ? `<div class="empty-state">No results for "${q}".</div>`
-        : `<div class="empty-state">Search failed. Try again.</div>`;
-    }
-    addRecentSearch(q); // remember it whether or not it found results
   }, 400);
 });
-
-/* Search our own file catalog (DB), independent of TMDB's index — see
-   /api/search on the server. Returns [] on any failure so a DB hiccup
-   never blocks TMDB results from still showing. */
-async function searchCatalog(query){
-  try {
-    const res = await fetch(CONFIG.SEARCH_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ init_data: tg?.initData || "", query, limit: 12 })
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.files || [];
-  } catch (e) {
-    return [];
-  }
-}
 
 /* ---------- Browse: subtabs (Genres / Languages) ---------- */
 let browseMode = "genres"; // "genres" | "languages"
@@ -1802,49 +1781,10 @@ async function openWatchSheet(item, action = "watch"){
   activeItem = item;
   pendingAction = action;
   if (serverConfigPromise) await serverConfigPromise;
-  goHaptic("impact","light");
-
-  // Watch: start playing immediately — no picker in the way. We open the
-  // player shell right away (spinner + title, feels instant) and resolve
-  // the best-quality file behind the scenes. The in-player quality button
-  // still lists every match, so switching quality/version afterward is one
-  // tap away — it's just not a gate in front of pressing play.
-  if (action === "watch") {
-    openGoflixPlayerShell(item);
-    try {
-      const { files } = await fetchQualities(item);
-      sheetFiles = files || [];
-      if (!sheetFiles.length) throw new Error("not_found");
-      const preferred = effectivePreferredQuality();
-      const best = (preferred && sheetFiles.find(f => f.quality === preferred)) || sheetFiles[0];
-      const resolved = await resolveStream(item, best.file_id);
-      const { directStreamUrl } = buildStreamUrls(resolved);
-      // The VLC/MX button (and the error-card fallback) needs the raw
-      // media URL, same one the in-page <video> tag uses — NOT the /watch
-      // HTML wrapper page. That page is a browser-only fallback UI, not a
-      // playable media stream, so handing it to an external player app
-      // just 404s/fails there. This was the "VLC says 404" bug.
-      goEl.external.dataset.url = directStreamUrl;
-      goEl.qualityBtn.textContent = best.quality || "Auto";
-      await goLoadSource(directStreamUrl, { autoplay: true });
-    } catch (err) {
-      goEl.spinner.classList.remove("show");
-      if (err.message === "timeout" || err.message === "media_error") {
-        goEl.error.classList.remove("hidden");
-      } else {
-        closeGoflixPlayer();
-        goHaptic("notification","error");
-        alert(errorMessageFor(err));
-      }
-    }
-    return;
-  }
-
-  // Download (and anything else): still ask — a download needs a deliberate,
-  // explicit choice, unlike "just start playing".
   sheetTitleEl.textContent = "Choose quality";
   qualityStep.innerHTML = '<div class="play-opt skeleton" style="height:58px"></div>'.repeat(3);
   sheet.classList.add("open"); sheetBackdrop.classList.add("open");
+  goHaptic("impact","light");
 
   try {
     const { files } = await fetchQualities(item);
@@ -2004,8 +1944,6 @@ const goEl = {
   spinner: document.getElementById("goSpinner"),
   indicator: document.getElementById("goIndicator"),
   error: document.getElementById("goError"),
-  noAudio: document.getElementById("goNoAudio"),
-  noAudioExternal: document.getElementById("goNoAudioExternal"),
   errorExternal: document.getElementById("goErrorExternal"),
   errorClose: document.getElementById("goErrorClose"),
   zoneLeft: document.getElementById("goZoneLeft"),
@@ -2044,22 +1982,25 @@ function goCloseAllPopovers(){
   goEl.qualityMenu.classList.add("hidden");
 }
 
-/* Opens the player chrome/overlay right away (title, spinner, correct
-   inline-vs-fullscreen slot) BEFORE a stream URL is necessarily known yet.
-   Splitting this out from the actual source-loading lets "Watch" feel
-   instant — the player appears and starts spinning the moment it's tapped,
-   instead of waiting on network round-trips first. */
-function openGoflixPlayerShell(item){
+async function openGoflixPlayer(item, resolved, file){
   goCurrentItem = item;
+  const { directStreamUrl, webPlayerUrl } = buildStreamUrls(resolved);
   goEl.video.playbackRate = 1;
   goEl.video.style.filter = "";
   goBrightness = 1;
   goEl.speedBtn.textContent = "1x";
-  goEl.title.textContent = item?.title || item?.name || "GOFLIX";
-  goEl.qualityBtn.textContent = "Auto";
+  goEl.title.textContent = item?.title || item?.name || file?.name || "GOFLIX";
+  goEl.external.dataset.url = webPlayerUrl;
+  goEl.qualityBtn.textContent = file?.quality || "Auto";
   goEl.error.classList.add("hidden");
-  goNoAudioNotice(false);
   goCloseAllPopovers();
+  // Reset play/pause state explicitly — otherwise a stale "is-playing" left
+  // over from the PREVIOUS video (e.g. closed while still playing, or
+  // autoplay got silently blocked last time) could carry over and hide the
+  // center play button on a video that hasn't started yet, which is why it
+  // looked like the player had no play button and "wouldn't play" at all.
+  goEl.player.classList.remove("is-playing");
+  goEl.playPause.innerHTML = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
 
   // Netflix-style: if we're already on the detail page, play the video
   // right in the poster/backdrop slot instead of an immediate full-screen
@@ -2071,50 +2012,30 @@ function openGoflixPlayerShell(item){
     goInline = true;
     goDetailHero.appendChild(goEl.player);
     goEl.player.classList.add("inline");
-    document.getElementById("view-detail").classList.add("player-inline");
     document.body.style.overflow = "";
   } else {
     goInline = false;
     goBodyParent.appendChild(goEl.player);
     goEl.player.classList.remove("inline");
-    document.getElementById("view-detail").classList.remove("player-inline");
     document.body.style.overflow = "hidden";
   }
 
   goEl.player.classList.add("open");
   goShowControls();
   goHistoryRecorded = false;
-  goEl.spinner.classList.add("show");
-}
-
-async function openGoflixPlayer(item, resolved, file){
-  openGoflixPlayerShell(item);
-  const { directStreamUrl } = buildStreamUrls(resolved);
-  // Raw media URL for VLC/MX, not the /watch HTML wrapper — see note above.
-  goEl.external.dataset.url = directStreamUrl;
-  goEl.qualityBtn.textContent = file?.quality || "Auto";
   try {
     await goLoadSource(directStreamUrl, { autoplay: true });
   } catch (e) {
-    // Genuinely unplayable in-browser even without audio (bad video codec,
-    // dead link, etc.) — the error overlay with the VLC/MX fallback is the
-    // right call here.
-    goEl.spinner.classList.remove("show");
+    // Genuinely unplayable in-browser (bad codec, dead link, etc.) — the
+    // error overlay with the VLC/MX fallback is the right call here.
     goEl.error.classList.remove("hidden");
   }
 }
 function closeGoflixPlayer(){
-  // Invalidate any load/quality-switch still in flight for this session —
-  // if a slow resolveStream()/goLoadSource() from before Close was tapped
-  // finally resolves after the player is gone, its generation token no
-  // longer matches and it's dropped as "superseded" instead of silently
-  // reopening/resuming playback the person already backed out of.
-  ++goLoadGeneration;
   goEl.video.pause();
   goEl.video.removeAttribute("src");
   goEl.video.load();
   goEl.player.classList.remove("open");
-  document.getElementById("view-detail").classList.remove("player-inline");
   document.body.style.overflow = "";
   if (document.fullscreenElement) (document.exitFullscreen || (() => {})).call(document);
   // Put the player back in its normal fixed-overlay home so the next
@@ -2129,44 +2050,10 @@ function goOpenExternal(){
 }
 goEl.external.addEventListener("click", goOpenExternal);
 goEl.errorExternal.addEventListener("click", goOpenExternal);
-goEl.noAudioExternal.addEventListener("click", goOpenExternal);
 goEl.errorClose.addEventListener("click", closeGoflixPlayer);
 
-// Stall watchdog: "waiting" alone (buffering mid-playback) is normal and
-// just shows the spinner. Most real-world "stuck, spinning forever" cases
-// are a transient hiccup — a dead byte-range response, a Telegram media
-// session that needs re-establishing — not a genuinely unplayable file. So
-// before giving up: at ~8s, silently reload the exact same URL at the
-// current position in the background (no error shown, spinner just keeps
-// spinning) and see if that clears it. Only if that ALSO doesn't recover
-// within 20s total do we surface the error overlay — a stream that's
-// really dead, not just stuttering.
-let goStallTimer = null;
-let goStallRetryTimer = null;
-let goStallRetried = false;
-goEl.video.addEventListener("waiting", () => {
-  goEl.spinner.classList.add("show");
-  clearTimeout(goStallTimer);
-  clearTimeout(goStallRetryTimer);
-  goStallRetryTimer = setTimeout(() => {
-    if ((goEl.video.paused || goEl.video.readyState < 3) && !goStallRetried && goEl.video.currentSrc) {
-      goStallRetried = true;
-      goLoadSource(goEl.video.currentSrc, {
-        resumeAt: goEl.video.currentTime,
-        autoplay: true,
-        resetUI: false,
-      }).catch(() => {});
-    }
-  }, 8000);
-  goStallTimer = setTimeout(() => {
-    if (goEl.video.paused || goEl.video.readyState < 3) {
-      goEl.spinner.classList.remove("show");
-      goEl.error.classList.remove("hidden");
-    }
-  }, 20000);
-});
-goEl.video.addEventListener("canplay", () => { goEl.spinner.classList.remove("show"); clearTimeout(goStallTimer); clearTimeout(goStallRetryTimer); });
-goEl.video.addEventListener("playing", () => { clearTimeout(goStallTimer); clearTimeout(goStallRetryTimer); goStallRetried = false; });
+goEl.video.addEventListener("waiting", () => goEl.spinner.classList.add("show"));
+goEl.video.addEventListener("canplay", () => goEl.spinner.classList.remove("show"));
 goEl.video.addEventListener("playing", () => {
   goEl.spinner.classList.remove("show");
   goEl.playPause.innerHTML = `<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>`;
@@ -2183,6 +2070,7 @@ goEl.video.addEventListener("pause", () => {
 });
 goEl.video.addEventListener("timeupdate", () => {
   if (!goEl.video.duration) return;
+  goLastProgressAt = Date.now(); // watchdog: playback is actually advancing
   const pct = (goEl.video.currentTime / goEl.video.duration) * 100;
   goEl.seekFill.style.width = pct + "%";
   goEl.seekThumb.style.left = pct + "%";
@@ -2206,14 +2094,7 @@ goEl.video.addEventListener("progress", () => {
   const end = goEl.video.buffered.end(goEl.video.buffered.length - 1);
   goEl.seekBuffer.style.width = (end / goEl.video.duration * 100) + "%";
 });
-// A runtime error while a stream is loading is handled by goLoadSource
-// itself (it may retry once, muted, for an audio-codec-only failure — see
-// below), so this backstop only needs to react to errors that happen
-// AFTER a source has already loaded successfully and playback was under
-// way (e.g. the network drops mid-watch). goLoadingInProgress is true for
-// the whole window goLoadSource owns, including any internal retry.
 goEl.video.addEventListener("error", () => {
-  if (goLoadingInProgress) return;
   goEl.spinner.classList.remove("show");
   goEl.error.classList.remove("hidden");
 });
@@ -2291,65 +2172,46 @@ goEl.speedBtn.addEventListener("click", () => {
   goShowControls();
 });
 
-/* Shows/hides the persistent "no audio" banner (distinct from goError's
-   full takeover — the video IS playing fine here, just silently). */
-function goNoAudioNotice(show){
-  goEl.noAudio.classList.toggle("hidden", !show);
-}
+/* Shared "load this URL into the player" routine — used by both the initial
+   open and the quality switcher. Explicitly calls .load() (just setting
+   .src is not reliably enough to reset a stalled buffer on some mobile
+   WebViews), resets the seek UI so it doesn't show a stale position from
+   the previous quality while the new source is loading, and times out the
+   spinner instead of spinning forever if metadata never arrives (flaky
+   network / server hiccup) so it visibly falls through to the error state. */
+let goCurrentStreamUrl = null;
+let goLastProgressAt = 0;
+let goStallRecovering = false;
 
-// True for the entire window goLoadSource "owns" a load attempt, including
-// its own internal muted retry — see the backstop error listener above.
-let goLoadingInProgress = false;
+/* Stall watchdog — a handful of users reported playback silently freezing
+   a few minutes in (Range-stream connection to Telegram drops mid-file,
+   but the <video> element doesn't fire a hard "error", it just stops
+   getting new bytes and sits there buffering forever). If we haven't seen
+   currentTime actually advance for 10s while supposedly playing, reload
+   the exact same URL and resume where it left off — that opens a fresh
+   Range request from that byte offset and, in practice, un-sticks it. */
+setInterval(() => {
+  if (!goEl.player.classList.contains("open")) return;
+  if (goEl.video.paused || goEl.video.ended || goStallRecovering) return;
+  if (Date.now() - goLastProgressAt < 10000) return;
+  if (!goCurrentStreamUrl) return;
+  goStallRecovering = true;
+  goFlash("Reconnecting…");
+  goLoadSource(goCurrentStreamUrl, { resumeAt: goEl.video.currentTime, autoplay: true })
+    .catch(() => { goEl.error.classList.remove("hidden"); })
+    .finally(() => { goStallRecovering = false; goLastProgressAt = Date.now(); });
+}, 3000);
 
-// Bumped on every *new* load request (a fresh Watch tap, a quality switch —
-// anything the user or app initiates). goLoadSource's own internal muted-audio
-// retry reuses the SAME generation it was given, since it's still servicing
-// the original request, not starting a new one. Any in-flight attempt whose
-// generation no longer matches when it finally settles has been superseded —
-// its .then()/.catch() sees a "superseded" rejection and does nothing, so a
-// slow first quality tap can never clobber a faster second one. This is the
-// fix for "quality switching sometimes fails / picks the wrong quality when
-// tapped quickly."
-let goLoadGeneration = 0;
-
-/* Shared "load this URL into the player" routine — used by the initial
-   open, the quality switcher, and the fast "Watch" path. Explicitly calls
-   .load() (just setting .src is not reliably enough to reset a stalled
-   buffer on some mobile WebViews), resets the seek UI so it doesn't show a
-   stale position from the previous quality while the new source is
-   loading, and times out the spinner instead of spinning forever if
-   metadata never arrives (flaky network / server hiccup) so it visibly
-   falls through to the error state.
-
-   Some mobile WebViews (Telegram's in-app browser included) refuse to play
-   a file AT ALL if it contains an audio codec they don't support (AC3/DTS
-   are the usual culprits), even though the video track itself decodes
-   fine — rather than just dropping the audio track like a desktop browser
-   would. If the very first attempt hard-errors, this retries once with the
-   video forced muted before it started loading; several engines skip
-   decoding a track they know won't be rendered, so the video plays (silent)
-   instead of failing outright. A visible "no audio" banner explains why,
-   with a one-tap way to open it in VLC/MX for real audio. Only if even the
-   muted attempt fails do we treat it as a genuine unplayable file. */
-function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _retryMuted = false, resetUI = true, _generation = null } = {}){
-  // A fresh request (not an internal muted-retry continuation) claims a new
-  // generation and immediately becomes the one true "current" request.
-  const myGen = _generation !== null ? _generation : ++goLoadGeneration;
-  goLoadingInProgress = true;
+function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000 } = {}){
+  goCurrentStreamUrl = url;
+  goLastProgressAt = Date.now();
   return new Promise((resolve, reject) => {
-    if (resetUI) {
-      goEl.seekFill.style.width = "0%";
-      goEl.seekBuffer.style.width = "0%";
-      goEl.seekThumb.style.left = "0%";
-      goEl.timeCur.textContent = "0:00";
-    }
+    goEl.seekFill.style.width = "0%";
+    goEl.seekBuffer.style.width = "0%";
+    goEl.seekThumb.style.left = "0%";
+    goEl.timeCur.textContent = "0:00";
     goEl.spinner.classList.add("show");
-    if (!_retryMuted) goNoAudioNotice(false);
     goEl.video.pause();
-    if (_retryMuted) {
-      goEl.video.muted = true;
-      goEl.video.defaultMuted = true;
-    }
     goEl.video.src = url;
     goEl.video.load();
 
@@ -2358,8 +2220,7 @@ function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _
       if (settled) return;
       settled = true;
       cleanup();
-      if (myGen === goLoadGeneration) goLoadingInProgress = false; // else a newer request owns that flag now
-      reject(new Error(myGen === goLoadGeneration ? "timeout" : "superseded"));
+      reject(new Error("timeout"));
     }, timeoutMs);
 
     function cleanup(){
@@ -2371,23 +2232,8 @@ function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _
       if (settled) return;
       settled = true;
       cleanup();
-      goLoadingInProgress = false;
-      if (myGen !== goLoadGeneration) { reject(new Error("superseded")); return; }
       if (resumeAt) goEl.video.currentTime = resumeAt;
-      if (_retryMuted) goNoAudioNotice(true);
-      if (autoplay) {
-        // Some mobile WebViews (Telegram's in-app browser included) block
-        // autoplay-with-sound outright, even right after a tap, and reject
-        // the play() promise — which the old bare .catch(()=>{}) swallowed
-        // silently, leaving the video permanently paused at 0:00 with no
-        // visible sign anything went wrong (looked exactly like "stuck").
-        // Muted autoplay is essentially always allowed, so retry muted and
-        // let the person unmute via the volume swipe zone or a tap.
-        goEl.video.play().catch(() => {
-          goEl.video.muted = true;
-          goEl.video.play().then(() => { if (!_retryMuted) goFlash("🔇 Muted — swipe right side to unmute"); }).catch(() => {});
-        });
-      }
+      if (autoplay) goEl.video.play().catch(() => {});
       goEl.spinner.classList.remove("show");
       resolve();
     }
@@ -2395,12 +2241,6 @@ function goLoadSource(url, { resumeAt = 0, autoplay = true, timeoutMs = 15000, _
       if (settled) return;
       settled = true;
       cleanup();
-      if (myGen !== goLoadGeneration) { goLoadingInProgress = false; reject(new Error("superseded")); return; }
-      if (!_retryMuted) {
-        goLoadSource(url, { resumeAt, autoplay, timeoutMs, _retryMuted: true, resetUI, _generation: myGen }).then(resolve, reject);
-        return;
-      }
-      goLoadingInProgress = false;
       reject(new Error("media_error"));
     }
     goEl.video.addEventListener("loadedmetadata", onMeta);
@@ -2427,22 +2267,13 @@ goEl.qualityBtn.addEventListener("click", () => {
       const resumeAt = goEl.video.currentTime;
       const prevQualityLabel = goEl.qualityBtn.textContent;
       goEl.qualityBtn.textContent = "…";
-      // Claim the generation token HERE — at click time, before the async
-      // resolveStream() call — not inside goLoadSource. Otherwise, tapping
-      // 1080p then quickly 720p could have the *1080p* request's network
-      // round-trip finish last and win purely by chance, silently reverting
-      // the person's actual last choice. Claiming by click order (not
-      // network-resolve order) is what makes "last tap wins" reliable.
-      const myGen = ++goLoadGeneration;
       try {
         const resolved = await resolveStream(goCurrentItem, f.file_id);
-        if (myGen !== goLoadGeneration) return; // a newer quality tap already superseded this one
-        const { directStreamUrl } = buildStreamUrls(resolved);
-        goEl.external.dataset.url = directStreamUrl; // keep VLC/MX pointed at the *current* selection
-        await goLoadSource(directStreamUrl, { resumeAt, autoplay: wasPlaying, _generation: myGen });
+        const { directStreamUrl, webPlayerUrl } = buildStreamUrls(resolved);
+        goEl.external.dataset.url = webPlayerUrl;
+        await goLoadSource(directStreamUrl, { resumeAt, autoplay: wasPlaying });
         goEl.qualityBtn.textContent = f.quality;
       } catch (err) {
-        if (err.message === "superseded") return; // a newer request already took over — nothing to show
         goEl.spinner.classList.remove("show");
         goEl.qualityBtn.textContent = prevQualityLabel;
         if (err.message === "timeout" || err.message === "media_error") {
@@ -2464,7 +2295,7 @@ goEl.qualityBtn.addEventListener("click", () => {
 async function goEnterFullscreenLandscape(){
   // Promote out of the inline poster slot into the normal fixed overlay
   // first — you can't usefully fullscreen a 52vh-tall container.
-  if (goInline) { goEl.player.classList.remove("inline"); goBodyParent.appendChild(goEl.player); document.getElementById("view-detail").classList.remove("player-inline"); document.body.style.overflow = "hidden"; }
+  if (goInline) { goEl.player.classList.remove("inline"); goBodyParent.appendChild(goEl.player); document.body.style.overflow = "hidden"; }
   const req = goEl.player.requestFullscreen || goEl.player.webkitRequestFullscreen;
   try { if (req) await req.call(goEl.player); } catch (err) {}
   try { await screen.orientation.lock("landscape"); } catch (err) { /* iOS Safari has no orientation.lock — fullscreen video still rotates natively there */ }
@@ -2486,7 +2317,6 @@ document.addEventListener("fullscreenchange", () => {
     if (goInline && document.getElementById("view-detail").classList.contains("active") && goDetailHero) {
       goEl.player.classList.add("inline");
       goDetailHero.appendChild(goEl.player);
-      document.getElementById("view-detail").classList.add("player-inline");
       document.body.style.overflow = "";
     }
   }
@@ -2503,12 +2333,6 @@ function errorMessageFor(err){
 /* ---------- Detail view ---------- */
 let detailReturnView = "home"; // where the Back button in the sticky bar should go
 async function openDetail(item){
-  // Problem-1 fix: opening a title's detail page — including tapping a
-  // "Recommended" card while already on another title's detail page — must
-  // never let the previous title's video keep playing. Show the new
-  // poster/details first; playback only (re)starts once the person taps
-  // Watch again, per spec.
-  if (goEl.player.classList.contains("open")) closeGoflixPlayer();
   detailItem = item;
   // Remember which tab we were on so "Back" returns there instead of always Home.
   const current = document.querySelector(".view.active");
