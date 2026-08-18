@@ -58,7 +58,15 @@ RUN apt-get update \
 
 # Copy requirements and install Python deps
 COPY requirements.txt /requirements.txt
-RUN pip3 install --no-cache-dir -U pip \
+# `pip install -U pip` normally uninstalls the base image's existing pip
+# first - which means deleting its dist-info directory from the base
+# image's lower overlay layer. Koyeb's sandboxed builder can't do that
+# delete either (OSError: Input/output error) - same underlying class of
+# restriction as the earlier dpkg rename bug, just hitting delete instead
+# of rename. --ignore-installed skips the uninstall step and just installs
+# the new pip alongside the old one, so the newer version wins on PATH
+# without ever touching the old package's files.
+RUN pip3 install --no-cache-dir --ignore-installed pip \
     && pip3 install --no-cache-dir -r /requirements.txt
 
 # Set working directory
