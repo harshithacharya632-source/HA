@@ -26,8 +26,17 @@ FROM python:3.10-slim-bookworm
 # separate mount from /, so that move crosses filesystems and the kernel
 # refuses it (EXDEV). Pointing TMPDIR at /var/tmp, which lives on the same
 # filesystem as the rest of the image, keeps that move on one device.
-RUN apt-mark hold ca-certificates \
-    && export TMPDIR=/var/tmp \
+# Attempt 3 at the "Invalid cross-device link" dpkg error: both /tmp and
+# /var/tmp turned out to hit it identically (see build history), which
+# means it isn't really about temp-dir location — dpkg stages whole
+# directories (usr/share/doc/X, etc/perl, etc.) and atomically renames them
+# into place, and that's failing regardless of where the staging area is.
+# Skipping doc/man/changelog generation removes most of the directories
+# dpkg tries to build+rename this way, so most of these packages should
+# install cleanly even if the underlying sandbox quirk isn't truly fixed.
+RUN mkdir -p /etc/dpkg/dpkg.cfg.d \
+    && printf 'path-exclude=/usr/share/doc/*\npath-exclude=/usr/share/man/*\npath-exclude=/usr/share/groff/*\npath-exclude=/usr/share/info/*\n' > /etc/dpkg/dpkg.cfg.d/01-nodoc \
+    && apt-mark hold ca-certificates \
     && apt-get update \
     && apt-get install -y --no-install-recommends git libmediainfo0v5 \
     && ln -sf $(find /usr/lib -name "libmediainfo.so*" | head -1) /usr/local/lib/libmediainfo.so.0 \
