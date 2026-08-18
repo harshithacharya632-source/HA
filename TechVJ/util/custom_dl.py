@@ -49,7 +49,27 @@ class ByteStreamer:
         Generates the properties of a media file on a specific message.
         returns ths properties in a FIleId class.
         """
-        file_id = await get_file_ids(self.client, LOG_CHANNEL, id)
+        # Same class of bug as the byte-fetching side used to have: a single
+        # transient failure here (session hiccup, momentary Telegram
+        # timeout) used to immediately raise FIleNotFound — indistinguishable
+        # from the file genuinely not existing, and the caller (route.py)
+        # turns that straight into a 404 with no way to tell the two apart.
+        # Retry a couple of times before actually giving up.
+        last_exc = None
+        for attempt in range(3):
+            try:
+                file_id = await get_file_ids(self.client, LOG_CHANNEL, id)
+                break
+            except Exception as e:
+                last_exc = e
+                logging.warning(
+                    f"get_file_ids failed for id={id} (attempt {attempt + 1}/3): {e!r}"
+                )
+                await asyncio.sleep(0.4 * (attempt + 1))
+        else:
+            logging.exception(f"get_file_ids permanently failed for id={id}: {last_exc!r}")
+            raise FIleNotFound
+
         logging.debug(f"Generated file ID and Unique ID for message with ID {id}")
         if not file_id:
             logging.debug(f"Message with ID {id} not found")
