@@ -7,7 +7,7 @@
 # Switching the base tag points at a completely different image digest
 # with no matching cache entry on Koyeb's side, so the poisoned cache
 # import is skipped entirely instead of needing to be "fixed".
-FROM python:3.10.8-slim-bookworm
+FROM python:3.10-slim-bookworm
 
 # Install system dependencies
 # NOTE: no "apt-get upgrade -y" here (removed previously) — but the real
