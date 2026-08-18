@@ -20,7 +20,14 @@ FROM python:3.10-slim-bookworm
 # supported". `apt-mark hold ca-certificates` stops dpkg from touching it
 # as a side effect of installing the other packages, so that marker never
 # gets created in the first place.
+# Root cause of the previous "Invalid cross-device link" dpkg error:
+# dpkg unpacks .deb files into a scratch dir under $TMPDIR (default /tmp)
+# then moves them into place — but in Koyeb's sandboxed builder, /tmp is a
+# separate mount from /, so that move crosses filesystems and the kernel
+# refuses it (EXDEV). Pointing TMPDIR at /var/tmp, which lives on the same
+# filesystem as the rest of the image, keeps that move on one device.
 RUN apt-mark hold ca-certificates \
+    && export TMPDIR=/var/tmp \
     && apt-get update \
     && apt-get install -y --no-install-recommends git libmediainfo0v5 \
     && ln -sf $(find /usr/lib -name "libmediainfo.so*" | head -1) /usr/local/lib/libmediainfo.so.0 \
