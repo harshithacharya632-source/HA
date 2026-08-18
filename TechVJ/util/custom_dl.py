@@ -221,13 +221,24 @@ class ByteStreamer:
                             location=location, offset=off, limit=chunk_size
                         ),
                     )
-                except (TimeoutError, ConnectionError, OSError, AttributeError) as e:
+                except (TimeoutError, ConnectionError, OSError) as e:
                     last_exc = e
                     logging.warning(
                         f"GetFile failed for id-ish offset={off} (attempt {attempt + 1}/3), "
                         f"client {index}: {e!r}"
                     )
                     await asyncio.sleep(0.5 * (attempt + 1))
+                except AttributeError as e:
+                    # Not a network hiccup — an unexpected None/missing attribute
+                    # is almost always a real bug (bad session state, malformed
+                    # response, etc). Retrying it 3 times would just hide that
+                    # behind the same "transient" log line as a dropped
+                    # connection. Surface it immediately with its own message.
+                    logging.exception(
+                        f"GetFile hit an AttributeError (likely a bug, not a "
+                        f"transient failure) at offset={off}, client {index}: {e!r}"
+                    )
+                    raise
             logging.exception(
                 f"GetFile permanently failed at offset={off} after 3 attempts, client {index}: {last_exc!r}"
             )
@@ -257,7 +268,10 @@ class ByteStreamer:
 
                     r = await _get_file(offset)
         except (TimeoutError, ConnectionError, OSError, AttributeError) as e:
-            logging.exception(f"yield_file aborted early for client {index}: {e!r}")
+            # _get_file already logged the full traceback for this failure
+            # before re-raising it — just record that the stream stopped
+            # because of it, without dumping a second identical traceback.
+            logging.warning(f"yield_file aborted early for client {index}: {e!r}")
         finally:
             logging.debug("Finished yielding file with {current_part} parts.")
             work_loads[index] -= 1
