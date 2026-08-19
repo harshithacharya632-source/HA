@@ -502,7 +502,7 @@
      inset:0 to THIS box, so nothing can ever paint outside the video
      frame onto the title/overview text below it. */
   .goplayer.inline{
-    position:absolute;top:0;left:0;right:0;bottom:auto;inset:auto;
+    position:absolute;top:0;left:0;right:0;bottom:auto;
     width:100%;aspect-ratio:16/9;z-index:2;border-radius:0;overflow:hidden;
   }
   .goplayer.inline .goplayer-top{padding-top:calc(6px + env(safe-area-inset-top));padding-bottom:16px;}
@@ -1990,7 +1990,7 @@ async function openGoflixPlayer(item, resolved, file){
   goBrightness = 1;
   goEl.speedBtn.textContent = "1x";
   goEl.title.textContent = item?.title || item?.name || file?.name || "GOFLIX";
-  goEl.external.dataset.url = webPlayerUrl;
+  goEl.external.dataset.url = directStreamUrl;
   goEl.qualityBtn.textContent = file?.quality || "Auto";
   goEl.error.classList.add("hidden");
   goCloseAllPopovers();
@@ -2269,8 +2269,8 @@ goEl.qualityBtn.addEventListener("click", () => {
       goEl.qualityBtn.textContent = "…";
       try {
         const resolved = await resolveStream(goCurrentItem, f.file_id);
-        const { directStreamUrl, webPlayerUrl } = buildStreamUrls(resolved);
-        goEl.external.dataset.url = webPlayerUrl;
+        const { directStreamUrl } = buildStreamUrls(resolved);
+        goEl.external.dataset.url = directStreamUrl;
         await goLoadSource(directStreamUrl, { resumeAt, autoplay: wasPlaying });
         goEl.qualityBtn.textContent = f.quality;
       } catch (err) {
