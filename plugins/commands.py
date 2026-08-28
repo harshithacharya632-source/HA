@@ -2086,30 +2086,55 @@ def _star_plan_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(btn)
 
 
+STAR_MENU_AUTO_DELETE_SECONDS = 20
+
+
+async def _auto_delete_star_menu(msg, delay: int = STAR_MENU_AUTO_DELETE_SECONDS):
+    """Deletes the star-plan menu message after `delay` seconds. If the
+    user has already picked a plan (which deletes it immediately), this
+    just fails silently on the already-gone message."""
+    await asyncio.sleep(delay)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+
 @Client.on_message(filters.command("planstars"))
 async def plan_stars_cmd_handler(client, message):
     if PREMIUM_AND_REFERAL_MODE == False:
         return
-    await message.reply_text(
+    msg = await message.reply_text(
         "<b>⭐ Buy Goflix Premium instantly with Telegram Stars</b>\n\n"
-        "No screenshot, no waiting — premium activates the moment payment goes through.",
+        "No screenshot, no waiting — premium activates the moment payment goes through.\n\n"
+        f"<i>This menu auto-deletes in {STAR_MENU_AUTO_DELETE_SECONDS} seconds.</i>",
         parse_mode=enums.ParseMode.HTML,
         reply_markup=_star_plan_buttons()
     )
+    asyncio.create_task(_auto_delete_star_menu(msg))
 
 
 @Client.on_callback_query(filters.regex("^show_star_plans$"))
 async def show_star_plans_cb(client, query):
     await query.answer()
-    await client.send_message(
+    # This callback fires from the /plan (UPI/QR) message — clear it the
+    # moment the user switches to the Stars flow, so only one payment
+    # prompt is ever on screen.
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+    msg = await client.send_message(
         chat_id=query.from_user.id,
         text=(
             "<b>⭐ Buy Goflix Premium instantly with Telegram Stars</b>\n\n"
-            "No screenshot, no waiting — premium activates the moment payment goes through."
+            "No screenshot, no waiting — premium activates the moment payment goes through.\n\n"
+            f"<i>This menu auto-deletes in {STAR_MENU_AUTO_DELETE_SECONDS} seconds.</i>"
         ),
         parse_mode=enums.ParseMode.HTML,
         reply_markup=_star_plan_buttons()
     )
+    asyncio.create_task(_auto_delete_star_menu(msg))
 
 
 @Client.on_callback_query(filters.regex(r"^buy_star_(\w+)$"))
@@ -2128,6 +2153,12 @@ async def send_star_invoice_cb(client, query):
         currency="XTR",
         prices=[LabeledPrice(label=STAR_PLAN_LABELS[plan], amount=amount)]
     )
+    # Plan picked — clear the menu right away instead of waiting out the
+    # 20s timer (that timer still fires harmlessly on the deleted message).
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
 
 
 @Client.on_pre_checkout_query()
@@ -2213,8 +2244,18 @@ async def plan_rate_cmd_handler(client, message):
 
         new_rates = {"week": lines[0], "month": lines[1], "3months": lines[2], "6months": lines[3]}
         await save_plan_rates(bot_id, new_rates)
+
+        plan_labels = [("week", "1 Week"), ("month", "1 Month"), ("3months", "3 Months"), ("6months", "6 Months")]
+
+        def _diff_line(label: str, old: str, new: str) -> str:
+            return f"- {label}: <s>{old}Rs</s> → <b>{new}Rs</b>" if old != new else f"- {label}: {old}Rs (unchanged)"
+
+        diff_text = "\n".join(_diff_line(label, current[key], new_rates[key]) for key, label in plan_labels)
+
         await reply.reply_text(
-            "✅ Plan rates updated!\n\n" + format_plan_rates(new_rates).replace("ʀs", "Rs").replace("ᴡᴇᴇᴋ", "Week").replace("ᴍᴏɴᴛʜs", "Months")
+            "✅ <b>Plan rates updated!</b>\n\n"
+            "📊 <b>Previous → New</b>\n" + diff_text,
+            parse_mode=enums.ParseMode.HTML
         )
     except Exception as e:
         logger.exception(e)
