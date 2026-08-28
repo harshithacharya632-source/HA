@@ -120,15 +120,33 @@ def extract_duration(original_caption: str = None) -> str:
 # Stored in MongoDB via the existing db.get_bot_setting/update_bot_setting
 # helpers (keyed by the bot's own Telegram id), so the owner can change
 # prices from PM (/plan_rate) and it survives restarts/redeploys.
+# Holds BOTH the UPI/QR (rupee) rates and the Telegram Stars rates under
+# one setting key, as {"upi": {...}, "stars": {...}}, so /plan_rate can
+# edit either payment method's pricing from one place.
 PLAN_RATES_SETTING_KEY = "plan_rates"
 _DEFAULT_PLAN_RATES = {"week": "15", "month": "40", "3months": "110", "6months": "200"}
+_DEFAULT_STAR_RATES = {
+    "week": STAR_PLAN_RATES.get("week", 50),
+    "month": STAR_PLAN_RATES.get("month", 120),
+    "3months": STAR_PLAN_RATES.get("3months", 300),
+    "6months": STAR_PLAN_RATES.get("6months", 500),
+}
 
 
 async def load_plan_rates(bot_id) -> dict:
+    """Returns {"upi": {...}, "stars": {...}}. Transparently upgrades
+    older stored data (which was just the flat UPI dict) to the new
+    nested shape so existing deployments keep working."""
     stored = await db.get_bot_setting(bot_id, PLAN_RATES_SETTING_KEY, None)
     if not stored:
-        return dict(_DEFAULT_PLAN_RATES)
-    return {**_DEFAULT_PLAN_RATES, **stored}
+        return {"upi": dict(_DEFAULT_PLAN_RATES), "stars": dict(_DEFAULT_STAR_RATES)}
+    if "upi" in stored or "stars" in stored:
+        return {
+            "upi": {**_DEFAULT_PLAN_RATES, **stored.get("upi", {})},
+            "stars": {**_DEFAULT_STAR_RATES, **stored.get("stars", {})},
+        }
+    # Legacy flat shape from before Star rates were editable.
+    return {"upi": {**_DEFAULT_PLAN_RATES, **stored}, "stars": dict(_DEFAULT_STAR_RATES)}
 
 
 async def save_plan_rates(bot_id, rates: dict) -> None:
@@ -143,6 +161,15 @@ def format_plan_rates(rates: dict) -> str:
         f"- {r['3months']}ʀs - 3 ᴍᴏɴᴛʜs\n"
         f"- {r['6months']}ʀs - 6 ᴍᴏɴᴛʜs"
     )
+
+
+def _strike_line(old_val, new_val, suffix: str) -> str:
+    """Renders 'old_val<suffix>' struck through followed by the new value,
+    e.g. '~~15Rs~~ 20Rs'. If the value didn't change, just shows it plain."""
+    old_val, new_val = str(old_val), str(new_val)
+    if old_val == new_val:
+        return f"{new_val}{suffix}"
+    return f"<s>{old_val}{suffix}</s> {new_val}{suffix}"
 
 
 # ── /myplan display formatting ─────────────────────────────────────────
@@ -2062,14 +2089,20 @@ async def plans_cmd_handler(client, message):
     ]
     reply_markup = InlineKeyboardMarkup(btn)
     rates = await load_plan_rates(client.me.id)
-    caption_text = PAYMENT_TEXT.format(plan_rates=format_plan_rates(rates))
-    await message.reply_photo(
+    caption_text = PAYMENT_TEXT.format(plan_rates=format_plan_rates(rates["upi"]))
+    sent = await message.reply_photo(
         photo=PAYMENT_QR,
         caption=caption_text,
         parse_mode=enums.ParseMode.HTML,
         has_spoiler=True,
         reply_markup=reply_markup
     )
+    # Auto-delete the /plan message after 3 minutes.
+    await asyncio.sleep(180)
+    try:
+        await sent.delete()
+    except Exception:
+        pass
 
 
 # ── Telegram Stars (XTR) — instant premium ─────────────────────────────
@@ -2077,70 +2110,48 @@ async def plans_cmd_handler(client, message):
 # screenshot needed. Telegram handles the charge, we just grant premium
 # the moment the successful_payment update arrives.
 
-def _star_plan_buttons() -> InlineKeyboardMarkup:
+def _star_plan_buttons(star_rates: dict) -> InlineKeyboardMarkup:
     btn = [
         [InlineKeyboardButton(f"⭐ {STAR_PLAN_LABELS[p]} — {amt} Stars", callback_data=f"buy_star_{p}")]
-        for p, amt in STAR_PLAN_RATES.items()
+        for p, amt in star_rates.items()
     ]
     btn.append([InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")])
     return InlineKeyboardMarkup(btn)
-
-
-STAR_MENU_AUTO_DELETE_SECONDS = 20
-
-
-async def _auto_delete_star_menu(msg, delay: int = STAR_MENU_AUTO_DELETE_SECONDS):
-    """Deletes the star-plan menu message after `delay` seconds. If the
-    user has already picked a plan (which deletes it immediately), this
-    just fails silently on the already-gone message."""
-    await asyncio.sleep(delay)
-    try:
-        await msg.delete()
-    except Exception:
-        pass
 
 
 @Client.on_message(filters.command("planstars"))
 async def plan_stars_cmd_handler(client, message):
     if PREMIUM_AND_REFERAL_MODE == False:
         return
-    msg = await message.reply_text(
+    rates = await load_plan_rates(client.me.id)
+    await message.reply_text(
         "<b>⭐ Buy Goflix Premium instantly with Telegram Stars</b>\n\n"
-        "No screenshot, no waiting — premium activates the moment payment goes through.\n\n"
-        f"<i>This menu auto-deletes in {STAR_MENU_AUTO_DELETE_SECONDS} seconds.</i>",
+        "No screenshot, no waiting — premium activates the moment payment goes through.",
         parse_mode=enums.ParseMode.HTML,
-        reply_markup=_star_plan_buttons()
+        reply_markup=_star_plan_buttons(rates["stars"])
     )
-    asyncio.create_task(_auto_delete_star_menu(msg))
 
 
 @Client.on_callback_query(filters.regex("^show_star_plans$"))
 async def show_star_plans_cb(client, query):
     await query.answer()
-    # This callback fires from the /plan (UPI/QR) message — clear it the
-    # moment the user switches to the Stars flow, so only one payment
-    # prompt is ever on screen.
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
-    msg = await client.send_message(
+    rates = await load_plan_rates(client.me.id)
+    await client.send_message(
         chat_id=query.from_user.id,
         text=(
             "<b>⭐ Buy Goflix Premium instantly with Telegram Stars</b>\n\n"
-            "No screenshot, no waiting — premium activates the moment payment goes through.\n\n"
-            f"<i>This menu auto-deletes in {STAR_MENU_AUTO_DELETE_SECONDS} seconds.</i>"
+            "No screenshot, no waiting — premium activates the moment payment goes through."
         ),
         parse_mode=enums.ParseMode.HTML,
-        reply_markup=_star_plan_buttons()
+        reply_markup=_star_plan_buttons(rates["stars"])
     )
-    asyncio.create_task(_auto_delete_star_menu(msg))
 
 
 @Client.on_callback_query(filters.regex(r"^buy_star_(\w+)$"))
 async def send_star_invoice_cb(client, query):
     plan = query.matches[0].group(1)
-    amount = STAR_PLAN_RATES.get(plan)
+    rates = await load_plan_rates(client.me.id)
+    amount = rates["stars"].get(plan)
     if amount is None:
         return await query.answer("Invalid plan.", show_alert=True)
     await query.answer()
@@ -2151,14 +2162,8 @@ async def send_star_invoice_cb(client, query):
         payload=f"star_premium_{plan}",
         provider_token="",   # empty string is required (not omitted) for Stars/XTR
         currency="XTR",
-        prices=[LabeledPrice(label=STAR_PLAN_LABELS[plan], amount=amount)]
+        prices=[LabeledPrice(label=STAR_PLAN_LABELS[plan], amount=int(amount))]
     )
-    # Plan picked — clear the menu right away instead of waiting out the
-    # 20s timer (that timer still fires harmlessly on the deleted message).
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
 
 
 @Client.on_pre_checkout_query()
@@ -2201,7 +2206,7 @@ async def star_payment_success_handler(client, message):
             await client.send_message(
                 LOG_CHANNEL,
                 f"⭐ <b>Stars payment</b>\nUser: <a href='tg://user?id={user_id}'>{message.from_user.first_name}</a> (<code>{user_id}</code>)\n"
-                f"Plan: {STAR_PLAN_LABELS[plan]} ({STAR_PLAN_RATES[plan]} Stars)\nCharge ID: <code>{charge_id}</code>",
+                f"Plan: {STAR_PLAN_LABELS[plan]} ({message.successful_payment.total_amount} Stars)\nCharge ID: <code>{charge_id}</code>",
                 parse_mode=enums.ParseMode.HTML
             )
         except Exception:
@@ -2219,16 +2224,24 @@ async def plan_rate_cmd_handler(client, message):
     try:
         bot_id = client.me.id
         current = await load_plan_rates(bot_id)
+        current_upi, current_stars = current["upi"], current["stars"]
+
         current_text = (
             "💰 <b>Current Plan Rates</b>\n\n"
-            f"- {current['week']}Rs - 1 Week\n"
-            f"- {current['month']}Rs - 1 Months\n"
-            f"- {current['3months']}Rs - 3 Months\n"
-            f"- {current['6months']}Rs - 6 Months\n\n"
-            "Send the new rates as <b>4 numbers</b>, one per line, in this exact order "
+            "<b>UPI / QR (₹)</b>\n"
+            f"- {current_upi['week']}Rs - 1 Week\n"
+            f"- {current_upi['month']}Rs - 1 Month\n"
+            f"- {current_upi['3months']}Rs - 3 Months\n"
+            f"- {current_upi['6months']}Rs - 6 Months\n\n"
+            "<b>Telegram Stars ⭐</b>\n"
+            f"- {current_stars['week']} Stars - 1 Week\n"
+            f"- {current_stars['month']} Stars - 1 Month\n"
+            f"- {current_stars['3months']} Stars - 3 Months\n"
+            f"- {current_stars['6months']} Stars - 6 Months\n\n"
+            "Send the new <b>UPI rates</b> as 4 numbers, one per line, in this exact order "
             "(1 week, 1 month, 3 months, 6 months) — numbers only, e.g.:\n\n"
             "<code>15\n40\n110\n200</code>\n\n"
-            "Send /cancel to keep the current rates."
+            "Send /cancel to keep everything unchanged."
         )
         reply = await client.ask(message.from_user.id, current_text, parse_mode=enums.ParseMode.HTML)
 
@@ -2241,22 +2254,47 @@ async def plan_rate_cmd_handler(client, message):
                 "⚠️ Invalid format. Send exactly 4 numbers, one per line "
                 "(week, month, 3 months, 6 months). Run /plan_rate again to retry."
             )
+        new_upi = {"week": lines[0], "month": lines[1], "3months": lines[2], "6months": lines[3]}
 
-        new_rates = {"week": lines[0], "month": lines[1], "3months": lines[2], "6months": lines[3]}
-        await save_plan_rates(bot_id, new_rates)
-
-        plan_labels = [("week", "1 Week"), ("month", "1 Month"), ("3months", "3 Months"), ("6months", "6 Months")]
-
-        def _diff_line(label: str, old: str, new: str) -> str:
-            return f"- {label}: <s>{old}Rs</s> → <b>{new}Rs</b>" if old != new else f"- {label}: {old}Rs (unchanged)"
-
-        diff_text = "\n".join(_diff_line(label, current[key], new_rates[key]) for key, label in plan_labels)
-
-        await reply.reply_text(
-            "✅ <b>Plan rates updated!</b>\n\n"
-            "📊 <b>Previous → New</b>\n" + diff_text,
+        reply2 = await client.ask(
+            message.from_user.id,
+            "👍 UPI rates captured.\n\n"
+            "Now send the new <b>Telegram Star rates</b> as 4 numbers, one per line, "
+            "same order (1 week, 1 month, 3 months, 6 months) — numbers only, e.g.:\n\n"
+            "<code>50\n120\n300\n500</code>\n\n"
+            "Send /cancel to keep the Star rates as they are (the UPI rates above will still be saved).",
             parse_mode=enums.ParseMode.HTML
         )
+
+        if reply2.text and reply2.text.strip().lower() == "/cancel":
+            new_stars = dict(current_stars)
+        else:
+            lines2 = [ln.strip() for ln in (reply2.text or "").splitlines() if ln.strip()]
+            if len(lines2) != 4 or not all(ln.isdigit() for ln in lines2):
+                return await reply2.reply_text(
+                    "⚠️ Invalid format for Star rates — nothing was saved. "
+                    "Run /plan_rate again to retry."
+                )
+            new_stars = {"week": int(lines2[0]), "month": int(lines2[1]),
+                         "3months": int(lines2[2]), "6months": int(lines2[3])}
+
+        new_rates = {"upi": new_upi, "stars": new_stars}
+        await save_plan_rates(bot_id, new_rates)
+
+        confirm_text = (
+            "✅ <b>Plan rates updated!</b>\n\n"
+            "<b>UPI / QR (₹)</b>\n"
+            f"- {_strike_line(current_upi['week'], new_upi['week'], 'Rs')} - 1 Week\n"
+            f"- {_strike_line(current_upi['month'], new_upi['month'], 'Rs')} - 1 Month\n"
+            f"- {_strike_line(current_upi['3months'], new_upi['3months'], 'Rs')} - 3 Months\n"
+            f"- {_strike_line(current_upi['6months'], new_upi['6months'], 'Rs')} - 6 Months\n\n"
+            "<b>Telegram Stars ⭐</b>\n"
+            f"- {_strike_line(current_stars['week'], new_stars['week'], ' Stars')} - 1 Week\n"
+            f"- {_strike_line(current_stars['month'], new_stars['month'], ' Stars')} - 1 Month\n"
+            f"- {_strike_line(current_stars['3months'], new_stars['3months'], ' Stars')} - 3 Months\n"
+            f"- {_strike_line(current_stars['6months'], new_stars['6months'], ' Stars')} - 6 Months"
+        )
+        await reply2.reply_text(confirm_text, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
         logger.exception(e)
         await message.reply_text(f"⚠️ /plan_rate failed:\n<code>{e}</code>", parse_mode=enums.ParseMode.HTML)
