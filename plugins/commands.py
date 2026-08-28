@@ -7,7 +7,8 @@ from pyrogram.types import *
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
 from database.users_chats_db import db, delete_all_referal_users, get_referal_users_count, get_referal_all_users, referal_add_user
 from database.join_reqs import JoinReqs
-from info import CLONE_MODE, OWNER_LNK, REACTIONS, CHANNELS, REQUEST_TO_JOIN_MODE, TRY_AGAIN_BTN, ADMINS, SHORTLINK_MODE, PREMIUM_AND_REFERAL_MODE, STREAM_MODE, AUTH_CHANNEL, REFERAL_PREMEIUM_TIME, REFERAL_COUNT, PAYMENT_TEXT, PAYMENT_QR, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, CHNL_LNK, GRP_LNK, REQST_CHANNEL, SUPPORT_CHAT, MAX_B_TN, VERIFY, SHORTLINK_API, SHORTLINK_URL, TUTORIAL, VERIFY_TUTORIAL, IS_TUTORIAL, URL
+from info import CLONE_MODE, OWNER_LNK, REACTIONS, CHANNELS, REQUEST_TO_JOIN_MODE, TRY_AGAIN_BTN, ADMINS, SHORTLINK_MODE, PREMIUM_AND_REFERAL_MODE, STREAM_MODE, AUTH_CHANNEL, REFERAL_PREMEIUM_TIME, REFERAL_COUNT, PAYMENT_TEXT, PAYMENT_QR, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, CHNL_LNK, GRP_LNK, REQST_CHANNEL, SUPPORT_CHAT, MAX_B_TN, VERIFY, SHORTLINK_API, SHORTLINK_URL, TUTORIAL, VERIFY_TUTORIAL, IS_TUTORIAL, URL, STAR_PLAN_RATES, STAR_PLAN_LABELS, STAR_PLAN_SECONDS
+from pyrogram.types import LabeledPrice
 from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds, is_premium_user, MIN_VERIFY_SECONDS
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
@@ -2054,7 +2055,8 @@ async def remove_premium_cmd_handler(client, message):
 async def plans_cmd_handler(client, message): 
     if PREMIUM_AND_REFERAL_MODE == False:
         return 
-    btn = [            
+    btn = [
+        [InlineKeyboardButton("⭐ ᴘᴀʏ ɪɴsᴛᴀɴᴛʟʏ ᴡɪᴛʜ sᴛᴀʀs", callback_data="show_star_plans")],
         [InlineKeyboardButton("ꜱᴇɴᴅ ᴘᴀʏᴍᴇɴᴛ ʀᴇᴄᴇɪᴘᴛ 🧾", url=OWNER_LNK)],
         [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")]
     ]
@@ -2068,6 +2070,111 @@ async def plans_cmd_handler(client, message):
         has_spoiler=True,
         reply_markup=reply_markup
     )
+
+
+# ── Telegram Stars (XTR) — instant premium ─────────────────────────────
+# Separate path from the UPI/QR flow above: no admin action needed, no
+# screenshot needed. Telegram handles the charge, we just grant premium
+# the moment the successful_payment update arrives.
+
+def _star_plan_buttons() -> InlineKeyboardMarkup:
+    btn = [
+        [InlineKeyboardButton(f"⭐ {STAR_PLAN_LABELS[p]} — {amt} Stars", callback_data=f"buy_star_{p}")]
+        for p, amt in STAR_PLAN_RATES.items()
+    ]
+    btn.append([InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")])
+    return InlineKeyboardMarkup(btn)
+
+
+@Client.on_message(filters.command("planstars"))
+async def plan_stars_cmd_handler(client, message):
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+    await message.reply_text(
+        "<b>⭐ Buy Goflix Premium instantly with Telegram Stars</b>\n\n"
+        "No screenshot, no waiting — premium activates the moment payment goes through.",
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=_star_plan_buttons()
+    )
+
+
+@Client.on_callback_query(filters.regex("^show_star_plans$"))
+async def show_star_plans_cb(client, query):
+    await query.answer()
+    await client.send_message(
+        chat_id=query.from_user.id,
+        text=(
+            "<b>⭐ Buy Goflix Premium instantly with Telegram Stars</b>\n\n"
+            "No screenshot, no waiting — premium activates the moment payment goes through."
+        ),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=_star_plan_buttons()
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^buy_star_(\w+)$"))
+async def send_star_invoice_cb(client, query):
+    plan = query.matches[0].group(1)
+    amount = STAR_PLAN_RATES.get(plan)
+    if amount is None:
+        return await query.answer("Invalid plan.", show_alert=True)
+    await query.answer()
+    await client.send_invoice(
+        chat_id=query.from_user.id,
+        title=f"Goflix Premium — {STAR_PLAN_LABELS[plan]}",
+        description="Instant premium activation via Telegram Stars. No screenshot or admin wait needed.",
+        payload=f"star_premium_{plan}",
+        provider_token="",   # empty string is required (not omitted) for Stars/XTR
+        currency="XTR",
+        prices=[LabeledPrice(label=STAR_PLAN_LABELS[plan], amount=amount)]
+    )
+
+
+@Client.on_pre_checkout_query()
+async def star_pre_checkout_handler(client, pre_checkout_query):
+    # Must be answered within 10s or Telegram cancels the payment.
+    await client.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+
+@Client.on_message(filters.successful_payment)
+async def star_payment_success_handler(client, message):
+    payload = message.successful_payment.invoice_payload  # e.g. "star_premium_month"
+    if not payload.startswith("star_premium_"):
+        return  # not one of our Stars invoices, ignore
+    plan = payload.replace("star_premium_", "")
+    seconds = STAR_PLAN_SECONDS.get(plan)
+    if not seconds:
+        return await message.reply_text("⚠️ Payment received but plan was invalid — contact admin with your payment ID.")
+
+    user_id = message.from_user.id
+    charge_id = message.successful_payment.telegram_payment_charge_id
+    expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+    user_data = {
+        "id": user_id,
+        "expiry_time": expiry_time,
+        "expiry_reminder_sent": False,
+        "expired_notified": False,
+    }
+    await db.update_user(user_data)
+
+    await message.reply_text(
+        f"<b>👑 ᴘᴀʏᴍᴇɴᴛ sᴜᴄᴄᴇssꜰᴜʟ — ᴘʀᴇᴍɪᴜᴍ ᴀᴄᴛɪᴠᴀᴛᴇᴅ ɪɴsᴛᴀɴᴛʟʏ! 👑</b>\n\n"
+        f"💎 ᴘʟᴀɴ: {STAR_PLAN_LABELS[plan]}\n"
+        f"🌟 ᴀʟʟ ᴘʀᴇᴍɪᴜᴍ ꜰᴇᴀᴛᴜʀᴇs ᴀʀᴇ ɴᴏᴡ ᴀᴄᴄᴇssɪʙʟᴇ\n"
+        f"🎬 ᴇɴᴊᴏʏ ᴀᴅ-ꜰʀᴇᴇ, ʜɪɢʜ-sᴘᴇᴇᴅ sᴛʀᴇᴀᴍɪɴɢ\n\n"
+        f"<code>Charge ID: {charge_id}</code>",
+        parse_mode=enums.ParseMode.HTML
+    )
+    if LOG_CHANNEL:
+        try:
+            await client.send_message(
+                LOG_CHANNEL,
+                f"⭐ <b>Stars payment</b>\nUser: <a href='tg://user?id={user_id}'>{message.from_user.first_name}</a> (<code>{user_id}</code>)\n"
+                f"Plan: {STAR_PLAN_LABELS[plan]} ({STAR_PLAN_RATES[plan]} Stars)\nCharge ID: <code>{charge_id}</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
 
 
 @Client.on_message(filters.command("plan_rate") & filters.private)
