@@ -22,9 +22,27 @@ from TechVJ.bot import TechVJBot
 from TechVJ.util.keepalive import ping_server
 from TechVJ.bot.clients import initialize_clients
 
+# ── Second bot: @Goflix_AdminBot ────────────────────────────────────────
+# Handles payment screenshots + admin approve/reject buttons (see
+# admin_plugins/payment_approval.py). Uses Pyrogram's own built-in plugin
+# loader (plugins=dict(root=...)), which — unlike the manual glob loader
+# below for TechVJBot — walks subfolders too, and only loads what's in
+# admin_plugins/, so nothing here gets double-registered on the main bot.
+# If ADMIN_BOT_TOKEN isn't set, this bot just doesn't start; everything
+# else keeps working as before.
+AdminBot = Client(
+    name="GoflixAdminBot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=ADMIN_BOT_TOKEN,
+    plugins=dict(root="admin_plugins"),
+) if ADMIN_BOT_TOKEN else None
+
 ppath = "plugins/*.py"
 files = glob.glob(ppath)
 TechVJBot.start()
+if AdminBot:
+    AdminBot.start()
 loop = asyncio.get_event_loop()
 
 
@@ -33,6 +51,9 @@ async def start():
     print('Initalizing Your Bot')
     bot_info = await TechVJBot.get_me()
     await initialize_clients()
+    if AdminBot:
+        admin_bot_info = await AdminBot.get_me()
+        print(f"Goflix_AdminBot started as @{admin_bot_info.username}")
     for name in files:
         with open(name) as a:
             patt = Path(a.name)
