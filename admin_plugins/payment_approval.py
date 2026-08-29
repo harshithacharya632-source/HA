@@ -1,23 +1,37 @@
 """
-Goflix_AdminBot — UPI screenshot payment approval.
+Goflix_AdminBot — UPI screenshot payment approval + user support relay.
 
 This is a SEPARATE bot from the main Goflix file-store bot (its own
 BOT_TOKEN, its own Client, started alongside the main bot in bot.py).
 Users are sent here (via the "Send screenshot" link under /plan on the
-main bot, which is just OWNER_LNK) to submit their UPI payment proof.
+main bot, which is just OWNER_LNK) to submit their UPI payment proof —
+and can also just message this bot directly with questions, which get
+relayed to the admins (see "Support Q&A relay" below).
 
-Flow:
-  1. User taps /start (or says hi) in THIS bot.
+Payment flow:
+  1. User taps /start (or says hi), OR sends the screenshot photo cold
+     with no plan picked yet (see unsolicited_screenshot_cb — the photo
+     is stashed and they're asked which plan it's for).
   2. Bot shows a "Submit Payment Screenshot" button -> asks which plan.
-  3. Bot asks for the screenshot photo.
+  3. Bot asks for the screenshot photo (unless one was already stashed
+     from step 1, in which case that's used instead).
   4. OCR (pytesseract) pulls out an amount + date/time and checks: does
      the amount match the claimed plan, and is the date recent (not an
      old/reused screenshot)?
-  5. Sent to LOG_CHANNEL (this bot must be an admin there) with the
-     screenshot, extracted info, and buttons. An admin ALWAYS taps
-     something before premium is granted — OCR only pre-fills the
-     answer, it never grants premium by itself. Clean matches get one
-     big matching Approve button; ambiguous ones show a button per plan.
+  5a. High confidence (amount matched + date recent): premium is granted
+      immediately, no admin needed. The screenshot is still posted to
+      LOG_CHANNEL as a record only (no buttons) so approvals stay
+      auditable.
+  5b. Anything less than that: sent to LOG_CHANNEL (this bot must be an
+      admin there) with the screenshot, extracted info, and buttons. An
+      admin taps something before premium is granted. Ambiguous cases
+      show a button per plan.
+
+Support Q&A relay:
+  Any other message a user sends (not /start, not a screenshot) is
+  forwarded to every admin's PM with this bot. An admin replies by using
+  Telegram's native reply-to on that forwarded copy, and the reply is
+  relayed straight back to the user.
 
 Requires: pytesseract + tesseract-ocr/tesseract-ocr-eng system packages
 (see Dockerfile) and Pillow (already in requirements.txt).
@@ -189,6 +203,18 @@ async def claim_plan_then_ask_screenshot_cb(client, query):
         return await query.answer("Invalid plan.", show_alert=True)
     await query.answer()
 
+    # Did they already send a screenshot before picking a plan (caught by
+    # unsolicited_screenshot_cb below)? If so, use that instead of asking
+    # them to send it again.
+    stashed_file_id = await db.pop_pending_screenshot(query.from_user.id)
+    if stashed_file_id:
+        await client.send_message(
+            chat_id=query.from_user.id,
+            text=f"<b>Got it — {PLAN_LABELS[plan]}.</b> Checking the screenshot you already sent…",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await _handle_screenshot(client, query.from_user, query.from_user.id, stashed_file_id, plan)
+
     prompt = await client.send_message(
         chat_id=query.from_user.id,
         text=(
@@ -213,14 +239,40 @@ async def claim_plan_then_ask_screenshot_cb(client, query):
     if not reply.photo:
         return await reply.reply_text("⚠️ That wasn't a photo. Tap /start again to retry.")
 
-    await _handle_screenshot(client, reply, plan)
+    await _handle_screenshot(client, reply.from_user, reply.chat.id, reply.photo.file_id, plan)
 
 
-async def _handle_screenshot(client, message, claimed_plan: str):
-    user = message.from_user
-    status_msg = await message.reply_text("🔍 Reading your screenshot…")
+# ── Screenshot sent cold, with no plan picked yet ─────────────────────────
 
-    photo_bytes = await client.download_media(message.photo.file_id, in_memory=True)
+@Client.on_message(filters.private & filters.photo)
+async def unsolicited_screenshot_cb(client, message):
+    """Catches a screenshot sent straight into the chat with no /start
+    and no plan chosen (e.g. the user just pastes/forwards the photo).
+    If an active client.ask() is already waiting on a photo from this
+    user (the normal flow above), the ask_patch resolver (group=-1)
+    consumes it first and this handler never runs — so this only fires
+    for a genuinely cold screenshot."""
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+
+    await db.set_pending_screenshot(message.from_user.id, message.photo.file_id)
+    rates = await load_plan_rates(MAIN_BOT_ID)
+    upi = rates["upi"]
+    btn = [
+        [InlineKeyboardButton(f"{PLAN_LABELS[p]} — {upi[p]}Rs", callback_data=f"claim_upi_plan_{p}")]
+        for p in ("week", "month", "3months", "6months")
+    ]
+    await message.reply_text(
+        "<b>Got your screenshot — which plan did you pay for?</b>\n\nPick the one matching what you just paid.",
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(btn)
+    )
+
+
+async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
+    status_msg = await client.send_message(chat_id, "🔍 Reading your screenshot…")
+
+    photo_bytes = await client.download_media(file_id, in_memory=True)
     extracted = await ocr_screenshot(bytes(photo_bytes.getbuffer()))
 
     rates = await load_plan_rates(MAIN_BOT_ID)
@@ -233,16 +285,75 @@ async def _handle_screenshot(client, message, claimed_plan: str):
 
     request_id = await db.add_payment_request(
         user_id=user.id, username=user.username or user.first_name,
-        screenshot_file_id=message.photo.file_id,
+        screenshot_file_id=file_id,
         claimed_plan=claimed_plan, extracted=extracted,
     )
+
+    if extracted["confidence"] == "high":
+        # Amount matched the claimed plan AND the screenshot's date/time
+        # is recent enough to trust — skip manual review entirely.
+        await status_msg.edit_text("✅ Screenshot verified automatically — premium is active now! 🎉")
+        await _grant_premium(client, request_id, user.id, claimed_plan, auto=True)
+        await _log_auto_approval(client, request_id, user, claimed_plan, extracted, file_id)
+        return
 
     await status_msg.edit_text(
         "✅ Got it! Your screenshot is with the admins for a quick check — "
         "you'll get a message the moment it's approved."
     )
+    await _notify_admins(client, request_id, user, claimed_plan, extracted, file_id)
 
-    await _notify_admins(client, request_id, user, claimed_plan, extracted, message.photo.file_id)
+
+async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, admin_id=None):
+    """Shared by the auto-approve path above and the manual Approve
+    button below — same premium-granting logic either way, only the
+    payment_request's recorded status differs."""
+    seconds = PLAN_SECONDS[plan]
+    expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+    await db.update_user({
+        "id": user_id, "expiry_time": expiry_time,
+        "expiry_reminder_sent": False, "expired_notified": False,
+    })
+    await db.set_payment_request_status(request_id, "auto_approved" if auto else "approved", admin_id)
+    try:
+        await client.send_message(
+            chat_id=user_id,
+            text=(
+                "<b>👑 ᴄᴏɴɢʀᴀᴛꜱ 👑</b>\n\n"
+                f"💎 <b>ᴘʀᴇᴍɪᴜᴍ ᴜɴʟᴏᴄᴋᴇᴅ ꜰᴏʀ {PLAN_LABELS[plan]}</b>\n"
+                "🌟 ᴀʟʟ ᴘʀᴇᴍɪᴜᴍ ꜰᴇᴀᴛᴜʀᴇꜱ ᴀʀᴇ ɴᴏᴡ ᴀᴄᴄᴇꜱꜱɪʙʟᴇ\n\n"
+                "🚀 <b>ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴘʀᴇᴍɪᴜᴍ ɢᴏꜰʟɪx!</b>"
+            ),
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception as e:
+        logger.warning(f"Couldn't DM user {user_id} after granting premium: {e}")
+
+
+async def _log_auto_approval(client, request_id, user, plan: str, extracted, file_id):
+    """Posts a record-only copy to LOG_CHANNEL for auto-approved payments
+    — no buttons, nothing for an admin to action, just an audit trail
+    ('the premium list') of who got premium and why."""
+    caption = (
+        f"<b>✅ Auto-approved UPI payment</b>\n\n"
+        f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
+        f"📦 Plan: <b>{PLAN_LABELS[plan]}</b>\n"
+        f"🔎 OCR amount: {extracted['amount']}Rs\n"
+        f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
+        f"🟢 High confidence — granted automatically, no admin action needed.\n\n"
+        f"Request ID: <code>{request_id}</code>"
+    )
+    try:
+        if not LOG_CHANNEL:
+            raise ValueError("LOG_CHANNEL not set")
+        await client.send_photo(chat_id=LOG_CHANNEL, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        logger.warning(f"Couldn't post auto-approval log to LOG_CHANNEL ({e}), DMing admins instead.")
+        for admin_id in ADMINS:
+            try:
+                await client.send_photo(chat_id=admin_id, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+            except Exception as e2:
+                logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
 
 
 async def _notify_admins(client, request_id, user, claimed_plan, extracted, file_id):
@@ -312,17 +423,11 @@ async def approve_payment_cb(client, query):
     if req["status"] != "pending":
         return await query.answer(f"Already handled ({req['status']}).", show_alert=True)
 
-    seconds = PLAN_SECONDS.get(plan)
-    if not seconds:
+    if plan not in PLAN_SECONDS:
         return await query.answer("Invalid plan.", show_alert=True)
 
     user_id = req["user_id"]
-    expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
-    await db.update_user({
-        "id": user_id, "expiry_time": expiry_time,
-        "expiry_reminder_sent": False, "expired_notified": False,
-    })
-    await db.set_payment_request_status(request_id, "approved", query.from_user.id)
+    await _grant_premium(client, request_id, user_id, plan, auto=False, admin_id=query.from_user.id)
 
     await query.answer("Approved — premium granted.")
     await query.message.edit_caption(
@@ -330,19 +435,6 @@ async def approve_payment_cb(client, query):
         parse_mode=enums.ParseMode.HTML,
         reply_markup=None
     )
-    try:
-        await client.send_message(
-            chat_id=user_id,
-            text=(
-                "<b>👑 ᴄᴏɴɢʀᴀᴛꜱ 👑</b>\n\n"
-                f"💎 <b>ᴘʀᴇᴍɪᴜᴍ ᴜɴʟᴏᴄᴋᴇᴅ ꜰᴏʀ {PLAN_LABELS[plan]}</b>\n"
-                "🌟 ᴀʟʟ ᴘʀᴇᴍɪᴜᴍ ꜰᴇᴀᴛᴜʀᴇꜱ ᴀʀᴇ ɴᴏᴡ ᴀᴄᴄᴇꜱꜱɪʙʟᴇ\n\n"
-                "🚀 <b>ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴘʀᴇᴍɪᴜᴍ ɢᴏꜰʟɪx!</b>"
-            ),
-            parse_mode=enums.ParseMode.HTML
-        )
-    except Exception as e:
-        logger.warning(f"Couldn't DM user {user_id} after approval: {e}")
 
 
 @Client.on_callback_query(filters.regex(r"^pay_reject_([0-9a-fA-F]{24})$"))
@@ -394,3 +486,59 @@ async def pending_payments_cmd(client, message):
             f"{int(age.total_seconds() // 60)} min ago"
         )
     await message.reply_text("\n".join(lines), parse_mode=enums.ParseMode.HTML)
+
+
+# ── Support Q&A relay ─────────────────────────────────────────────────────
+# Lets this same bot double as a help desk: any user message that isn't
+# /start, the greeting, a payment screenshot, or an admin command falls
+# through every handler above (photos are consumed by ask()/the
+# unsolicited_screenshot_cb handler; /start and "hi" are consumed at
+# their own groups) and lands here at group=5 — the lowest priority, so
+# it only ever sees what nothing else claimed.
+
+@Client.on_message(filters.private & filters.incoming & ~filters.user(ADMINS) & ~filters.command("start"), group=5)
+async def relay_user_question_to_admins_cb(client, message):
+    if not ADMINS:
+        return await message.reply_text("⚠️ No admin is configured to receive messages right now.")
+
+    delivered = False
+    for admin_id in ADMINS:
+        try:
+            fwd = await client.forward_messages(admin_id, message.chat.id, message.id)
+            note = await client.send_message(
+                chat_id=admin_id,
+                text=(
+                    f"👆 Message from {message.from_user.mention} (<code>{message.from_user.id}</code>).\n"
+                    f"Reply to THIS message to answer them."
+                ),
+                parse_mode=enums.ParseMode.HTML,
+                reply_to_message_id=fwd.id,
+            )
+            await db.add_support_link(admin_id, note.id, message.from_user.id)
+            delivered = True
+        except Exception as e:
+            logger.warning(f"Couldn't relay question to admin {admin_id}: {e}")
+
+    if delivered:
+        await message.reply_text("📨 Got your message — an admin will reply here shortly.")
+    else:
+        await message.reply_text("⚠️ Couldn't reach an admin right now — please try again later.")
+
+
+@Client.on_message(filters.private & filters.user(ADMINS) & filters.reply, group=-1)
+async def admin_reply_to_user_cb(client, message):
+    """An admin replying (Telegram's reply-swipe) to one of the forwarded
+    copies above gets that reply relayed straight back to the user. If
+    the reply isn't to a relayed message, this quietly does nothing and
+    lets the message fall through to any other admin-side handler."""
+    if not message.reply_to_message:
+        return
+    target_user_id = await db.get_support_link(message.from_user.id, message.reply_to_message.id)
+    if not target_user_id:
+        return
+
+    try:
+        await client.copy_message(target_user_id, message.chat.id, message.id)
+        await message.reply_text("✅ Sent to the user.")
+    except Exception as e:
+        await message.reply_text(f"⚠️ Couldn't deliver your reply: {e}")
