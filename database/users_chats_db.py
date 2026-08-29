@@ -87,6 +87,8 @@ class Database:
         self.users = self.db.uersz
         self.bot = self.db.clone_bots
         self.payment_requests = self.db.payment_requests
+        self.pending_screenshots = self.db.pending_screenshots
+        self.support_links = self.db.support_links
 
     async def _safe_find_one(self, collection, filter_query, projection=None):
         """find_one wrapped so a transient replica-set election (no primary
@@ -493,6 +495,42 @@ class Database:
         backlog (the 'premium list' of unreviewed screenshots)."""
         cursor = self.payment_requests.find({"status": "pending"}).sort("submitted_at", 1)
         return [r async for r in cursor]
+
+    # ── Screenshot sent before a plan was picked ────────────────────────
+    # A user can send the payment screenshot straight into the AdminBot
+    # chat with no /start and no plan chosen yet. We stash the file_id
+    # here (keyed by user, upserted so a second stray screenshot just
+    # replaces the first) and pop it once they tap a plan button, instead
+    # of asking them to resend the photo.
+    async def set_pending_screenshot(self, user_id, file_id):
+        await self.pending_screenshots.update_one(
+            {"user_id": int(user_id)},
+            {"$set": {"user_id": int(user_id), "file_id": file_id, "created_at": datetime.datetime.now()}},
+            upsert=True
+        )
+
+    async def pop_pending_screenshot(self, user_id):
+        """Fetches and deletes in one step so the same stashed screenshot
+        can never be claimed twice."""
+        doc = await self.pending_screenshots.find_one_and_delete({"user_id": int(user_id)})
+        return doc["file_id"] if doc else None
+
+    # ── Support Q&A relay (AdminBot doubles as a help desk) ─────────────
+    # Any message a user sends that isn't part of the screenshot flow
+    # gets forwarded to each admin's PM. We record (admin_id, message_id)
+    # -> user_id so that when an admin replies (Telegram's native
+    # reply-to) to that forwarded copy, the bot knows who to relay the
+    # answer back to.
+    async def add_support_link(self, admin_id, message_id, user_id):
+        await self.support_links.update_one(
+            {"admin_id": int(admin_id), "message_id": message_id},
+            {"$set": {"user_id": int(user_id), "created_at": datetime.datetime.now()}},
+            upsert=True
+        )
+
+    async def get_support_link(self, admin_id, message_id):
+        doc = await self.support_links.find_one({"admin_id": int(admin_id), "message_id": message_id})
+        return doc["user_id"] if doc else None
 
 
 db = Database(USER_DB_URI, DATABASE_NAME)
