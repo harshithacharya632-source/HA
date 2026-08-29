@@ -86,6 +86,7 @@ class Database:
         self.grp = self.db.groups
         self.users = self.db.uersz
         self.bot = self.db.clone_bots
+        self.payment_requests = self.db.payment_requests
 
     async def _safe_find_one(self, collection, filter_query, projection=None):
         """find_one wrapped so a transient replica-set election (no primary
@@ -453,6 +454,45 @@ class Database:
 
     async def update_movie_update_status(self, bot_id, enable):
         await self.update_bot_setting(bot_id, 'MOVIE_UPDATE_NOTIFICATION', enable)
+
+    # ── UPI screenshot payment-approval queue ──────────────────────────
+    # Used by plugins/goflix_admin/payment_approval.py. A "request" is
+    # created the moment a user submits a screenshot, and stays "pending"
+    # until an admin taps Approve/Reject (or, in future, an automated
+    # check marks it "auto_approved").
+    async def add_payment_request(self, user_id, username, screenshot_file_id, claimed_plan, extracted):
+        """extracted: dict, e.g. {"amount": "110", "raw_date": "29 Aug 2026, 6:41 PM",
+        "matched_plan": "3months" or None, "confidence": "high"/"low"}"""
+        doc = {
+            "user_id": int(user_id),
+            "username": username,
+            "screenshot_file_id": screenshot_file_id,
+            "claimed_plan": claimed_plan,
+            "extracted": extracted,
+            "status": "pending",
+            "submitted_at": datetime.datetime.now(),
+            "handled_by": None,
+            "handled_at": None,
+        }
+        result = await self.payment_requests.insert_one(doc)
+        return result.inserted_id
+
+    async def get_payment_request(self, request_id):
+        from bson import ObjectId
+        return await self.payment_requests.find_one({"_id": ObjectId(request_id)})
+
+    async def set_payment_request_status(self, request_id, status, admin_id):
+        from bson import ObjectId
+        await self.payment_requests.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {"status": status, "handled_by": admin_id, "handled_at": datetime.datetime.now()}}
+        )
+
+    async def get_pending_payment_requests(self):
+        """Oldest-first, used by /pending_payments so admins can see the
+        backlog (the 'premium list' of unreviewed screenshots)."""
+        cursor = self.payment_requests.find({"status": "pending"}).sort("submitted_at", 1)
+        return [r async for r in cursor]
 
 
 db = Database(USER_DB_URI, DATABASE_NAME)
