@@ -11,6 +11,13 @@ API_HASH = environ.get('API_HASH', '')
 BOT_TOKEN = environ.get('BOT_TOKEN', "")
 plugins=dict(root="plugins")
 
+# This is the token for @Goflix_AdminBot — a SECOND bot, run from this
+# same repo/process, that handles payment screenshots and admin approve/
+# reject buttons (see bot.py + admin_plugins/payment_approval.py). Get it
+# from @BotFather like any other bot token. If left blank, the admin bot
+# simply doesn't start — the main bot keeps working normally either way.
+ADMIN_BOT_TOKEN = environ.get('ADMIN_BOT_TOKEN', "")
+
 
 
 # This Pictures Is For Start Message Picture, You Can Add Multiple By Giving One Space Between Each.
