@@ -19,6 +19,7 @@ from plugins import web_server
 from plugins.clone import restart_bots
 
 from TechVJ.bot import TechVJBot
+from TechVJ.bot.ask_patch import attach_listener
 from TechVJ.util.keepalive import ping_server
 from TechVJ.bot.clients import initialize_clients
 
@@ -37,6 +38,15 @@ AdminBot = Client(
     bot_token=ADMIN_BOT_TOKEN,
     plugins=dict(root="admin_plugins"),
 ) if ADMIN_BOT_TOKEN else None
+if AdminBot:
+    # Registers the group=-1 resolver handler that completes the future
+    # created by AdminBot.ask(...) (see payment_approval.py's screenshot
+    # flow). Without this, AdminBot.ask()/.listen() exist as methods
+    # (patched onto the Client class globally) but nothing ever captures
+    # the user's incoming photo, so the "Waiting for your screenshot…"
+    # ask() call just times out after 10 minutes and the screenshot is
+    # never processed.
+    attach_listener(AdminBot)
 
 ppath = "plugins/*.py"
 files = glob.glob(ppath)
