@@ -2084,7 +2084,7 @@ async def plans_cmd_handler(client, message):
         return 
     btn = [
         [InlineKeyboardButton("⭐ ᴘᴀʏ ɪɴsᴛᴀɴᴛʟʏ ᴡɪᴛʜ sᴛᴀʀs", callback_data="show_star_plans")],
-        [InlineKeyboardButton("ꜱᴇɴᴅ ᴘᴀʏᴍᴇɴᴛ ʀᴇᴄᴇɪᴘᴛ 🧾", url=OWNER_LNK)],
+        [InlineKeyboardButton("ᴘᴀɪᴅ ᴠɪᴀ ᴜᴘɪ? sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ 🧾", url=OWNER_LNK)],
         [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")]
     ]
     reply_markup = InlineKeyboardMarkup(btn)
