@@ -228,8 +228,40 @@ def _payee_name_matches(text: str) -> bool:
     return PAYEE_NAME_HINT.lower() in text.lower()
 
 
+def _ocr_variants(image):
+    """Yields preprocessing variants of the screenshot to try OCR on, in
+    order — cheapest/most reliable first. Deliberately does NOT try the
+    image at native resolution: confirmed on real screenshots that at
+    native size Tesseract fuses the ₹ glyph into the digits themselves
+    (e.g. "₹15.00" reads as "215.00", a corrupted but still valid-
+    looking number) rather than dropping it, which the amount-without-
+    a-currency-symbol fallback pattern would wrongly accept as genuine.
+    Upscaling first reliably avoids that fusion (₹ gets dropped cleanly
+    instead), so it's always tried before anything else.
+
+    A single OCR pass can still fail on screenshots that have been
+    re-compressed (e.g. forwarded through Telegram, which re-encodes
+    every photo it stores) even when the same screenshot at slightly
+    different compression reads perfectly — so if the 2x pass doesn't
+    find an amount, progressively more aggressive variants are tried."""
+    upscaled = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
+    yield upscaled
+    # Grayscale + autocontrast + a larger upscale — helps on low-contrast
+    # / heavily compressed screenshots where a plain 2x upscale isn't
+    # enough on its own.
+    yield ImageOps.autocontrast(
+        image.resize((image.width * 3, image.height * 3), Image.LANCZOS).convert("L")
+    )
+    # Dark-theme receipts (white text on black) often read better
+    # inverted — try that last since it's the most likely to mangle
+    # OTHER text (date/payee) even when it helps the amount.
+    yield ImageOps.invert(upscaled)
+
+
 async def ocr_screenshot(photo_bytes: bytes) -> dict:
-    """Runs OCR and returns a dict with whatever was extracted, plus a
+    """Runs OCR — trying a few preprocessing variants (see
+    _ocr_variants), stopping as soon as one successfully reads an amount
+    — and returns a dict with whatever was extracted, plus a
     'confidence' verdict. Never raises — OCR failing just means low
     confidence, not a crash."""
     result = {
@@ -242,32 +274,20 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
     try:
         image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
 
-        # Phone-screenshot resolution is often too small for Tesseract to
-        # reliably read the ₹ glyph — confirmed on real screenshots: at
-        # native size "₹15.00" OCRs as "215.00" (the ₹ misread as a
-        # stray "2" fused onto the digits); upscaled 2x it reads cleanly
-        # as "15.00". Cheap fix, no accuracy downside.
-        OCR_UPSCALE = 2
-        image = image.resize((image.width * OCR_UPSCALE, image.height * OCR_UPSCALE), Image.LANCZOS)
-
-        text = pytesseract.image_to_string(image)
-
-        # Dark-theme receipts (white text on black — GPay/PhonePe dark
-        # mode is common) often come back nearly empty with default
-        # Tesseract settings, which assume dark text on a light
-        # background. If the first pass barely read anything, retry on
-        # a colour-inverted copy and keep whichever read more text.
-        if len(text.strip()) < 20:
-            inverted_text = pytesseract.image_to_string(ImageOps.invert(image))
-            if len(inverted_text.strip()) > len(text.strip()):
-                text = inverted_text
+        best_text = ""
+        for variant in _ocr_variants(image):
+            variant_text = pytesseract.image_to_string(variant)
+            if len(variant_text.strip()) > len(best_text.strip()):
+                best_text = variant_text
+            if _extract_amount(variant_text):
+                # This variant found a usable amount — stop here. Further,
+                # more aggressive variants can sometimes read WORSE on the
+                # surrounding text (date/payee) once heavily processed.
+                best_text = variant_text
+                break
+        text = best_text
 
         result["ocr_text"] = text
-        # Whether OCR actually managed to read something off this image
-        # at all, as opposed to failing outright — used below to tell
-        # "this is a wrong/fake screenshot" (OCR worked, wrong payee)
-        # apart from "OCR just couldn't read this one" (send to admin
-        # instead of auto-rejecting a possibly-genuine payment).
         result["ocr_read_ok"] = len(text.strip()) >= 20
         result["amount"] = _extract_amount(text)
         raw_date, parsed_date = _extract_datetime(text)
