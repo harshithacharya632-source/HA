@@ -181,27 +181,43 @@ _DATE_TRY_FORMATS = [
 ]
 
 
+# Words every UPI app prints immediately below/near the amount, on the
+# receipt itself — used to anchor the whole-rupee fallback below so it
+# can tell "this bare number is the amount" apart from every other bare
+# number that shows up in a real screenshot (chat subscriber counts,
+# transaction IDs, phone status bar digits, etc).
+_RECEIPT_STATUS_ANCHORS = ("completed", "pending", "failed", "paid to")
+
+
 def _extract_amount(text: str):
     for pattern in _AMOUNT_PATTERNS:
         m = pattern.search(text)
         if m:
             return m.group(1).replace(",", "")
     # Last-resort fallback: whole-rupee amounts with no paise at all
-    # (e.g. "₹1,100" or "₹15") have no decimal for the pattern above to
+    # (e.g. "₹3" or "₹1,100") have no decimal for the pattern above to
     # anchor on, and if the ₹ glyph was also dropped by OCR there's
-    # nothing left to match on except the bare number. That's too risky
-    # to search for anywhere in the text (a date, phone number, or ID
-    # could match) — but every UPI app (GPay/PhonePe/Paytm/etc.) prints
-    # the amount as the very first prominent line of the receipt, above
-    # the bank name, payee, and date. So this only ever looks at the
-    # first non-blank OCR line, which is safe precisely because nothing
-    # else on a receipt appears before the amount.
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
+    # nothing left to match on except the bare number.
+    #
+    # The bot OCRs the FULL screenshot as sent — status bar, chat
+    # header, subscriber count and all — not a tight crop of just the
+    # payment card, so "the amount is on the first OCR line" does NOT
+    # hold in practice (that's only true of a manually cropped card).
+    # Scanning every bare-number line in the whole text and taking the
+    # first one is too risky on its own — a transaction ID or phone
+    # status digit could match. Instead this only accepts a bare number
+    # line when one of the next few lines is a receipt status word
+    # ("Completed"/"Pending"/"Failed"/"Paid to") — every UPI app prints
+    # the amount immediately above its status, so this ties the number
+    # to that specific position on the receipt rather than grabbing the
+    # first stray digits anywhere in the screenshot.
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    for i, line in enumerate(lines):
+        if not re.fullmatch(r'[0-9][0-9,]*(?:\.\d{1,2})?', line):
             continue
-        m = re.fullmatch(r'[0-9][0-9,]*(?:\.\d{1,2})?', line)
-        return line.replace(",", "") if m else None
+        window = lines[i + 1:i + 4]
+        if any(anchor in w.lower() for w in window for anchor in _RECEIPT_STATUS_ANCHORS):
+            return line.replace(",", "")
     return None
 
 
@@ -482,6 +498,13 @@ async def unsolicited_screenshot_cb(client, message):
     if PREMIUM_AND_REFERAL_MODE == False:
         return
 
+    # OCR (up to 3 image-preprocessing passes, each a full Tesseract run)
+    # can take several seconds — worse on a constrained host. Without
+    # this, the user sees nothing at all until it finishes, which reads
+    # as the bot being stuck/delayed. Send the ack immediately, then
+    # edit it into the real prompt once OCR is done.
+    status_msg = await message.reply_text("🔍 Reading your screenshot…")
+
     photo_bytes = await client.download_media(message.photo.file_id, in_memory=True)
     extracted = await ocr_screenshot(bytes(photo_bytes.getbuffer()))
 
@@ -492,6 +515,10 @@ async def unsolicited_screenshot_cb(client, message):
         # way — better to assume it might be a payment and let the
         # normal flow/admin review sort it out than to silently drop a
         # real payment into the support inbox because OCR choked on it.)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
         return await relay_user_question_to_admins_cb(client, message)
 
     await db.set_pending_screenshot(message.from_user.id, message.photo.file_id)
@@ -501,7 +528,7 @@ async def unsolicited_screenshot_cb(client, message):
         [InlineKeyboardButton(f"{PLAN_LABELS[p]} — {upi[p]}Rs", callback_data=f"claim_upi_plan_{p}")]
         for p in ("week", "month", "3months", "6months")
     ]
-    await message.reply_text(
+    await status_msg.edit_text(
         "<b>Got your screenshot — which plan did you pay for?</b>\n\nPick the one matching what you just paid.",
         parse_mode=enums.ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(btn)
