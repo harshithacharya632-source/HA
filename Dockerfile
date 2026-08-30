@@ -1,7 +1,8 @@
 FROM python:3.10-slim-bookworm
 
 # System dependencies for MediaInfo + Tesseract OCR
-# (tesseract-ocr-eng needed for payment screenshot OCR in admin_plugins/payment_approval.py)
+# (tesseract-ocr-eng needed for payment screenshot OCR in
+# admin_plugins/payment_approval.py)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libmediainfo0v5 \
