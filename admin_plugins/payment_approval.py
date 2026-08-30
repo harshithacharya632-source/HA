@@ -480,38 +480,51 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     amount_matches = _amounts_equal(amount_read, claimed_amount)
     extracted["matched_plan"] = claimed_plan if amount_matches else None
 
-    # Three-way decision:
+    # Four-way decision:
     #   exact  -> payee is ours AND the amount matches the claimed plan
     #             AND the payment is within the last hour -> auto-approve,
     #             no admin needed.
-    #   reject -> OCR successfully read the screenshot (ocr_read_ok) but
+    #   reject (payee)      -> OCR successfully read the screenshot but
     #             the payee name it found is NOT ours -> a confirmed
-    #             wrong/fake screenshot -> auto-reject, not verified, no
-    #             admin needed.
-    #   manual -> either the payee IS ours but something else doesn't
-    #             line up (rate may have changed since, date is stale),
-    #             OR OCR simply couldn't read the screenshot clearly
-    #             enough to be sure either way (dark-theme screenshots
-    #             sometimes still come out unreadable even after the
-    #             invert retry) -> could well be a genuine payment ->
-    #             falls back to admin review rather than being rejected
-    #             on an OCR failure that isn't the user's fault.
+    #             wrong/fake screenshot -> auto-reject, no admin needed.
+    #   reject (stale date) -> OCR successfully READ a date off this
+    #             screenshot (so we're not guessing) and that date is
+    #             NOT recent (older than MAX_SCREENSHOT_AGE_HOURS, or in
+    #             the future) -> this is an old/reused screenshot, not
+    #             an ambiguous case -> auto-reject, no admin needed. A
+    #             stale date is only trusted as grounds for rejection
+    #             when OCR actually parsed a date; if OCR couldn't read
+    #             any date at all, that's ambiguous (below), not stale.
+    #   manual -> OCR simply couldn't read the screenshot clearly enough
+    #             to be sure either way (amount unreadable, or no date
+    #             found at all — dark-theme screenshots sometimes still
+    #             come out unreadable even after the invert retry) ->
+    #             could well be a genuine payment -> falls back to admin
+    #             review rather than being auto-rejected on an OCR
+    #             failure that isn't the user's fault.
     date_recent = (
         extracted["parsed_date"] is not None
         and datetime.timedelta(0) <= (datetime.datetime.now() - extracted["parsed_date"]) <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS)
     )
+    date_known_stale = extracted["parsed_date"] is not None and not date_recent
+    reject_reason = None
     if extracted["payee_ok"] and amount_matches and date_recent:
         decision = "exact"
         extracted["confidence"] = "high"
     elif extracted["ocr_read_ok"] and not extracted["payee_ok"]:
         decision = "reject"
+        reject_reason = "payee"
         extracted["confidence"] = "not_verified"
+    elif date_known_stale:
+        decision = "reject"
+        reject_reason = "stale_date"
+        extracted["confidence"] = "stale_date"
     else:
         decision = "manual"
-        # The amount matched but date/payee didn't quite clear the bar
-        # for auto-approval — the plan is still known for certain, so
-        # give the admin a single confident Approve button instead of a
-        # per-plan picker (that's only for when the amount itself
+        # The amount matched but something else didn't quite clear the
+        # bar for auto-approval — the plan is still known for certain,
+        # so give the admin a single confident Approve button instead of
+        # a per-plan picker (that's only for when the amount itself
         # couldn't be read at all, or doesn't match today's rate — e.g.
         # rates changed since, or OCR just couldn't read this one).
         extracted["confidence"] = "high" if amount_matches else "low"
@@ -533,16 +546,23 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
         appeal_btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("📮 Appeal to admin", callback_data=f"pay_appeal_{request_id}")]
         ])
+        if reject_reason == "stale_date":
+            reject_text = (
+                "❌ This screenshot's payment date/time isn't recent — rejected.\n\n"
+                "Please send a screenshot of a payment you just made. If this IS a fresh "
+                "payment and the date was misread, tap below to send it to an admin."
+            )
+        else:
+            reject_text = (
+                "❌ This screenshot isn't verified as a payment to us — rejected.\n\n"
+                "If you think this is a mistake, tap below to send it to an admin for a manual check."
+            )
         # Not auto-deleted like the other status messages — it carries
         # the Appeal button, which needs to stay clickable whenever the
         # user gets around to it, not just for the next minute.
-        await status_msg.edit_text(
-            "❌ This screenshot isn't verified as a payment to us — rejected.\n\n"
-            "If you think this is a mistake, tap below to send it to an admin for a manual check.",
-            reply_markup=appeal_btn
-        )
+        await status_msg.edit_text(reject_text, reply_markup=appeal_btn)
         await db.set_payment_request_status(request_id, "auto_rejected", None)
-        await _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id)
+        await _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id, reject_reason)
         return
 
     sent = await status_msg.edit_text(
@@ -621,20 +641,31 @@ async def _log_auto_approval(client, request_id, user, plan: str, extracted, fil
                 logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
 
 
-async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id):
+async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id, reject_reason=None):
     """Posts a record-only copy to LOG_CHANNEL for auto-rejected payments
-    (OCR read the screenshot fine but found no match for our payee name
-    — a confirmed wrong/fake screenshot, not just an OCR failure) — no
-    buttons, just a record of what happened in case of a dispute."""
+    — either the payee name didn't match ours (confirmed wrong/fake
+    screenshot) or a date WAS read and it's stale/reused — either way a
+    confirmed reason, not just an OCR failure — no buttons, just a
+    record of what happened in case of a dispute."""
+    if reject_reason == "stale_date":
+        reason_line = (
+            f"🔴 Date/time was read as {extracted['raw_date'] or '(unknown)'} — not recent "
+            f"(older than {MAX_SCREENSHOT_AGE_HOURS}h or in the future). Looks like an old/"
+            f"reused screenshot. Rejected automatically, no admin action needed."
+        )
+    else:
+        reason_line = (
+            f"🔴 Screenshot was readable but the payee name didn't match ours — "
+            f"doesn't look like a real payment to us. Rejected automatically, "
+            f"no admin action needed."
+        )
     caption = (
         f"<b>❌ Auto-rejected — not verified</b>\n\n"
         f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
         f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
         f"🔎 OCR amount: {extracted['amount'] or 'not detected'}Rs\n"
         f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
-        f"🔴 Screenshot was readable but the payee name didn't match ours — "
-        f"doesn't look like a real payment to us. Rejected automatically, "
-        f"no admin action needed.\n\n"
+        f"{reason_line}\n\n"
         f"Request ID: <code>{request_id}</code>"
     )
     try:
