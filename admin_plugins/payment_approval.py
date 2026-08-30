@@ -254,6 +254,32 @@ def _extract_amount(text: str):
         window = lines[i + 1:i + 4]
         if any(anchor in w.lower() for w in window for anchor in _RECEIPT_STATUS_ANCHORS):
             return m.group(1).replace(",", "")
+
+    # PhonePe doesn't print any of the anchor words near its amount at
+    # all — confirmed against a real screenshot, its "₹3" mis-OCRs as a
+    # short standalone line like "z3" with no "Rupees"/"Completed"/
+    # "Paid to" anywhere nearby to anchor on, so the fallback above
+    # never fires for it. Anchor-free is riskier (nothing ties the
+    # number to "this is the amount"), so two things narrow it down:
+    #   - at least one junk character must actually be present (leading
+    #     or trailing) — a mis-OCR'd currency symbol always leaves SOME
+    #     stray glyph behind, so a plain bare digit with zero junk on
+    #     either side (a bullet/icon numeral elsewhere on the receipt,
+    #     confirmed to show up as an isolated "3" near the share icons)
+    #     is excluded rather than treated as a candidate;
+    #   - it must be the ONLY such (junk-having) line in the whole
+    #     screenshot — multiple candidates with no anchor to
+    #     disambiguate between them is too risky to guess at.
+    # Uppercase-letter junk stays excluded (blocks "XX1901", "UTR", a
+    # transaction ID's leading letter, etc. from ever qualifying).
+    bare_amount_line = re.compile(r'^([^\dA-Z\n]{0,2})([0-9][0-9,]*(?:\.\d{1,2})?)([^\dA-Z\n]{0,2})$')
+    candidates = []
+    for l in lines:
+        m = bare_amount_line.match(l)
+        if m and (m.group(1) or m.group(3)):
+            candidates.append(m.group(2))
+    if len(candidates) == 1:
+        return candidates[0].replace(",", "")
     return None
 
 
@@ -318,6 +344,11 @@ _TXN_ID_PATTERNS = [
     re.compile(r'UPI\s+transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
     re.compile(r'UPI\s+Ref\.?\s*No\.?[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
     re.compile(r'Google\s+transaction\s+ID[:\s]*([A-Za-z0-9_]{6,})', re.IGNORECASE),
+    # PhonePe doesn't use either of the above labels — it prints its own
+    # "PhonePe Transaction ID" line, and separately a bank "UTR" number.
+    # Either one uniquely identifies the payment, so both count.
+    re.compile(r'PhonePe\s+Transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'UTR[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
 ]
 
 
@@ -366,6 +397,29 @@ def _ocr_variants(image):
     yield ImageOps.invert(upscaled)
 
 
+def _ocr_top_band(image) -> str:
+    """OCRs just the top ~15% of the screenshot on its own, upscaled
+    3x. Confirmed on a real PhonePe screenshot: Tesseract silently
+    drops an entire colored status band (its white-on-green "Transaction
+    Successful / 01:08 PM on 30 Aug 2026" header) when OCR'ing the full
+    tall screenshot in one pass — a layout-segmentation quirk, not a
+    contrast problem, since the exact same crop reads perfectly on its
+    own. Every PSM mode tried on the full image had the same blind
+    spot, so this runs the top band as a second, separate OCR pass and
+    the caller merges its text in rather than trying to fix the
+    full-image pass itself. Harmless on screenshots that don't have a
+    colored header (Paytm/GPay) — it just re-reads the plain status bar
+    text that the main pass already captured fine, which the amount/
+    date extractors below simply ignore."""
+    band_height = max(1, int(image.height * 0.15))
+    band = image.crop((0, 0, image.width, band_height))
+    band = band.resize((band.width * 3, band_height * 3), Image.LANCZOS)
+    try:
+        return pytesseract.image_to_string(band)
+    except Exception:
+        return ""
+
+
 async def ocr_screenshot(photo_bytes: bytes) -> dict:
     """Runs OCR — trying a few preprocessing variants (see
     _ocr_variants), stopping as soon as one successfully reads an amount
@@ -393,7 +447,11 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
                 # surrounding text (date/payee) once heavily processed.
                 best_text = variant_text
                 break
-        text = best_text
+        # Merge in the top-band pass (see _ocr_top_band) — prepended so
+        # a date/amount that only shows up there is found by the same
+        # search-from-the-top logic below, regardless of which main
+        # variant "won" above.
+        text = _ocr_top_band(image) + "\n" + best_text
 
         result["ocr_text"] = text
         result["ocr_read_ok"] = len(text.strip()) >= 20
