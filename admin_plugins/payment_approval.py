@@ -231,15 +231,26 @@ def _amounts_equal(a, b) -> bool:
         return False
 
 
+def _normalize_meridiem(raw: str) -> str:
+    """"11:06am" (no space before am/pm) is exactly how GPay prints it —
+    but every %I:%M %p format below requires a space there, so strptime
+    rejected it outright and the date silently fell back to "couldn't
+    be auto-confirmed" even though it parsed and extracted fine.
+    Inserting the missing space before matching fixes that without
+    doubling every format string in _DATE_TRY_FORMATS."""
+    return re.sub(r'(\d)\s*(am|pm)\b', r'\1 \2', raw, flags=re.IGNORECASE)
+
+
 def _extract_datetime(text: str):
     """Returns (raw_string, parsed_datetime_or_None)."""
     for pattern in _DATE_PATTERNS:
         m = pattern.search(text)
         if m:
             raw = m.group(1)
+            normalized = _normalize_meridiem(raw)
             for fmt in _DATE_TRY_FORMATS:
                 try:
-                    return raw, datetime.datetime.strptime(raw, fmt)
+                    return raw, datetime.datetime.strptime(normalized, fmt)
                 except ValueError:
                     continue
             return raw, None
@@ -248,9 +259,10 @@ def _extract_datetime(text: str):
     if m:
         time_part, date_part = m.group(1), m.group(2)
         raw = f"{date_part}, {time_part}"
+        normalized = _normalize_meridiem(raw)
         for fmt in _DATE_TRY_FORMATS:
             try:
-                return raw, datetime.datetime.strptime(raw, fmt)
+                return raw, datetime.datetime.strptime(normalized, fmt)
             except ValueError:
                 continue
         return raw, None
