@@ -288,7 +288,15 @@ def _extract_amount(text: str):
     # above the amount instead of below it, even though nothing was
     # actually wrong with the payment.
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    junk_wrapped_amount = re.compile(r'^[^\w]{0,2}([0-9][0-9,]*(?:\.\d{1,2})?)[^\w]{0,2}$')
+    # The junk placeholder for a mis-OCR'd ₹ is USUALLY punctuation
+    # ("<3]", "~3@"), but confirmed on a real screenshot it can also be
+    # a single stray LETTER fused directly onto the digits with nothing
+    # else on the line ("Z15" for a ₹15 payment, in sparse-text mode —
+    # see _ocr_variants). `[^\w]{0,2}` alone can't match that (a letter
+    # IS a word character), so the leading side also accepts exactly one
+    # bare letter as an alternative. Two-letter runs ("XX1901") still
+    # don't qualify — this only ever accepts exactly one.
+    junk_wrapped_amount = re.compile(r'^(?:[^\w]{0,2}|[A-Za-z])([0-9][0-9,]*(?:\.\d{1,2})?)[^\w]{0,2}$')
     for i, line in enumerate(lines):
         m = junk_wrapped_amount.match(line)
         if not m:
@@ -313,13 +321,24 @@ def _extract_amount(text: str):
     #     screenshot — multiple candidates with no anchor to
     #     disambiguate between them is too risky to guess at.
     # Uppercase-letter junk stays excluded (blocks "XX1901", "UTR", a
-    # transaction ID's leading letter, etc. from ever qualifying).
+    # transaction ID's leading letter, etc. from ever qualifying) EXCEPT
+    # for a single fused letter with nothing else on the line at all
+    # ("Z15") — the same corrupted-₹ case as the anchor branch above,
+    # just with no nearby anchor word this time. Still gated by the same
+    # "must be the ONLY candidate in the whole screenshot" rule below, so
+    # a genuine two-letter code like "XX1901" (with a second digit run
+    # elsewhere) can't slip through: it simply isn't unique.
     bare_amount_line = re.compile(r'^([^\dA-Z\n]{0,2})([0-9][0-9,]*(?:\.\d{1,2})?)([^\dA-Z\n]{0,2})$')
+    single_letter_line = re.compile(r'^[A-Za-z]([0-9]{1,6})$')
     candidates = []
     for l in lines:
         m = bare_amount_line.match(l)
         if m and (m.group(1) or m.group(3)):
             candidates.append(m.group(2))
+            continue
+        m = single_letter_line.match(l)
+        if m:
+            candidates.append(m.group(1))
     if len(candidates) == 1:
         return candidates[0].replace(",", "")
     return None
@@ -410,33 +429,54 @@ def _payee_name_matches(text: str) -> bool:
 
 
 def _ocr_variants(image):
-    """Yields preprocessing variants of the screenshot to try OCR on, in
-    order — cheapest/most reliable first. Deliberately does NOT try the
-    image at native resolution: confirmed on real screenshots that at
-    native size Tesseract fuses the ₹ glyph into the digits themselves
-    (e.g. "₹15.00" reads as "215.00", a corrupted but still valid-
-    looking number) rather than dropping it, which the amount-without-
-    a-currency-symbol fallback pattern would wrongly accept as genuine.
-    Upscaling first reliably avoids that fusion (₹ gets dropped cleanly
-    instead), so it's always tried before anything else.
+    """Yields (image, tesseract_config) preprocessing variants to try
+    OCR on, in order — most broadly reliable first, based on testing
+    against real screenshots from all four apps (GPay, PhonePe, Paytm,
+    Navi).
+
+    The FIRST variant uses --psm 11 ("sparse text — find as much text
+    as possible, no particular order"), not the block-text mode used
+    everywhere else. This matters a lot: on every real screenshot
+    tested, the large, prominently-styled amount text (GPay's giant
+    centered "₹3", Navi's "₹20" next to a green checkmark) was DROPPED
+    ENTIRELY by block-text mode — not misread, just silently absent
+    from the output — because it sits alone in open space that a
+    layout-analysis pass doesn't recognize as a text block. Sparse mode
+    finds it as its own isolated text fragment instead. This one change
+    is what turns a "not detected" into a correctly-read amount for
+    GPay/Navi's large-centered-amount style, and it reads everything
+    else on the receipt (date, payee, transaction ID) at least as well
+    as block mode does, so nothing is traded away to get it.
+
+    Deliberately does NOT try the image at native resolution first: at
+    native size, and even at a plain 2x upscale, confirmed on a real
+    PhonePe screenshot that Tesseract fuses the ₹ glyph directly INTO
+    the digits themselves (e.g. "₹15" reads as "215", a corrupted but
+    still valid-looking number) rather than dropping it — which the
+    amount-without-a-currency-symbol fallback would otherwise wrongly
+    accept as genuine. A 4x+ upscale reliably avoids that fusion (₹
+    gets dropped/mangled into a harmless standalone stray character
+    instead, which the fallback patterns are built to see through), so
+    that's what's used for the block-mode passes below.
 
     A single OCR pass can still fail on screenshots that have been
     re-compressed (e.g. forwarded through Telegram, which re-encodes
     every photo it stores) even when the same screenshot at slightly
-    different compression reads perfectly — so if the 2x pass doesn't
-    find an amount, progressively more aggressive variants are tried."""
-    upscaled = image.resize((image.width * 2, image.height * 2), Image.LANCZOS)
-    yield upscaled
-    # Grayscale + autocontrast + a larger upscale — helps on low-contrast
-    # / heavily compressed screenshots where a plain 2x upscale isn't
-    # enough on its own.
-    yield ImageOps.autocontrast(
-        image.resize((image.width * 3, image.height * 3), Image.LANCZOS).convert("L")
-    )
+    different processing reads perfectly — so if sparse mode doesn't
+    find an amount, progressively different variants are tried."""
+    sparse = image.resize((image.width * 3, image.height * 3), Image.LANCZOS)
+    yield sparse, "--psm 11"
+    # Block-text mode, upscaled enough to avoid the ₹-fusion-into-digits
+    # problem described above.
+    upscaled = image.resize((image.width * 4, image.height * 4), Image.LANCZOS)
+    yield upscaled, "--psm 6"
+    # Grayscale + autocontrast — helps on low-contrast / heavily
+    # compressed screenshots where a plain upscale isn't enough alone.
+    yield ImageOps.autocontrast(upscaled.convert("L")), "--psm 6"
     # Dark-theme receipts (white text on black) often read better
     # inverted — try that last since it's the most likely to mangle
     # OTHER text (date/payee) even when it helps the amount.
-    yield ImageOps.invert(upscaled)
+    yield ImageOps.invert(upscaled), "--psm 6"
 
 
 # --psm 6 ("assume a single uniform block of text") skips Tesseract's
@@ -490,8 +530,8 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
         image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
 
         best_text = ""
-        for variant in _ocr_variants(image):
-            variant_text = pytesseract.image_to_string(variant, config=_TESS_CONFIG)
+        for variant, config in _ocr_variants(image):
+            variant_text = pytesseract.image_to_string(variant, config=config)
             if len(variant_text.strip()) > len(best_text.strip()):
                 best_text = variant_text
             if _extract_amount(variant_text):
