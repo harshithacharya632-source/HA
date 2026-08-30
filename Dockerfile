@@ -49,8 +49,16 @@ FROM python:3.10-slim-bookworm
 # failing. This intentionally skips dpkg's package database (no `dpkg -l`
 # entry, no apt upgrade tracking for these libs), which is a fine trade
 # for a handful of runtime-only shared libraries in a single-purpose image.
+# Added tesseract-ocr + tesseract-ocr-eng here (Aug 2026) for payment
+# screenshot OCR (admin_plugins/payment_approval.py). Same
+# download-only + dpkg-deb -x extraction trick as libmediainfo0v5 above —
+# a normal `apt-get install` still hits the same Koyeb builder EXDEV/
+# overlayfs restriction, this just avoids dpkg's unpack path entirely.
+# `apt-get --download-only` resolves and fetches this package's
+# dependencies too, so the loop below picks up everything needed
+# (libtesseract, libleptonica, the English trained-data file, etc.).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --download-only libmediainfo0v5 \
+    && apt-get install -y --no-install-recommends --download-only libmediainfo0v5 tesseract-ocr tesseract-ocr-eng \
     && for deb in /var/cache/apt/archives/*.deb; do dpkg-deb -x "$deb" /; done \
     && ln -sf $(find /usr/lib -name "libmediainfo.so*" | head -1) /usr/local/lib/libmediainfo.so.0 \
     && ldconfig \
