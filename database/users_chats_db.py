@@ -490,6 +490,18 @@ class Database:
             {"$set": {"status": status, "handled_by": admin_id, "handled_at": datetime.datetime.now()}}
         )
 
+    async def find_approved_request_by_txn_id(self, txn_id):
+        """Looks for an earlier request with this same OCR'd UPI/bank
+        transaction ID that was already approved (auto or manual) —
+        used to catch someone submitting an already-used screenshot a
+        second time (see _handle_screenshot in payment_approval.py). A
+        transaction ID is unique per real payment, so a repeat hit here
+        means this exact payment already got credited once."""
+        return await self.payment_requests.find_one({
+            "extracted.txn_id": txn_id,
+            "status": {"$in": ["approved", "auto_approved"]},
+        })
+
     async def get_pending_payment_requests(self):
         """Oldest-first, used by /pending_payments so admins can see the
         backlog (the 'premium list' of unreviewed screenshots)."""
