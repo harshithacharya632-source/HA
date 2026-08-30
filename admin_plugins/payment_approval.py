@@ -138,7 +138,15 @@ async def _delayed_delete(message, delay: int):
 # ── OCR extraction ──────────────────────────────────────────────────────
 
 _AMOUNT_PATTERNS = [
+    # Best case: OCR read the currency symbol/prefix correctly.
     re.compile(r'(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.\d{1,2})?)', re.IGNORECASE),
+    # Fallback: Tesseract very often drops or mangles the ₹ glyph
+    # entirely (confirmed against real screenshots — "₹15.00" OCRs as
+    # bare "15.00" once the image is upscaled, see ocr_screenshot()).
+    # A standalone amount-shaped number (exactly 2 decimals, its own
+    # line) is how GPay/PhonePe/Paytm always print the amount, so this
+    # is safe to use as a fallback without a currency symbol at all.
+    re.compile(r'^\s*([0-9][0-9,]*\.\d{2})\s*$', re.MULTILINE),
 ]
 
 # Common UPI-app receipt date formats. Not exhaustive — different apps
@@ -233,6 +241,15 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
         return result
     try:
         image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
+
+        # Phone-screenshot resolution is often too small for Tesseract to
+        # reliably read the ₹ glyph — confirmed on real screenshots: at
+        # native size "₹15.00" OCRs as "215.00" (the ₹ misread as a
+        # stray "2" fused onto the digits); upscaled 2x it reads cleanly
+        # as "15.00". Cheap fix, no accuracy downside.
+        OCR_UPSCALE = 2
+        image = image.resize((image.width * OCR_UPSCALE, image.height * OCR_UPSCALE), Image.LANCZOS)
+
         text = pytesseract.image_to_string(image)
 
         # Dark-theme receipts (white text on black — GPay/PhonePe dark
