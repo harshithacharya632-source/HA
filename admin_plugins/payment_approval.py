@@ -111,10 +111,34 @@ MAIN_BOT_ID = int(BOT_TOKEN.split(":")[0]) if BOT_TOKEN and ":" in BOT_TOKEN els
 
 # How old a screenshot's payment date/time is allowed to be before it no
 # longer counts as "exact" for auto-approval (someone reusing an old
-# screenshot, or a scheduled/pending payment). Tightened to 1 hour —
-# auto-approval is meant for "I just paid this second", anything older
-# goes to manual review instead of being rejected outright.
-MAX_SCREENSHOT_AGE_HOURS = 1
+# screenshot, or a scheduled/pending payment). 2 hours — wide enough to
+# absorb a few minutes of clock drift/upload delay while still catching
+# genuinely stale/reused screenshots.
+MAX_SCREENSHOT_AGE_HOURS = 2
+
+# Every UPI app (GPay/PhonePe/Paytm) prints the payment date/time in the
+# phone's local timezone, which for our users is always India Standard
+# Time — there's no "change timezone" setting on a UPI receipt. The
+# bot's *server*, though, runs on whatever clock its host uses, and the
+# Dockerfile never sets TZ, so python:3.10-slim-bookworm defaults to
+# UTC. Comparing datetime.datetime.now() (UTC) directly against a
+# time parsed off a screenshot (IST) was silently off by 5:30 on every
+# single screenshot — a payment made 2 minutes ago in IST could compute
+# as ~5.5 hours in the "future" relative to the server's UTC clock,
+# which the age check treats exactly the same as a stale/reused
+# screenshot and auto-rejects. This was the actual cause of fresh,
+# genuine payments getting auto-rejected as "not recent (older than Nh
+# or in the future)". IST has no DST, so a fixed +5:30 offset is exact
+# and doesn't need the tzdata package (not installed on -slim images).
+IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
+
+def _now_ist_naive() -> datetime.datetime:
+    """"Now", shifted into IST to match the (naive, tz-less) datetimes
+    that _extract_datetime()/strptime produce from OCR'd receipt text —
+    so age comparisons are apples-to-apples regardless of what timezone
+    the server itself happens to be running in."""
+    return datetime.datetime.now(IST).replace(tzinfo=None)
 
 # Text that must appear (case-insensitively) in the OCR'd screenshot for
 # the payment to count as "paid to us" — i.e. the payee/receiver name
@@ -172,6 +196,16 @@ _TIME_ON_DATE_PATTERN = re.compile(
     r'\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\s+on\s+(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b'
 )
 
+# Paytm ALSO prints time before date, like PhonePe, but joins them with
+# "Paid at <time>, <date>" (comma, no "on") — e.g. "Paid at 12:14 PM, 30
+# Aug 2026". None of the patterns above matched this at all, which is
+# why Paytm screenshots showed "OCR date: not detected" even when the
+# text was read fine. Handled the same way as the PhonePe case: pull
+# out the two pieces and rejoin them in "date, time" order.
+_TIME_COMMA_DATE_PATTERN = re.compile(
+    r'\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)),\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b'
+)
+
 _DATE_TRY_FORMATS = [
     "%d %b %Y, %I:%M %p", "%d %B %Y, %I:%M %p",
     "%d %b %Y %I:%M %p", "%d %B %Y %I:%M %p",
@@ -185,8 +219,12 @@ _DATE_TRY_FORMATS = [
 # receipt itself — used to anchor the whole-rupee fallback below so it
 # can tell "this bare number is the amount" apart from every other bare
 # number that shows up in a real screenshot (chat subscriber counts,
-# transaction IDs, phone status bar digits, etc).
-_RECEIPT_STATUS_ANCHORS = ("completed", "pending", "failed", "paid to")
+# transaction IDs, phone status bar digits, etc). Paytm doesn't print
+# "Completed"/"Paid to" near the amount at all — it prints "Rupees
+# <amount> Only" directly under it instead (e.g. "₹3" / "Rupees Three
+# Only"), which is why whole-rupee Paytm amounts (no decimal for the
+# other fallback to anchor on) were falling through as "not detected".
+_RECEIPT_STATUS_ANCHORS = ("completed", "pending", "failed", "paid to", "rupees")
 
 
 def _extract_amount(text: str):
@@ -255,19 +293,42 @@ def _extract_datetime(text: str):
                     continue
             return raw, None
 
-    m = _TIME_ON_DATE_PATTERN.search(text)
-    if m:
-        time_part, date_part = m.group(1), m.group(2)
-        raw = f"{date_part}, {time_part}"
-        normalized = _normalize_meridiem(raw)
-        for fmt in _DATE_TRY_FORMATS:
-            try:
-                return raw, datetime.datetime.strptime(normalized, fmt)
-            except ValueError:
-                continue
-        return raw, None
+    for reversed_pattern in (_TIME_ON_DATE_PATTERN, _TIME_COMMA_DATE_PATTERN):
+        m = reversed_pattern.search(text)
+        if m:
+            time_part, date_part = m.group(1), m.group(2)
+            raw = f"{date_part}, {time_part}"
+            normalized = _normalize_meridiem(raw)
+            for fmt in _DATE_TRY_FORMATS:
+                try:
+                    return raw, datetime.datetime.strptime(normalized, fmt)
+                except ValueError:
+                    continue
+            return raw, None
 
     return None, None
+
+
+# Pulls the UPI/bank transaction reference out of the receipt text —
+# every app prints one of these somewhere ("UPI transaction ID",
+# "UPI Ref No", or GPay's separate "Google transaction ID"). Used to
+# catch someone submitting the SAME already-approved screenshot again
+# (see _handle_screenshot) — a transaction ID is unique per payment, so
+# it survives even when the amount/date happen to still fall inside the
+# recency window on a second submission.
+_TXN_ID_PATTERNS = [
+    re.compile(r'UPI\s+transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'UPI\s+Ref\.?\s*No\.?[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'Google\s+transaction\s+ID[:\s]*([A-Za-z0-9_]{6,})', re.IGNORECASE),
+]
+
+
+def _extract_txn_id(text: str):
+    for pattern in _TXN_ID_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _payee_name_matches(text: str) -> bool:
@@ -316,7 +377,7 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
     result = {
         "amount": None, "raw_date": None, "parsed_date": None,
         "confidence": "low", "ocr_text": "", "payee_ok": False,
-        "ocr_read_ok": False,
+        "ocr_read_ok": False, "txn_id": None,
     }
     if not OCR_AVAILABLE:
         return result
@@ -343,9 +404,10 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
         result["raw_date"] = raw_date
         result["parsed_date"] = parsed_date
         result["payee_ok"] = _payee_name_matches(text)
+        result["txn_id"] = _extract_txn_id(text)
 
         if result["amount"] and parsed_date:
-            age = datetime.datetime.now() - parsed_date
+            age = _now_ist_naive() - parsed_date
             if datetime.timedelta(0) <= age <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS):
                 result["confidence"] = "high"
     except Exception as e:
@@ -560,7 +622,12 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     amount_matches = _amounts_equal(amount_read, claimed_amount)
     extracted["matched_plan"] = claimed_plan if amount_matches else None
 
-    # Four-way decision:
+    # Five-way decision:
+    #   reject (duplicate)  -> this exact transaction (by OCR'd txn ID)
+    #             was already approved before -> someone resubmitting an
+    #             already-used screenshot -> auto-reject, no admin
+    #             needed, checked first so a reused-but-still-"recent"
+    #             screenshot can't slip through the exact-match branch.
     #   exact  -> payee is ours AND the amount matches the claimed plan
     #             AND the payment is within the last hour -> auto-approve,
     #             no admin needed.
@@ -584,11 +651,24 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     #             failure that isn't the user's fault.
     date_recent = (
         extracted["parsed_date"] is not None
-        and datetime.timedelta(0) <= (datetime.datetime.now() - extracted["parsed_date"]) <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS)
+        and datetime.timedelta(0) <= (_now_ist_naive() - extracted["parsed_date"]) <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS)
     )
     date_known_stale = extracted["parsed_date"] is not None and not date_recent
+
+    # A screenshot whose transaction ID we've already approved before
+    # (auto or manual) is a reused screenshot — the amount/date can
+    # still look "recent" on a second submission (nothing in the image
+    # itself changes), so this has to be checked and short-circuit
+    # BEFORE the exact-match branch below, not fall through to it.
+    txn_id = extracted.get("txn_id")
+    duplicate_of = await db.find_approved_request_by_txn_id(txn_id) if txn_id else None
+
     reject_reason = None
-    if extracted["payee_ok"] and amount_matches and date_recent:
+    if duplicate_of:
+        decision = "reject"
+        reject_reason = "duplicate"
+        extracted["confidence"] = "duplicate"
+    elif extracted["payee_ok"] and amount_matches and date_recent:
         decision = "exact"
         extracted["confidence"] = "high"
     elif extracted["ocr_read_ok"] and not extracted["payee_ok"]:
@@ -626,7 +706,12 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
         appeal_btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("📮 Appeal to admin", callback_data=f"pay_appeal_{request_id}")]
         ])
-        if reject_reason == "stale_date":
+        if reject_reason == "duplicate":
+            reject_text = (
+                "❌ This payment has already been credited once — rejected.\n\n"
+                "If you believe this is a mistake, tap below to send it to an admin."
+            )
+        elif reject_reason == "stale_date":
             reject_text = (
                 "❌ This screenshot's payment date/time isn't recent — rejected.\n\n"
                 "Please send a screenshot of a payment you just made. If this IS a fresh "
@@ -727,7 +812,12 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
     screenshot) or a date WAS read and it's stale/reused — either way a
     confirmed reason, not just an OCR failure — no buttons, just a
     record of what happened in case of a dispute."""
-    if reject_reason == "stale_date":
+    if reject_reason == "duplicate":
+        reason_line = (
+            f"🔴 This transaction ID was already approved on a previous request. "
+            f"Looks like a reused screenshot. Rejected automatically, no admin action needed."
+        )
+    elif reject_reason == "stale_date":
         reason_line = (
             f"🔴 Date/time was read as {extracted['raw_date'] or '(unknown)'} — not recent "
             f"(older than {MAX_SCREENSHOT_AGE_HOURS}h or in the future). Looks like an old/"
