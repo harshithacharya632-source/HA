@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import pytesseract
-    from PIL import Image
+    from PIL import Image, ImageOps
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
@@ -209,13 +209,31 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
     result = {
         "amount": None, "raw_date": None, "parsed_date": None,
         "confidence": "low", "ocr_text": "", "payee_ok": False,
+        "ocr_read_ok": False,
     }
     if not OCR_AVAILABLE:
         return result
     try:
-        image = Image.open(io.BytesIO(photo_bytes))
+        image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
         text = pytesseract.image_to_string(image)
+
+        # Dark-theme receipts (white text on black — GPay/PhonePe dark
+        # mode is common) often come back nearly empty with default
+        # Tesseract settings, which assume dark text on a light
+        # background. If the first pass barely read anything, retry on
+        # a colour-inverted copy and keep whichever read more text.
+        if len(text.strip()) < 20:
+            inverted_text = pytesseract.image_to_string(ImageOps.invert(image))
+            if len(inverted_text.strip()) > len(text.strip()):
+                text = inverted_text
+
         result["ocr_text"] = text
+        # Whether OCR actually managed to read something off this image
+        # at all, as opposed to failing outright — used below to tell
+        # "this is a wrong/fake screenshot" (OCR worked, wrong payee)
+        # apart from "OCR just couldn't read this one" (send to admin
+        # instead of auto-rejecting a possibly-genuine payment).
+        result["ocr_read_ok"] = len(text.strip()) >= 20
         result["amount"] = _extract_amount(text)
         raw_date, parsed_date = _extract_datetime(text)
         result["raw_date"] = raw_date
@@ -391,9 +409,13 @@ async def unsolicited_screenshot_cb(client, message):
     photo_bytes = await client.download_media(message.photo.file_id, in_memory=True)
     extracted = await ocr_screenshot(bytes(photo_bytes.getbuffer()))
 
-    if extracted["amount"] is None and not extracted["payee_ok"]:
-        # Doesn't look like a payment screenshot at all — treat it as a
-        # normal message and forward it to admins instead.
+    if extracted["ocr_read_ok"] and extracted["amount"] is None and not extracted["payee_ok"]:
+        # OCR read the image fine but found nothing payment-shaped in it
+        # — genuinely not a payment screenshot. (If OCR failed outright,
+        # ocr_read_ok is False and we don't use that as a signal either
+        # way — better to assume it might be a payment and let the
+        # normal flow/admin review sort it out than to silently drop a
+        # real payment into the support inbox because OCR choked on it.)
         return await relay_user_question_to_admins_cb(client, message)
 
     await db.set_pending_screenshot(message.from_user.id, message.photo.file_id)
@@ -427,15 +449,18 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     #   exact  -> payee is ours AND the amount matches the claimed plan
     #             AND the payment is within the last hour -> auto-approve,
     #             no admin needed.
-    #   reject -> the payee name isn't ours at all (paid to someone else,
-    #             or this isn't a payment screenshot at all) -> this is a
-    #             genuinely wrong/fake screenshot, not just an ambiguous
-    #             one -> auto-reject, not verified, no admin needed.
-    #   manual -> payee IS ours but something else doesn't line up (rate
-    #             may have changed since, date is stale, amount wasn't
-    #             readable) -> a real payment, just needs a human glance
-    #             -> falls back to admin review rather than being
-    #             rejected outright.
+    #   reject -> OCR successfully read the screenshot (ocr_read_ok) but
+    #             the payee name it found is NOT ours -> a confirmed
+    #             wrong/fake screenshot -> auto-reject, not verified, no
+    #             admin needed.
+    #   manual -> either the payee IS ours but something else doesn't
+    #             line up (rate may have changed since, date is stale),
+    #             OR OCR simply couldn't read the screenshot clearly
+    #             enough to be sure either way (dark-theme screenshots
+    #             sometimes still come out unreadable even after the
+    #             invert retry) -> could well be a genuine payment ->
+    #             falls back to admin review rather than being rejected
+    #             on an OCR failure that isn't the user's fault.
     date_recent = (
         extracted["parsed_date"] is not None
         and datetime.timedelta(0) <= (datetime.datetime.now() - extracted["parsed_date"]) <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS)
@@ -443,17 +468,17 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     if extracted["payee_ok"] and amount_matches and date_recent:
         decision = "exact"
         extracted["confidence"] = "high"
-    elif not extracted["payee_ok"]:
+    elif extracted["ocr_read_ok"] and not extracted["payee_ok"]:
         decision = "reject"
         extracted["confidence"] = "not_verified"
     else:
         decision = "manual"
-        # Payee confirmed, so the payment is real — the plan is known
-        # for certain if the amount matched (just the date/timing didn't
-        # clear the auto-approval bar), so give the admin a single
-        # confident Approve button instead of a per-plan picker (that's
-        # only for when the amount itself couldn't be read at all, or
-        # doesn't match today's rate — e.g. rates changed since).
+        # The amount matched but date/payee didn't quite clear the bar
+        # for auto-approval — the plan is still known for certain, so
+        # give the admin a single confident Approve button instead of a
+        # per-plan picker (that's only for when the amount itself
+        # couldn't be read at all, or doesn't match today's rate — e.g.
+        # rates changed since, or OCR just couldn't read this one).
         extracted["confidence"] = "high" if amount_matches else "low"
 
     request_id = await db.add_payment_request(
@@ -470,11 +495,17 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
         return
 
     if decision == "reject":
-        sent = await status_msg.edit_text(
+        appeal_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📮 Appeal to admin", callback_data=f"pay_appeal_{request_id}")]
+        ])
+        # Not auto-deleted like the other status messages — it carries
+        # the Appeal button, which needs to stay clickable whenever the
+        # user gets around to it, not just for the next minute.
+        await status_msg.edit_text(
             "❌ This screenshot isn't verified as a payment to us — rejected.\n\n"
-            f"If you think this is a mistake, contact an admin: {OWNER_LNK}"
+            "If you think this is a mistake, tap below to send it to an admin for a manual check.",
+            reply_markup=appeal_btn
         )
-        asyncio.create_task(_delayed_delete(sent, 60))
         await db.set_payment_request_status(request_id, "auto_rejected", None)
         await _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id)
         return
@@ -557,16 +588,18 @@ async def _log_auto_approval(client, request_id, user, plan: str, extracted, fil
 
 async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id):
     """Posts a record-only copy to LOG_CHANNEL for auto-rejected payments
-    (payee name didn't match ours at all — not a genuine payment to us)
-    — no buttons, just a record of what happened in case of a dispute."""
+    (OCR read the screenshot fine but found no match for our payee name
+    — a confirmed wrong/fake screenshot, not just an OCR failure) — no
+    buttons, just a record of what happened in case of a dispute."""
     caption = (
         f"<b>❌ Auto-rejected — not verified</b>\n\n"
         f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
         f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
         f"🔎 OCR amount: {extracted['amount'] or 'not detected'}Rs\n"
         f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
-        f"🔴 Payee name didn't match ours — doesn't look like a real payment to us. "
-        f"Rejected automatically, no admin action needed.\n\n"
+        f"🔴 Screenshot was readable but the payee name didn't match ours — "
+        f"doesn't look like a real payment to us. Rejected automatically, "
+        f"no admin action needed.\n\n"
         f"Request ID: <code>{request_id}</code>"
     )
     try:
@@ -585,8 +618,12 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
 async def _notify_admins(client, request_id, user, claimed_plan, extracted, file_id):
     date_line = extracted["raw_date"] or "not detected"
     amount_line = f"{extracted['amount']}Rs" if extracted["amount"] else "not detected"
-    confidence_line = "🟢 Amount matched — just tap Approve (date/payee couldn't be auto-confirmed)" if extracted["confidence"] == "high" \
-        else "🟡 Amount unclear — pick the correct plan below"
+    if extracted["confidence"] == "high":
+        confidence_line = "🟢 Amount matched — just tap Approve (date/payee couldn't be auto-confirmed)"
+    elif not extracted["ocr_read_ok"]:
+        confidence_line = "⚪ OCR couldn't read this screenshot clearly — please check it manually"
+    else:
+        confidence_line = "🟡 Amount unclear — pick the correct plan below"
 
     caption = (
         f"<b>💳 New UPI payment claim</b>\n\n"
@@ -693,6 +730,34 @@ async def reject_payment_cb(client, query):
         )
     except Exception as e:
         logger.warning(f"Couldn't DM user {req['user_id']} after rejection: {e}")
+
+
+# ── User appeals an auto-rejection ───────────────────────────────────────
+
+@Client.on_callback_query(filters.regex(r"^pay_appeal_([0-9a-fA-F]{24})$"))
+async def appeal_rejected_payment_cb(client, query):
+    request_id = query.matches[0].group(1)
+    req = await db.get_payment_request(request_id)
+    if not req:
+        return await query.answer("Request not found.", show_alert=True)
+    if req["user_id"] != query.from_user.id:
+        return await query.answer("This isn't your request.", show_alert=True)
+    if req["status"] != "auto_rejected":
+        return await query.answer(f"Already handled ({req['status']}).", show_alert=True)
+
+    # Send it back into the normal manual-review queue — same
+    # LOG_CHANNEL post with Approve/Reject buttons an admin decides on,
+    # same as any other case OCR couldn't be fully sure about.
+    await db.set_payment_request_status(request_id, "pending", None)
+    await _notify_admins(
+        client, request_id, query.from_user, req["claimed_plan"], req["extracted"], req["screenshot_file_id"]
+    )
+
+    await query.answer()
+    await query.message.edit_text(
+        "📨 I will send it to the admin — please wait, the admin will be checking soon.",
+        reply_markup=None
+    )
 
 
 # ── Admin: see the backlog of unreviewed screenshots ────────────────────
