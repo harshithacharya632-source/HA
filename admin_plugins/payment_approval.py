@@ -139,14 +139,19 @@ async def _delayed_delete(message, delay: int):
 
 _AMOUNT_PATTERNS = [
     # Best case: OCR read the currency symbol/prefix correctly.
-    re.compile(r'(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.\d{1,2})?)', re.IGNORECASE),
+    # (?<![A-Za-z]) stops "Rs" from matching as the tail of some other
+    # word — critically, our own status lines like "not detectedRs" —
+    # and the gap to the digits is spaces/tabs only, never \s, so it
+    # can never cross a newline and grab an unrelated number several
+    # lines further down the text.
+    re.compile(r'(?<![A-Za-z])(?:₹|Rs\.?|INR)[ \t]*([0-9][0-9,]*(?:\.\d{1,2})?)', re.IGNORECASE),
     # Fallback: Tesseract very often drops or mangles the ₹ glyph
     # entirely (confirmed against real screenshots — "₹15.00" OCRs as
     # bare "15.00" once the image is upscaled, see ocr_screenshot()).
     # A standalone amount-shaped number (exactly 2 decimals, its own
     # line) is how GPay/PhonePe/Paytm always print the amount, so this
     # is safe to use as a fallback without a currency symbol at all.
-    re.compile(r'^\s*([0-9][0-9,]*\.\d{2})\s*$', re.MULTILINE),
+    re.compile(r'^[ \t]*([0-9][0-9,]*\.\d{2})[ \t]*$', re.MULTILINE),
 ]
 
 # Common UPI-app receipt date formats. Not exhaustive — different apps
@@ -181,6 +186,22 @@ def _extract_amount(text: str):
         m = pattern.search(text)
         if m:
             return m.group(1).replace(",", "")
+    # Last-resort fallback: whole-rupee amounts with no paise at all
+    # (e.g. "₹1,100" or "₹15") have no decimal for the pattern above to
+    # anchor on, and if the ₹ glyph was also dropped by OCR there's
+    # nothing left to match on except the bare number. That's too risky
+    # to search for anywhere in the text (a date, phone number, or ID
+    # could match) — but every UPI app (GPay/PhonePe/Paytm/etc.) prints
+    # the amount as the very first prominent line of the receipt, above
+    # the bank name, payee, and date. So this only ever looks at the
+    # first non-blank OCR line, which is safe precisely because nothing
+    # else on a receipt appears before the amount.
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.fullmatch(r'[0-9][0-9,]*(?:\.\d{1,2})?', line)
+        return line.replace(",", "") if m else None
     return None
 
 
