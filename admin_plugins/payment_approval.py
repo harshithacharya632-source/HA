@@ -553,19 +553,29 @@ def _ocr_top_band(image) -> str:
         return ""
 
 
-async def ocr_screenshot(photo_bytes: bytes) -> dict:
-    """Runs OCR — trying a few preprocessing variants (see
-    _ocr_variants), stopping as soon as one successfully reads an amount
-    — and returns a dict with whatever was extracted, plus a
-    'confidence' verdict. Never raises — OCR failing just means low
-    confidence, not a crash."""
+def _run_ocr_sync(photo_bytes: bytes) -> dict:
+    """All the actual CPU-bound work (image decode/resize, every
+    Tesseract call) — deliberately a plain SYNCHRONOUS function, never
+    called directly. ocr_screenshot() below runs this in a background
+    thread via asyncio.to_thread so it can't block the bot's event loop.
+
+    Before this, pytesseract.image_to_string() and PIL's resize/convert
+    calls ran directly inside an `async def` on the bot's single event
+    loop thread — CPU-bound work like that does NOT yield control back
+    to asyncio while it runs. So for the full duration of every OCR
+    pass (each a real, multi-hundred-millisecond-to-multi-second
+    Tesseract call), the ENTIRE bot was frozen: not just the user who
+    sent the screenshot, but every other user's messages, every button
+    tap, everything — all queued up behind it. That's very likely the
+    dominant cause of "reading screenshot takes long," especially if
+    more than one screenshot lands around the same time. Running it in
+    a thread doesn't make Tesseract itself faster, but it means nothing
+    else the bot does has to wait for it."""
     result = {
         "amount": None, "raw_date": None, "parsed_date": None,
         "confidence": "low", "ocr_text": "", "payee_ok": False,
         "ocr_read_ok": False, "txn_id": None,
     }
-    if not OCR_AVAILABLE:
-        return result
     try:
         image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
 
@@ -610,6 +620,25 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
     except Exception as e:
         logger.warning(f"OCR failed on a payment screenshot: {e}")
     return result
+
+
+async def ocr_screenshot(photo_bytes: bytes) -> dict:
+    """Runs OCR — trying a few preprocessing variants (see
+    _ocr_variants), stopping as soon as one successfully reads an amount
+    — and returns a dict with whatever was extracted, plus a
+    'confidence' verdict. Never raises — OCR failing just means low
+    confidence, not a crash.
+
+    The actual work happens in _run_ocr_sync(), off the event loop (see
+    its docstring) — this wrapper just bridges sync <-> async and
+    handles the case where OCR isn't installed at all."""
+    if not OCR_AVAILABLE:
+        return {
+            "amount": None, "raw_date": None, "parsed_date": None,
+            "confidence": "low", "ocr_text": "", "payee_ok": False,
+            "ocr_read_ok": False, "txn_id": None,
+        }
+    return await asyncio.to_thread(_run_ocr_sync, photo_bytes)
 
 
 # ── Entry points: /start and a plain "hi" ────────────────────────────────
@@ -710,6 +739,13 @@ async def claim_plan_then_ask_screenshot_cb(client, query):
     if plan not in PLAN_LABELS:
         return await query.answer("Invalid plan.", show_alert=True)
     await query.answer()
+
+    # The "which plan did you pay for?" picker message they just tapped
+    # is done its job the moment they tap it — its buttons are now
+    # stale (a second tap would just re-trigger this same handler with
+    # a plan that's already been acted on). Clean it up shortly after
+    # rather than leaving a dead button prompt sitting in the chat.
+    asyncio.create_task(_delayed_delete(query.message, 5))
 
     # Did they already send a screenshot before picking a plan (caught by
     # unsolicited_screenshot_cb below)? If so, use that instead of asking
@@ -937,9 +973,10 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
         elif reject_reason == "amount_mismatch":
             reject_text = (
                 f"❌ The amount on this screenshot (₹{extracted['amount']}) doesn't match "
-                f"the {PLAN_LABELS[claimed_plan]} price (₹{claimed_amount}) — rejected.\n\n"
-                "Please pay the correct amount and resubmit, or if you believe this is a "
-                "mistake, tap below to send it to an admin."
+                f"the current {PLAN_LABELS[claimed_plan]} price (₹{claimed_amount}) — rejected.\n\n"
+                f"This rate isn't in the current plan list — please check /plan again for "
+                f"today's price, pay the correct amount, and send a fresh screenshot of that "
+                f"payment. If you believe this is a mistake, tap below to send it to an admin."
             )
         else:
             reject_text = (
