@@ -128,9 +128,18 @@ _AMOUNT_PATTERNS = [
 # forgiving. If nothing matches, the screenshot is just treated as
 # low-confidence rather than failing.
 _DATE_PATTERNS = [
+    # "19 March 2026, 11:03 pm" (GPay) / "9 Mar 2026, 12:14 PM" (Navi)
     re.compile(r'\b(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4},?\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b'),
     re.compile(r'\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4},?\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b'),
 ]
+
+# PhonePe prints it the other way round — "10:19 pm on 22 Aug 2026" —
+# time first, then the date, joined by "on". Handled separately since
+# the two pieces need to be rejoined into "date, time" order before the
+# same strptime formats below can parse it.
+_TIME_ON_DATE_PATTERN = re.compile(
+    r'\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\s+on\s+(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b'
+)
 
 _DATE_TRY_FORMATS = [
     "%d %b %Y, %I:%M %p", "%d %B %Y, %I:%M %p",
@@ -149,6 +158,16 @@ def _extract_amount(text: str):
     return None
 
 
+def _amounts_equal(a, b) -> bool:
+    """Compares screenshot amounts numerically, not as strings — OCR
+    often reads '₹15.00' where the stored plan rate is just '15', and a
+    plain string compare would wrongly call that a mismatch."""
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return False
+
+
 def _extract_datetime(text: str):
     """Returns (raw_string, parsed_datetime_or_None)."""
     for pattern in _DATE_PATTERNS:
@@ -161,12 +180,25 @@ def _extract_datetime(text: str):
                 except ValueError:
                     continue
             return raw, None
+
+    m = _TIME_ON_DATE_PATTERN.search(text)
+    if m:
+        time_part, date_part = m.group(1), m.group(2)
+        raw = f"{date_part}, {time_part}"
+        for fmt in _DATE_TRY_FORMATS:
+            try:
+                return raw, datetime.datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+        return raw, None
+
     return None, None
 
 
 def _payee_name_matches(text: str) -> bool:
     """True if the screenshot's OCR text mentions our UPI account name —
-    i.e. the payment actually went to us, not to someone else's ID."""
+    i.e. the payment actually went to us, not to someone else's ID (or
+    this isn't a payment screenshot at all)."""
     return PAYEE_NAME_HINT.lower() in text.lower()
 
 
@@ -217,10 +249,12 @@ async def admin_bot_start(client, message):
 
 @Client.on_message(filters.private & filters.text & filters.regex(r"(?i)^(hi|hii|hai|hello|hey)$"), group=-1)
 async def admin_bot_greeting(client, message):
-    await message.reply_text(
-        "Hello! 👋 Tap below to submit a payment screenshot.",
-        reply_markup=_welcome_markup()
-    )
+    """A bare hi/hello isn't a real question, so it's handled fully here
+    (no payment button, and it never reaches the support relay below —
+    admins' time is precious, this doesn't need to bother them) and
+    cleans itself up quickly."""
+    sent = await message.reply_text("Hey! Use /plan to see plans, or just send your payment screenshot.")
+    asyncio.create_task(_delayed_delete(sent, 30))
 
 
 # ── /plan and /myplan also work directly on this bot ────────────────────
@@ -337,16 +371,30 @@ async def claim_plan_then_ask_screenshot_cb(client, query):
 
 # ── Screenshot sent cold, with no plan picked yet ─────────────────────────
 
-@Client.on_message(filters.private & filters.photo)
+@Client.on_message(filters.private & filters.photo & ~filters.user(ADMINS))
 async def unsolicited_screenshot_cb(client, message):
     """Catches a screenshot sent straight into the chat with no /start
     and no plan chosen (e.g. the user just pastes/forwards the photo).
     If an active client.ask() is already waiting on a photo from this
     user (the normal flow above), the ask_patch resolver (group=-1)
     consumes it first and this handler never runs — so this only fires
-    for a genuinely cold screenshot."""
+    for a genuinely cold screenshot.
+
+    Runs OCR first to check this actually looks like a payment
+    screenshot (an amount and/or our payee name shows up) before asking
+    which plan it's for — a random unrelated photo instead gets
+    forwarded to admins like any other message, not funneled into the
+    payment flow."""
     if PREMIUM_AND_REFERAL_MODE == False:
         return
+
+    photo_bytes = await client.download_media(message.photo.file_id, in_memory=True)
+    extracted = await ocr_screenshot(bytes(photo_bytes.getbuffer()))
+
+    if extracted["amount"] is None and not extracted["payee_ok"]:
+        # Doesn't look like a payment screenshot at all — treat it as a
+        # normal message and forward it to admins instead.
+        return await relay_user_question_to_admins_cb(client, message)
 
     await db.set_pending_screenshot(message.from_user.id, message.photo.file_id)
     rates = await load_plan_rates(MAIN_BOT_ID)
@@ -370,36 +418,42 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
 
     rates = await load_plan_rates(MAIN_BOT_ID)
     upi = rates["upi"]
-    claimed_amount = str(upi.get(claimed_plan))
+    claimed_amount = upi.get(claimed_plan)
     amount_read = extracted["amount"]
-    amount_matches = amount_read is not None and amount_read == claimed_amount
+    amount_matches = _amounts_equal(amount_read, claimed_amount)
     extracted["matched_plan"] = claimed_plan if amount_matches else None
 
     # Three-way decision:
-    #   exact  -> amount matches AND the payment is within the last hour
-    #             AND the payee name is ours -> auto-approve, no admin.
-    #   reject -> an amount WAS read and it does NOT match the claimed
-    #             plan's rate -> this is a wrong/mismatched payment, not
-    #             an ambiguous one -> auto-reject, no admin either.
-    #   manual -> everything else (amount unreadable, date stale, payee
-    #             not detected, etc.) -> falls back to admin review.
+    #   exact  -> payee is ours AND the amount matches the claimed plan
+    #             AND the payment is within the last hour -> auto-approve,
+    #             no admin needed.
+    #   reject -> the payee name isn't ours at all (paid to someone else,
+    #             or this isn't a payment screenshot at all) -> this is a
+    #             genuinely wrong/fake screenshot, not just an ambiguous
+    #             one -> auto-reject, not verified, no admin needed.
+    #   manual -> payee IS ours but something else doesn't line up (rate
+    #             may have changed since, date is stale, amount wasn't
+    #             readable) -> a real payment, just needs a human glance
+    #             -> falls back to admin review rather than being
+    #             rejected outright.
     date_recent = (
         extracted["parsed_date"] is not None
         and datetime.timedelta(0) <= (datetime.datetime.now() - extracted["parsed_date"]) <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS)
     )
-    if amount_matches and date_recent and extracted["payee_ok"]:
+    if extracted["payee_ok"] and amount_matches and date_recent:
         decision = "exact"
         extracted["confidence"] = "high"
-    elif amount_read is not None and not amount_matches:
+    elif not extracted["payee_ok"]:
         decision = "reject"
-        extracted["confidence"] = "mismatch"
+        extracted["confidence"] = "not_verified"
     else:
         decision = "manual"
-        # The amount matched but date/payee didn't quite clear the bar
-        # for auto-approval — the plan is still known for certain, so
-        # give the admin a single confident Approve button instead of a
-        # per-plan picker (that's only for when the amount itself is
-        # unreadable and the plan genuinely isn't known).
+        # Payee confirmed, so the payment is real — the plan is known
+        # for certain if the amount matched (just the date/timing didn't
+        # clear the auto-approval bar), so give the admin a single
+        # confident Approve button instead of a per-plan picker (that's
+        # only for when the amount itself couldn't be read at all, or
+        # doesn't match today's rate — e.g. rates changed since).
         extracted["confidence"] = "high" if amount_matches else "low"
 
     request_id = await db.add_payment_request(
@@ -409,19 +463,18 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     )
 
     if decision == "exact":
-        await status_msg.edit_text("✅ Screenshot verified automatically — premium is active now! 🎉")
-        asyncio.create_task(_delayed_delete(status_msg, 120))
+        sent = await status_msg.edit_text("✅ All clear! Thank you for purchasing GoFlix Premium 🎉")
+        asyncio.create_task(_delayed_delete(sent, 60))
         await _grant_premium(client, request_id, user.id, claimed_plan, auto=True)
         await _log_auto_approval(client, request_id, user, claimed_plan, extracted, file_id)
         return
 
     if decision == "reject":
-        await status_msg.edit_text(
-            f"❌ The amount in your screenshot doesn't match {PLAN_LABELS[claimed_plan]} "
-            f"(expected {claimed_amount}Rs, found {amount_read}Rs). "
-            f"Double-check the plan you picked and try again, or contact an admin: {OWNER_LNK}"
+        sent = await status_msg.edit_text(
+            "❌ This screenshot isn't verified as a payment to us — rejected.\n\n"
+            f"If you think this is a mistake, contact an admin: {OWNER_LNK}"
         )
-        asyncio.create_task(_delayed_delete(status_msg, 120))
+        asyncio.create_task(_delayed_delete(sent, 60))
         await db.set_payment_request_status(request_id, "auto_rejected", None)
         await _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id)
         return
@@ -430,7 +483,7 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
         "✅ Got it! Your screenshot is with the admins for a quick check — "
         "you'll get a message the moment it's approved."
     )
-    asyncio.create_task(_delayed_delete(sent, 120))
+    asyncio.create_task(_delayed_delete(sent, 60))
     await _notify_admins(client, request_id, user, claimed_plan, extracted, file_id)
 
 
@@ -480,12 +533,12 @@ async def _log_auto_approval(client, request_id, user, plan: str, extracted, fil
     — no buttons, nothing for an admin to action, just an audit trail
     ('the premium list') of who got premium and why."""
     caption = (
-        f"<b>✅ Auto-approved UPI payment</b>\n\n"
+        f"<b>✅ All clear — thank you for purchasing GoFlix Premium!</b>\n\n"
         f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
         f"📦 Plan: <b>{PLAN_LABELS[plan]}</b>\n"
         f"🔎 OCR amount: {extracted['amount']}Rs\n"
         f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
-        f"🟢 Exact match (amount + within {MAX_SCREENSHOT_AGE_HOURS}h + payee name) — "
+        f"🟢 Payee matched + amount matched + within {MAX_SCREENSHOT_AGE_HOURS}h — "
         f"granted automatically, no admin action needed.\n\n"
         f"Request ID: <code>{request_id}</code>"
     )
@@ -504,15 +557,16 @@ async def _log_auto_approval(client, request_id, user, plan: str, extracted, fil
 
 async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id):
     """Posts a record-only copy to LOG_CHANNEL for auto-rejected payments
-    (clear amount mismatch) — no buttons, just a record of what happened
-    in case the user disputes it."""
+    (payee name didn't match ours at all — not a genuine payment to us)
+    — no buttons, just a record of what happened in case of a dispute."""
     caption = (
-        f"<b>❌ Auto-rejected UPI payment</b>\n\n"
+        f"<b>❌ Auto-rejected — not verified</b>\n\n"
         f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
         f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
-        f"🔎 OCR amount: {extracted['amount']}Rs (didn't match the plan's rate)\n"
+        f"🔎 OCR amount: {extracted['amount'] or 'not detected'}Rs\n"
         f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
-        f"🔴 Clear mismatch — rejected automatically, no admin action needed.\n\n"
+        f"🔴 Payee name didn't match ours — doesn't look like a real payment to us. "
+        f"Rejected automatically, no admin action needed.\n\n"
         f"Request ID: <code>{request_id}</code>"
     )
     try:
