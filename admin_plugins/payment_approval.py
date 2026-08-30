@@ -8,6 +8,9 @@ main bot, which is just OWNER_LNK) to submit their UPI payment proof —
 and can also just message this bot directly with questions, which get
 relayed to the admins (see "Support Q&A relay" below).
 
+/plan and /myplan also work directly on this bot (not just the main
+bot) — same info, shown here.
+
 Payment flow:
   1. User taps /start (or says hi), OR sends the screenshot photo cold
      with no plan picked yet (see unsolicited_screenshot_cb — the photo
@@ -15,23 +18,29 @@ Payment flow:
   2. Bot shows a "Submit Payment Screenshot" button -> asks which plan.
   3. Bot asks for the screenshot photo (unless one was already stashed
      from step 1, in which case that's used instead).
-  4. OCR (pytesseract) pulls out an amount + date/time and checks: does
-     the amount match the claimed plan, and is the date recent (not an
-     old/reused screenshot)?
-  5a. High confidence (amount matched + date recent): premium is granted
-      immediately, no admin needed. The screenshot is still posted to
-      LOG_CHANNEL as a record only (no buttons) so approvals stay
-      auditable.
-  5b. Anything less than that: sent to LOG_CHANNEL (this bot must be an
-      admin there) with the screenshot, extracted info, and buttons. An
-      admin taps something before premium is granted. Ambiguous cases
-      show a button per plan.
+  4. OCR (pytesseract) pulls out an amount, a date/time, and whether the
+     payee name on the screenshot looks like ours (see PAYEE_NAME_HINT).
+  5a. Exact match — amount equals the claimed plan's rate, the payment
+      timestamp is within the last hour, and the payee name matches —
+      premium is granted immediately, no admin needed. A record-only
+      copy (no buttons) goes to LOG_CHANNEL so approvals stay auditable.
+  5b. Clear mismatch — an amount WAS read off the screenshot and it does
+      not equal the claimed plan's rate — auto-rejected immediately, no
+      admin needed either (this is a wrong/mismatched payment, not an
+      ambiguous one).
+  5c. Anything else (amount not readable, date stale, payee not
+      detected, etc.) — sent to LOG_CHANNEL with the screenshot and
+      Approve/Reject buttons for an admin to decide.
+
+  Extending: if the user already has time remaining on an existing
+  plan, a new approval (auto or manual) is added on top of what's left
+  rather than overwriting it.
 
 Support Q&A relay:
-  Any other message a user sends (not /start, not a screenshot) is
-  forwarded to every admin's PM with this bot. An admin replies by using
-  Telegram's native reply-to on that forwarded copy, and the reply is
-  relayed straight back to the user.
+  Any other message a user sends (not /start, /plan, /myplan, or a
+  screenshot) is forwarded to every admin's PM with this bot. An admin
+  replies by using Telegram's native reply-to on that forwarded copy,
+  and the reply is relayed straight back to the user.
 
 Requires: pytesseract + tesseract-ocr/tesseract-ocr-eng system packages
 (see Dockerfile) and Pillow (already in requirements.txt).
@@ -39,6 +48,7 @@ Requires: pytesseract + tesseract-ocr/tesseract-ocr-eng system packages
 
 import io
 import re
+import asyncio
 import datetime
 import logging
 
@@ -46,8 +56,17 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.users_chats_db import db
-from info import ADMINS, LOG_CHANNEL, PREMIUM_AND_REFERAL_MODE, STAR_PLAN_LABELS, STAR_PLAN_SECONDS, OWNER_LNK, BOT_TOKEN
-from plugins.commands import load_plan_rates
+from info import (
+    ADMINS, LOG_CHANNEL, PREMIUM_AND_REFERAL_MODE, STAR_PLAN_LABELS,
+    STAR_PLAN_SECONDS, OWNER_LNK, BOT_TOKEN, PAYMENT_TEXT, PAYMENT_QR,
+)
+from plugins.commands import (
+    load_plan_rates, format_plan_rates, format_remaining_time, format_expiry_time,
+)
+# The main Goflix bot's own Client instance, so the "premium unlocked"
+# message can be sent from THAT bot too (in addition to this AdminBot),
+# since that's the bot the user is actually using day-to-day.
+from TechVJ.bot import TechVJBot
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +91,30 @@ PLAN_SECONDS = STAR_PLAN_SECONDS
 # ':' in its token — no extra config needed.
 MAIN_BOT_ID = int(BOT_TOKEN.split(":")[0]) if BOT_TOKEN and ":" in BOT_TOKEN else None
 
-# How old a screenshot's payment date/time is allowed to be before we
-# stop trusting it automatically and flag it as low-confidence (someone
-# reusing an old screenshot, or a scheduled/pending payment).
-MAX_SCREENSHOT_AGE_HOURS = 48
+# How old a screenshot's payment date/time is allowed to be before it no
+# longer counts as "exact" for auto-approval (someone reusing an old
+# screenshot, or a scheduled/pending payment). Tightened to 1 hour —
+# auto-approval is meant for "I just paid this second", anything older
+# goes to manual review instead of being rejected outright.
+MAX_SCREENSHOT_AGE_HOURS = 1
+
+# Text that must appear (case-insensitively) in the OCR'd screenshot for
+# the payment to count as "paid to us" — i.e. the payee/receiver name
+# UPI apps print on a successful payment (matches the UPI ID's account
+# name, e.g. "harshithacharya632-3@oksbi"). Adjust this if the UPI
+# display name ever changes.
+PAYEE_NAME_HINT = "harshith"
+
+
+async def _delayed_delete(message, delay: int):
+    """Fire-and-forget helper: deletes a message after `delay` seconds
+    without blocking whatever handler scheduled it. Used for status/
+    confirmation messages that are only useful for a minute or two."""
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 # ── OCR extraction ──────────────────────────────────────────────────────
@@ -125,11 +164,20 @@ def _extract_datetime(text: str):
     return None, None
 
 
+def _payee_name_matches(text: str) -> bool:
+    """True if the screenshot's OCR text mentions our UPI account name —
+    i.e. the payment actually went to us, not to someone else's ID."""
+    return PAYEE_NAME_HINT.lower() in text.lower()
+
+
 async def ocr_screenshot(photo_bytes: bytes) -> dict:
     """Runs OCR and returns a dict with whatever was extracted, plus a
     'confidence' verdict. Never raises — OCR failing just means low
     confidence, not a crash."""
-    result = {"amount": None, "raw_date": None, "parsed_date": None, "confidence": "low", "ocr_text": ""}
+    result = {
+        "amount": None, "raw_date": None, "parsed_date": None,
+        "confidence": "low", "ocr_text": "", "payee_ok": False,
+    }
     if not OCR_AVAILABLE:
         return result
     try:
@@ -140,6 +188,7 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
         raw_date, parsed_date = _extract_datetime(text)
         result["raw_date"] = raw_date
         result["parsed_date"] = parsed_date
+        result["payee_ok"] = _payee_name_matches(text)
 
         if result["amount"] and parsed_date:
             age = datetime.datetime.now() - parsed_date
@@ -172,6 +221,50 @@ async def admin_bot_greeting(client, message):
         "Hello! 👋 Tap below to submit a payment screenshot.",
         reply_markup=_welcome_markup()
     )
+
+
+# ── /plan and /myplan also work directly on this bot ────────────────────
+# Same info as the main bot's versions, just shown here too since users
+# often end up talking to this bot anyway.
+
+@Client.on_message(filters.private & filters.command("plan"))
+async def admin_bot_plan_cmd(client, message):
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+    rates = await load_plan_rates(MAIN_BOT_ID)
+    caption_text = PAYMENT_TEXT.format(plan_rates=format_plan_rates(rates["upi"]))
+    sent = await message.reply_photo(
+        photo=PAYMENT_QR,
+        caption=caption_text,
+        parse_mode=enums.ParseMode.HTML,
+        has_spoiler=True,
+        reply_markup=_welcome_markup(),
+    )
+    asyncio.create_task(_delayed_delete(sent, 180))
+
+
+@Client.on_message(filters.private & filters.command("myplan"))
+async def admin_bot_myplan_cmd(client, message):
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+    user_id = message.from_user.id
+    if await db.has_premium_access(user_id):
+        remaining_time = await db.check_remaining_uasge(user_id)
+        expiry_time = remaining_time + datetime.datetime.now()
+        sent = await message.reply_text(
+            "✨ <b>Your Plan Details</b> ✨\n\n"
+            f"⏳ <b>Remaining Time :</b> {format_remaining_time(remaining_time)}\n"
+            f"📅 <b>Expires On :</b> {format_expiry_time(expiry_time)}\n\n"
+            "🔄 Extend your plan : /plan\n\n"
+            "Have a great day! 😊",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        asyncio.create_task(_delayed_delete(sent, 180))
+    else:
+        await message.reply_text(
+            "😢 You don't have any premium subscription yet.\n\nCheck out our plans: /plan",
+            reply_markup=_welcome_markup()
+        )
 
 
 @Client.on_callback_query(filters.regex("^submit_upi_screenshot$"))
@@ -278,10 +371,36 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     rates = await load_plan_rates(MAIN_BOT_ID)
     upi = rates["upi"]
     claimed_amount = str(upi.get(claimed_plan))
-    amount_matches = extracted["amount"] is not None and extracted["amount"] == claimed_amount
+    amount_read = extracted["amount"]
+    amount_matches = amount_read is not None and amount_read == claimed_amount
     extracted["matched_plan"] = claimed_plan if amount_matches else None
-    if not amount_matches:
-        extracted["confidence"] = "low"
+
+    # Three-way decision:
+    #   exact  -> amount matches AND the payment is within the last hour
+    #             AND the payee name is ours -> auto-approve, no admin.
+    #   reject -> an amount WAS read and it does NOT match the claimed
+    #             plan's rate -> this is a wrong/mismatched payment, not
+    #             an ambiguous one -> auto-reject, no admin either.
+    #   manual -> everything else (amount unreadable, date stale, payee
+    #             not detected, etc.) -> falls back to admin review.
+    date_recent = (
+        extracted["parsed_date"] is not None
+        and datetime.timedelta(0) <= (datetime.datetime.now() - extracted["parsed_date"]) <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS)
+    )
+    if amount_matches and date_recent and extracted["payee_ok"]:
+        decision = "exact"
+        extracted["confidence"] = "high"
+    elif amount_read is not None and not amount_matches:
+        decision = "reject"
+        extracted["confidence"] = "mismatch"
+    else:
+        decision = "manual"
+        # The amount matched but date/payee didn't quite clear the bar
+        # for auto-approval — the plan is still known for certain, so
+        # give the admin a single confident Approve button instead of a
+        # per-plan picker (that's only for when the amount itself is
+        # unreadable and the plan genuinely isn't known).
+        extracted["confidence"] = "high" if amount_matches else "low"
 
     request_id = await db.add_payment_request(
         user_id=user.id, username=user.username or user.first_name,
@@ -289,45 +408,71 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
         claimed_plan=claimed_plan, extracted=extracted,
     )
 
-    if extracted["confidence"] == "high":
-        # Amount matched the claimed plan AND the screenshot's date/time
-        # is recent enough to trust — skip manual review entirely.
+    if decision == "exact":
         await status_msg.edit_text("✅ Screenshot verified automatically — premium is active now! 🎉")
+        asyncio.create_task(_delayed_delete(status_msg, 120))
         await _grant_premium(client, request_id, user.id, claimed_plan, auto=True)
         await _log_auto_approval(client, request_id, user, claimed_plan, extracted, file_id)
         return
 
-    await status_msg.edit_text(
+    if decision == "reject":
+        await status_msg.edit_text(
+            f"❌ The amount in your screenshot doesn't match {PLAN_LABELS[claimed_plan]} "
+            f"(expected {claimed_amount}Rs, found {amount_read}Rs). "
+            f"Double-check the plan you picked and try again, or contact an admin: {OWNER_LNK}"
+        )
+        asyncio.create_task(_delayed_delete(status_msg, 120))
+        await db.set_payment_request_status(request_id, "auto_rejected", None)
+        await _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id)
+        return
+
+    sent = await status_msg.edit_text(
         "✅ Got it! Your screenshot is with the admins for a quick check — "
         "you'll get a message the moment it's approved."
     )
+    asyncio.create_task(_delayed_delete(sent, 120))
     await _notify_admins(client, request_id, user, claimed_plan, extracted, file_id)
 
 
 async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, admin_id=None):
     """Shared by the auto-approve path above and the manual Approve
     button below — same premium-granting logic either way, only the
-    payment_request's recorded status differs."""
+    payment_request's recorded status differs.
+
+    Extends on top of any time the user already has left, instead of
+    overwriting it — a user with 6 days left on a 1-week plan who then
+    buys a 1-month plan ends up with 1 month + 6 days, not just 1 month.
+    """
     seconds = PLAN_SECONDS[plan]
-    expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+    now = datetime.datetime.now()
+    existing = await db.get_user(user_id)
+    current_expiry = existing.get("expiry_time") if existing else None
+    base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
+    expiry_time = base_time + datetime.timedelta(seconds=seconds)
+
     await db.update_user({
         "id": user_id, "expiry_time": expiry_time,
         "expiry_reminder_sent": False, "expired_notified": False,
     })
     await db.set_payment_request_status(request_id, "auto_approved" if auto else "approved", admin_id)
+
+    unlock_text = (
+        "<b>👑 ᴄᴏɴɢʀᴀᴛꜱ 👑</b>\n\n"
+        f"💎 <b>ᴘʀᴇᴍɪᴜᴍ ᴜɴʟᴏᴄᴋᴇᴅ ꜰᴏʀ {PLAN_LABELS[plan]}</b>\n"
+        "🌟 ᴀʟʟ ᴘʀᴇᴍɪᴜᴍ ꜰᴇᴀᴛᴜʀᴇꜱ ᴀʀᴇ ɴᴏᴡ ᴀᴄᴄᴇꜱꜱɪʙʟᴇ\n\n"
+        "🚀 <b>ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴘʀᴇᴍɪᴜᴍ ɢᴏꜰʟɪx!</b>"
+    )
+    # Sent from BOTH bots — the AdminBot (where the screenshot was sent)
+    # and the main Goflix bot (where the user actually spends their
+    # time), so the unlock is visible wherever they check next.
     try:
-        await client.send_message(
-            chat_id=user_id,
-            text=(
-                "<b>👑 ᴄᴏɴɢʀᴀᴛꜱ 👑</b>\n\n"
-                f"💎 <b>ᴘʀᴇᴍɪᴜᴍ ᴜɴʟᴏᴄᴋᴇᴅ ꜰᴏʀ {PLAN_LABELS[plan]}</b>\n"
-                "🌟 ᴀʟʟ ᴘʀᴇᴍɪᴜᴍ ꜰᴇᴀᴛᴜʀᴇꜱ ᴀʀᴇ ɴᴏᴡ ᴀᴄᴄᴇꜱꜱɪʙʟᴇ\n\n"
-                "🚀 <b>ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴘʀᴇᴍɪᴜᴍ ɢᴏꜰʟɪx!</b>"
-            ),
-            parse_mode=enums.ParseMode.HTML
-        )
+        await client.send_message(chat_id=user_id, text=unlock_text, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
-        logger.warning(f"Couldn't DM user {user_id} after granting premium: {e}")
+        logger.warning(f"Couldn't DM user {user_id} after granting premium (AdminBot): {e}")
+    try:
+        await TechVJBot.send_message(chat_id=user_id, text=unlock_text, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        logger.warning(f"Couldn't DM user {user_id} after granting premium (main bot): {e}")
 
 
 async def _log_auto_approval(client, request_id, user, plan: str, extracted, file_id):
@@ -340,7 +485,8 @@ async def _log_auto_approval(client, request_id, user, plan: str, extracted, fil
         f"📦 Plan: <b>{PLAN_LABELS[plan]}</b>\n"
         f"🔎 OCR amount: {extracted['amount']}Rs\n"
         f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
-        f"🟢 High confidence — granted automatically, no admin action needed.\n\n"
+        f"🟢 Exact match (amount + within {MAX_SCREENSHOT_AGE_HOURS}h + payee name) — "
+        f"granted automatically, no admin action needed.\n\n"
         f"Request ID: <code>{request_id}</code>"
     )
     try:
@@ -356,11 +502,37 @@ async def _log_auto_approval(client, request_id, user, plan: str, extracted, fil
                 logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
 
 
+async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id):
+    """Posts a record-only copy to LOG_CHANNEL for auto-rejected payments
+    (clear amount mismatch) — no buttons, just a record of what happened
+    in case the user disputes it."""
+    caption = (
+        f"<b>❌ Auto-rejected UPI payment</b>\n\n"
+        f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
+        f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
+        f"🔎 OCR amount: {extracted['amount']}Rs (didn't match the plan's rate)\n"
+        f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
+        f"🔴 Clear mismatch — rejected automatically, no admin action needed.\n\n"
+        f"Request ID: <code>{request_id}</code>"
+    )
+    try:
+        if not LOG_CHANNEL:
+            raise ValueError("LOG_CHANNEL not set")
+        await client.send_photo(chat_id=LOG_CHANNEL, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        logger.warning(f"Couldn't post auto-rejection log to LOG_CHANNEL ({e}), DMing admins instead.")
+        for admin_id in ADMINS:
+            try:
+                await client.send_photo(chat_id=admin_id, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+            except Exception as e2:
+                logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
+
+
 async def _notify_admins(client, request_id, user, claimed_plan, extracted, file_id):
     date_line = extracted["raw_date"] or "not detected"
     amount_line = f"{extracted['amount']}Rs" if extracted["amount"] else "not detected"
-    confidence_line = "🟢 High confidence (amount + recent date matched)" if extracted["confidence"] == "high" \
-        else "🟡 Needs a look (amount/date unclear or didn't match)"
+    confidence_line = "🟢 Amount matched — just tap Approve (date/payee couldn't be auto-confirmed)" if extracted["confidence"] == "high" \
+        else "🟡 Amount unclear — pick the correct plan below"
 
     caption = (
         f"<b>💳 New UPI payment claim</b>\n\n"
@@ -496,7 +668,7 @@ async def pending_payments_cmd(client, message):
 # their own groups) and lands here at group=5 — the lowest priority, so
 # it only ever sees what nothing else claimed.
 
-@Client.on_message(filters.private & filters.incoming & ~filters.user(ADMINS) & ~filters.command("start"), group=5)
+@Client.on_message(filters.private & filters.incoming & ~filters.user(ADMINS) & ~filters.command(["start", "plan", "myplan"]), group=5)
 async def relay_user_question_to_admins_cb(client, message):
     if not ADMINS:
         return await message.reply_text("⚠️ No admin is configured to receive messages right now.")
@@ -520,7 +692,8 @@ async def relay_user_question_to_admins_cb(client, message):
             logger.warning(f"Couldn't relay question to admin {admin_id}: {e}")
 
     if delivered:
-        await message.reply_text("📨 Got your message — an admin will reply here shortly.")
+        sent = await message.reply_text("📨 Got your message — an admin will reply here shortly.")
+        asyncio.create_task(_delayed_delete(sent, 60))
     else:
         await message.reply_text("⚠️ Couldn't reach an admin right now — please try again later.")
 
