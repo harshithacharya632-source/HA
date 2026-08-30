@@ -73,10 +73,28 @@ logger = logging.getLogger(__name__)
 try:
     import pytesseract
     from PIL import Image, ImageOps
+    # Importing the pytesseract *library* only proves the Python package
+    # is installed — it says nothing about whether the actual `tesseract`
+    # binary is on PATH inside the container (see Dockerfile). Those two
+    # failed independently before: pytesseract wasn't even in
+    # requirements.txt, then even once it is, a missing system binary
+    # would raise TesseractNotFoundError on every single screenshot and
+    # get silently swallowed by ocr_screenshot()'s broad except — so
+    # every screenshot would show OCR amount/date "not detected" with no
+    # obvious clue why. Checking the binary here, once, at import time,
+    # turns that into one clear log line instead of a mystery.
+    pytesseract.get_tesseract_version()
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
     logger.warning("pytesseract/Pillow not available — screenshot OCR is disabled, admins will see raw screenshots only.")
+except pytesseract.TesseractNotFoundError:
+    OCR_AVAILABLE = False
+    logger.warning(
+        "pytesseract is installed but the 'tesseract' binary isn't on PATH — "
+        "screenshot OCR is disabled, admins will see raw screenshots only. "
+        "Install the tesseract-ocr system package (see Dockerfile)."
+    )
 
 # Same plan keys/durations as the Stars flow on the main bot — a plan's
 # length doesn't depend on how it was paid for.
