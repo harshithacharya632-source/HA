@@ -210,6 +210,18 @@ _TIME_COMMA_DATE_PATTERN = re.compile(
     r'\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)),\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b'
 )
 
+# A different UI style prints date-then-time in the normal order (unlike
+# PhonePe/Paytm above) but joins them with the word "at" instead of a
+# comma — e.g. "30 August 2026 at 03:05 PM". None of the patterns above
+# require an "at" between year and time (only an optional comma), so
+# this read as "OCR date: not detected" despite the text being fully
+# legible. Date and time are already in the right order here, just
+# joined by "at" instead of ", " — rejoin with a comma so the same
+# strptime formats below can parse it.
+_DATE_AT_TIME_PATTERN = re.compile(
+    r'\b(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\s+at\s+(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\b'
+)
+
 _DATE_TRY_FORMATS = [
     "%d %b %Y, %I:%M %p", "%d %B %Y, %I:%M %p",
     "%d %b %Y %I:%M %p", "%d %B %Y %I:%M %p",
@@ -317,9 +329,12 @@ def _extract_amount(text: str):
     #     either side (a bullet/icon numeral elsewhere on the receipt,
     #     confirmed to show up as an isolated "3" near the share icons)
     #     is excluded rather than treated as a candidate;
-    #   - it must be the ONLY such (junk-having) line in the whole
+    #   - it must be the ONLY such candidate line in the whole
     #     screenshot — multiple candidates with no anchor to
-    #     disambiguate between them is too risky to guess at.
+    #     disambiguate between them is too risky to guess at. A fully
+    #     bare digit-only line (see bare_digit_only_line below) is
+    #     included in the same pool, length-capped so it can't be
+    #     confused with a transaction/UTR ID;
     # Uppercase-letter junk stays excluded (blocks "XX1901", "UTR", a
     # transaction ID's leading letter, etc. from ever qualifying) EXCEPT
     # for a single fused letter with nothing else on the line at all
@@ -330,6 +345,13 @@ def _extract_amount(text: str):
     # elsewhere) can't slip through: it simply isn't unique.
     bare_amount_line = re.compile(r'^([^\dA-Z\n]{0,2})([0-9][0-9,]*(?:\.\d{1,2})?)([^\dA-Z\n]{0,2})$')
     single_letter_line = re.compile(r'^[A-Za-z]([0-9]{1,6})$')
+    # A UI style confirmed on a real screenshot prints the amount as a
+    # totally clean standalone line — no currency symbol survives AT
+    # ALL, not even a stray junk character (unlike every case above).
+    # Length-capped at 6 digits (well beyond any plan price) specifically
+    # so this can't ever grab a bare multi-digit transaction/UTR ID that
+    # happens to land on its own line — those all run 9+ digits.
+    bare_digit_only_line = re.compile(r'^([0-9]{1,6}(?:\.\d{1,2})?)$')
     candidates = []
     for l in lines:
         m = bare_amount_line.match(l)
@@ -337,6 +359,10 @@ def _extract_amount(text: str):
             candidates.append(m.group(2))
             continue
         m = single_letter_line.match(l)
+        if m:
+            candidates.append(m.group(1))
+            continue
+        m = bare_digit_only_line.match(l)
         if m:
             candidates.append(m.group(1))
     if len(candidates) == 1:
@@ -390,6 +416,20 @@ def _extract_datetime(text: str):
                 except ValueError:
                     continue
             return raw, None
+
+    # Date-then-time already in the right order, just joined with "at"
+    # instead of a comma (see _DATE_AT_TIME_PATTERN above).
+    m = _DATE_AT_TIME_PATTERN.search(text)
+    if m:
+        date_part, time_part = m.group(1), m.group(2)
+        raw = f"{date_part}, {time_part}"
+        normalized = _normalize_meridiem(raw)
+        for fmt in _DATE_TRY_FORMATS:
+            try:
+                return raw, datetime.datetime.strptime(normalized, fmt)
+            except ValueError:
+                continue
+        return raw, None
 
     return None, None
 
