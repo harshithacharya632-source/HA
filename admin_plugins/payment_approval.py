@@ -230,12 +230,41 @@ _DATE_TRY_FORMATS = [
 # other fallback to anchor on) were falling through as "not detected".
 _RECEIPT_STATUS_ANCHORS = ("completed", "pending", "failed", "paid to", "rupees")
 
+# Pulls a trailing amount off the END of a line that's already been
+# confirmed (by the caller) to mention the payee/"paid to" — used by the
+# same-line fallback in _extract_amount() below. The currency symbol
+# group is optional since OCR frequently drops or mangles it even when
+# the digits themselves read fine.
+_TRAILING_AMOUNT_RE = re.compile(r'([₹]|Rs\.?|INR)?[ \t]*([0-9][0-9,]*(?:\.\d{1,2})?)\s*$', re.IGNORECASE)
+
 
 def _extract_amount(text: str):
     for pattern in _AMOUNT_PATTERNS:
         m = pattern.search(text)
         if m:
             return m.group(1).replace(",", "")
+
+    # Same-line fallback: "Paid to Harshith  ₹15" — avatar, payee name,
+    # and amount are laid out in one horizontally-aligned row in the
+    # app's UI (GPay/PhonePe "Paid to <name>" cards all do this), and
+    # OCR frequently reads that whole row as ONE text line rather than
+    # separate lines. Every fallback below this point only matches a
+    # line that IS the amount and nothing else, so an amount fused onto
+    # the same line as the payee name/label never matched any of them —
+    # confirmed on a real screenshot: even with the ₹ glyph read
+    # perfectly fine, the amount still came back "not detected" because
+    # it shared a line with "Harshith ." Anchoring on the payee name
+    # (which every genuine payment screenshot must contain — see
+    # _payee_name_matches) or a "paid to"/"sent to" label makes this
+    # safe: it only pulls the trailing number off a line already proven
+    # to be about OUR payment, never a stray number elsewhere.
+    for line in (l.strip() for l in text.splitlines() if l.strip()):
+        low = line.lower()
+        if PAYEE_NAME_HINT in low or "paid to" in low or "sent to" in low:
+            m = _TRAILING_AMOUNT_RE.search(line)
+            if m:
+                return m.group(2).replace(",", "")
+
     # Last-resort fallback: whole-rupee amounts with no paise at all
     # (e.g. "₹3" or "₹1,100") have no decimal for the pattern above to
     # anchor on, and confirmed against a real screenshot, OCR does NOT
@@ -410,6 +439,15 @@ def _ocr_variants(image):
     yield ImageOps.invert(upscaled)
 
 
+# --psm 6 ("assume a single uniform block of text") skips Tesseract's
+# orientation/script-detection and multi-column layout analysis, both
+# of which the default mode (psm 3) always runs and a tall single-column
+# receipt screenshot never needs — measurably faster per call on this
+# kind of image, and just as accurate since there's no real multi-column
+# layout here to mis-segment.
+_TESS_CONFIG = "--psm 6"
+
+
 def _ocr_top_band(image) -> str:
     """OCRs just the top ~15% of the screenshot on its own, upscaled
     3x. Confirmed on a real PhonePe screenshot: Tesseract silently
@@ -423,12 +461,14 @@ def _ocr_top_band(image) -> str:
     full-image pass itself. Harmless on screenshots that don't have a
     colored header (Paytm/GPay) — it just re-reads the plain status bar
     text that the main pass already captured fine, which the amount/
-    date extractors below simply ignore."""
+    date extractors below simply ignore. Only called when the main pass
+    hasn't already found both an amount and a date (see ocr_screenshot)
+    — most screenshots don't need this extra pass at all."""
     band_height = max(1, int(image.height * 0.15))
     band = image.crop((0, 0, image.width, band_height))
     band = band.resize((band.width * 3, band_height * 3), Image.LANCZOS)
     try:
-        return pytesseract.image_to_string(band)
+        return pytesseract.image_to_string(band, config=_TESS_CONFIG)
     except Exception:
         return ""
 
@@ -451,7 +491,7 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
 
         best_text = ""
         for variant in _ocr_variants(image):
-            variant_text = pytesseract.image_to_string(variant)
+            variant_text = pytesseract.image_to_string(variant, config=_TESS_CONFIG)
             if len(variant_text.strip()) > len(best_text.strip()):
                 best_text = variant_text
             if _extract_amount(variant_text):
@@ -460,11 +500,19 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
                 # surrounding text (date/payee) once heavily processed.
                 best_text = variant_text
                 break
-        # Merge in the top-band pass (see _ocr_top_band) — prepended so
-        # a date/amount that only shows up there is found by the same
-        # search-from-the-top logic below, regardless of which main
-        # variant "won" above.
-        text = _ocr_top_band(image) + "\n" + best_text
+
+        # The top-band pass exists purely to rescue a header Tesseract
+        # blind-spots on the full image (see _ocr_top_band) — if the
+        # main pass above already found BOTH an amount and a date, that
+        # blind spot didn't bite this time, so skip the extra full
+        # Tesseract call entirely. This is the single biggest lever on
+        # per-screenshot latency: most screenshots now finish in one
+        # OCR call instead of up to four.
+        _, quick_date = _extract_datetime(best_text)
+        if _extract_amount(best_text) and quick_date:
+            text = best_text
+        else:
+            text = _ocr_top_band(image) + "\n" + best_text
 
         result["ocr_text"] = text
         result["ocr_read_ok"] = len(text.strip()) >= 20
@@ -931,11 +979,12 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
             f"doesn't look like a real payment to us. Rejected automatically, "
             f"no admin action needed."
         )
+    amount_display = f"{extracted['amount']}Rs" if extracted['amount'] else 'not detected'
     caption = (
         f"<b>❌ Auto-rejected — not verified</b>\n\n"
         f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
         f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
-        f"🔎 OCR amount: {extracted['amount'] or 'not detected'}Rs\n"
+        f"🔎 OCR amount: {amount_display}\n"
         f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
         f"{reason_line}\n\n"
         f"Request ID: <code>{request_id}</code>"
