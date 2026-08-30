@@ -234,28 +234,26 @@ def _extract_amount(text: str):
             return m.group(1).replace(",", "")
     # Last-resort fallback: whole-rupee amounts with no paise at all
     # (e.g. "₹3" or "₹1,100") have no decimal for the pattern above to
-    # anchor on, and if the ₹ glyph was also dropped by OCR there's
-    # nothing left to match on except the bare number.
-    #
-    # The bot OCRs the FULL screenshot as sent — status bar, chat
-    # header, subscriber count and all — not a tight crop of just the
-    # payment card, so "the amount is on the first OCR line" does NOT
-    # hold in practice (that's only true of a manually cropped card).
-    # Scanning every bare-number line in the whole text and taking the
-    # first one is too risky on its own — a transaction ID or phone
-    # status digit could match. Instead this only accepts a bare number
-    # line when one of the next few lines is a receipt status word
-    # ("Completed"/"Pending"/"Failed"/"Paid to") — every UPI app prints
-    # the amount immediately above its status, so this ties the number
-    # to that specific position on the receipt rather than grabbing the
-    # first stray digits anywhere in the screenshot.
+    # anchor on, and confirmed against a real screenshot, OCR does NOT
+    # cleanly drop the ₹ glyph the way it does on decimal amounts —
+    # instead it renders as stray punctuation FUSED directly onto the
+    # digit (e.g. "₹3" next to Paytm's green checkmark badge OCRs as
+    # "~3@" or "<3]"), so requiring the line to be pure digits (as this
+    # used to) rejected every real amount line outright. This now
+    # allows up to 2 non-alphanumeric junk characters on each side of
+    # the digits — still anchored to the SAME line-position check as
+    # before (a receipt status word within the next few lines) so this
+    # can't drift onto an unrelated stray number elsewhere in the
+    # screenshot (chat subscriber counts, transaction IDs, status bar).
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+    junk_wrapped_amount = re.compile(r'^[^\w]{0,2}([0-9][0-9,]*(?:\.\d{1,2})?)[^\w]{0,2}$')
     for i, line in enumerate(lines):
-        if not re.fullmatch(r'[0-9][0-9,]*(?:\.\d{1,2})?', line):
+        m = junk_wrapped_amount.match(line)
+        if not m:
             continue
         window = lines[i + 1:i + 4]
         if any(anchor in w.lower() for w in window for anchor in _RECEIPT_STATUS_ANCHORS):
-            return line.replace(",", "")
+            return m.group(1).replace(",", "")
     return None
 
 
