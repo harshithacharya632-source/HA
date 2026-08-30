@@ -25,8 +25,12 @@ Payment flow:
       premium is granted immediately, no admin needed. A record-only
       copy (no buttons) goes to LOG_CHANNEL so approvals stay auditable.
   5b. Clear mismatch — an amount WAS read off the screenshot and it does
-      not equal the claimed plan's rate — auto-rejected immediately, no
-      admin needed either (this is a wrong/mismatched payment, not an
+      not equal the claimed plan's CURRENT rate (rates are always read
+      live from Mongo via load_plan_rates(), never cached, so this is
+      always checked against today's price — change /plan_rate any time
+      and the very next screenshot is checked against the new number) —
+      auto-rejected immediately with an Appeal-to-admin button, no admin
+      needed either (this is a wrong/mismatched payment, not an
       ambiguous one).
   5c. Anything else (amount not readable, date stale, payee not
       detected, etc.) — sent to LOG_CHANNEL with the screenshot and
@@ -241,17 +245,26 @@ def _extract_amount(text: str):
     # "~3@" or "<3]"), so requiring the line to be pure digits (as this
     # used to) rejected every real amount line outright. This now
     # allows up to 2 non-alphanumeric junk characters on each side of
-    # the digits — still anchored to the SAME line-position check as
-    # before (a receipt status word within the next few lines) so this
-    # can't drift onto an unrelated stray number elsewhere in the
+    # the digits — still anchored to a receipt status word nearby so
+    # this can't drift onto an unrelated stray number elsewhere in the
     # screenshot (chat subscriber counts, transaction IDs, status bar).
+    #
+    # "Nearby" checks BOTH directions, not just forward: Paytm/older
+    # GPay print the status word BELOW the amount ("₹15" then
+    # "Completed" underneath), but a "Paid to <name>  ₹<amount>" layout
+    # (confirmed on a real GPay-via-PhonePe screenshot) prints "Paid to"
+    # as a label ABOVE the amount row instead. A forward-only window
+    # missed that case entirely — a real, correct ₹15 payment came back
+    # "OCR amount: not detected" purely because "Paid to" sat one line
+    # above the amount instead of below it, even though nothing was
+    # actually wrong with the payment.
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     junk_wrapped_amount = re.compile(r'^[^\w]{0,2}([0-9][0-9,]*(?:\.\d{1,2})?)[^\w]{0,2}$')
     for i, line in enumerate(lines):
         m = junk_wrapped_amount.match(line)
         if not m:
             continue
-        window = lines[i + 1:i + 4]
+        window = lines[max(0, i - 3):i] + lines[i + 1:i + 4]
         if any(anchor in w.lower() for w in window for anchor in _RECEIPT_STATUS_ANCHORS):
             return m.group(1).replace(",", "")
 
@@ -719,6 +732,21 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     txn_id = extracted.get("txn_id")
     duplicate_of = await db.find_approved_request_by_txn_id(txn_id) if txn_id else None
 
+    # A CONFIRMED wrong amount — OCR actually read a number off the
+    # screenshot and it does not equal the claimed plan's CURRENT rate
+    # (load_plan_rates() above always reads the live rate from Mongo, so
+    # this is always compared against today's price, never a stale one —
+    # if the owner just changed week from 3Rs to 15Rs, an old 3Rs
+    # screenshot submitted after the change reads 3 here and 15 as
+    # claimed_amount, so amount_matches is False and this branch fires).
+    # This must be checked before the payee/stale-date rejects below:
+    # a wrong amount is real (mismatched dollar value), whereas the
+    # payee/date rejects should only apply to something CLAIMING to be
+    # the right amount and only failing to prove it's fresh — this is
+    # never "manual/ambiguous", it is a definite reject with an appeal
+    # button, no admin action needed unless the user appeals.
+    amount_confirmed_wrong = amount_read is not None and not amount_matches
+
     reject_reason = None
     if duplicate_of:
         decision = "reject"
@@ -727,6 +755,10 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     elif extracted["payee_ok"] and amount_matches and date_recent:
         decision = "exact"
         extracted["confidence"] = "high"
+    elif amount_confirmed_wrong:
+        decision = "reject"
+        reject_reason = "amount_mismatch"
+        extracted["confidence"] = "wrong_amount"
     elif extracted["ocr_read_ok"] and not extracted["payee_ok"]:
         decision = "reject"
         reject_reason = "payee"
@@ -737,12 +769,13 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
         extracted["confidence"] = "stale_date"
     else:
         decision = "manual"
-        # The amount matched but something else didn't quite clear the
-        # bar for auto-approval — the plan is still known for certain,
-        # so give the admin a single confident Approve button instead of
-        # a per-plan picker (that's only for when the amount itself
-        # couldn't be read at all, or doesn't match today's rate — e.g.
-        # rates changed since, or OCR just couldn't read this one).
+        # Only reachable now when the amount itself couldn't be read at
+        # all (amount_read is None) but everything else looked plausible
+        # — a genuinely ambiguous OCR failure, not the user's fault, so
+        # it goes to an admin instead of being auto-rejected. Amount
+        # ALWAYS matches here when reachable (a confirmed wrong amount is
+        # caught above), so the admin gets a single confident Approve
+        # button rather than a per-plan picker.
         extracted["confidence"] = "high" if amount_matches else "low"
 
     request_id = await db.add_payment_request(
@@ -772,6 +805,13 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
                 "❌ This screenshot's payment date/time isn't recent — rejected.\n\n"
                 "Please send a screenshot of a payment you just made. If this IS a fresh "
                 "payment and the date was misread, tap below to send it to an admin."
+            )
+        elif reject_reason == "amount_mismatch":
+            reject_text = (
+                f"❌ The amount on this screenshot (₹{extracted['amount']}) doesn't match "
+                f"the {PLAN_LABELS[claimed_plan]} price (₹{claimed_amount}) — rejected.\n\n"
+                "Please pay the correct amount and resubmit, or if you believe this is a "
+                "mistake, tap below to send it to an admin."
             )
         else:
             reject_text = (
@@ -878,6 +918,12 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
             f"🔴 Date/time was read as {extracted['raw_date'] or '(unknown)'} — not recent "
             f"(older than {MAX_SCREENSHOT_AGE_HOURS}h or in the future). Looks like an old/"
             f"reused screenshot. Rejected automatically, no admin action needed."
+        )
+    elif reject_reason == "amount_mismatch":
+        reason_line = (
+            f"🔴 OCR amount ({extracted['amount']}Rs) does not match the current "
+            f"{PLAN_LABELS[claimed_plan]} rate. Confirmed wrong amount — rejected "
+            f"automatically, no admin action needed unless the user appeals."
         )
     else:
         reason_line = (
