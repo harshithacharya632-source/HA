@@ -468,6 +468,59 @@ def _payee_name_matches(text: str) -> bool:
     return PAYEE_NAME_HINT.lower() in text.lower()
 
 
+# C2PA ("Coalition for Content Provenance and Authenticity") is the
+# industry-standard metadata format that OpenAI's image tools (DALL-E /
+# ChatGPT image generation AND editing) embed into every image they
+# generate or touch, by default, unless the person doing the editing
+# deliberately strips it — a signed manifest recording that the image
+# was AI-generated/edited. Confirmed on a real screenshot forwarded to
+# us as a suspected fake: it contained a JUMBF box with a "urn:c2pa:..."
+# manifest ID and a "c2pa.icon" assertion — while all 5 of our confirmed
+# GENUINE phone screenshots (PhonePe, GPay, Paytm, Navi, and a generic
+# UI) have absolutely none of these byte sequences anywhere in the file.
+# A real screenshot taken directly on a phone is never run through an
+# AI image pipeline, so this can never appear by accident.
+#
+# Deliberately a raw byte-signature scan across the WHOLE file rather
+# than parsing PNG chunks or JPEG APP11 segments specifically — C2PA's
+# JUMBF container format always spells out these exact ASCII box-type
+# strings ("jumb", "jumd", "c2pa") regardless of whether it's embedded
+# as a PNG "caBX" chunk, a JPEG APP11 marker, or something else
+# entirely, so this one check covers every container format without
+# needing separate parsers for each, and needs no image library at all.
+#
+# This is NOT bulletproof: someone could deliberately strip this
+# metadata (e.g. by re-saving through an editor that doesn't preserve
+# it, or by photographing/re-screenshotting the AI output on another
+# device) before sending it. It's a real, zero-cost, zero-false-positive
+# first line of defense against the straightforward case — someone
+# generating or editing a screenshot with an AI tool and sending the
+# direct output — not a complete anti-fraud solution on its own.
+_C2PA_SIGNATURES = (b"c2pa", b"C2PA", b"jumd", b"jumb")
+
+
+def _has_ai_provenance_metadata(file_bytes: bytes) -> bool:
+    return any(sig in file_bytes for sig in _C2PA_SIGNATURES)
+
+
+# A typical phone screenshot is ~576-720px wide. These targets are
+# chosen to land at the SAME effective resolution as the 3x/4x
+# multipliers that were validated against real screenshots from all
+# four apps (576*3=1728, 576*4=2304) — so a normal screenshot gets
+# almost exactly the same treatment as before, but a much
+# higher-resolution image (a full camera photo instead of a
+# screenshot) gets scaled DOWN to this same target rather than
+# multiplied up even further, which is pure wasted Tesseract time on
+# an image that's already more than sharp enough.
+_SPARSE_TARGET_WIDTH = 1728
+_BLOCK_TARGET_WIDTH = 2304
+
+
+def _scaled_to_width(image, target_width):
+    scale = target_width / image.width
+    return image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
+
+
 def _ocr_variants(image):
     """Yields (image, tesseract_config) preprocessing variants to try
     OCR on, in order — most broadly reliable first, based on testing
@@ -503,12 +556,28 @@ def _ocr_variants(image):
     re-compressed (e.g. forwarded through Telegram, which re-encodes
     every photo it stores) even when the same screenshot at slightly
     different processing reads perfectly — so if sparse mode doesn't
-    find an amount, progressively different variants are tried."""
-    sparse = image.resize((image.width * 3, image.height * 3), Image.LANCZOS)
+    find an amount, progressively different variants are tried.
+
+    Scaling targets a fixed output WIDTH rather than multiplying the
+    input by a fixed factor (see _scaled_to_width below). A first
+    attempt at simply lowering the multiplier to 1.5x for speed was
+    tested against 5 real screenshots and looked fine on the surface
+    (payee name still found on all of them) but actually silently
+    broke amount accuracy on 2 of them — the ₹-fusion-into-digits
+    problem above came back at that scale, and "₹15" was read as "215"
+    again. A width TARGET keeps every screenshot at the same effective
+    resolution that was actually validated to read correctly,
+    regardless of the phone's screenshot resolution — and, unlike a
+    fixed multiplier, it also means a much larger image (e.g. a full
+    camera photo someone sends instead of a screenshot) gets scaled
+    DOWN to that same target instead of being blown up even further,
+    which is what made an unrelated photo take 30 real seconds and 4
+    full OCR passes before this fix."""
+    sparse = _scaled_to_width(image, _SPARSE_TARGET_WIDTH)
     yield sparse, "--psm 11"
     # Block-text mode, upscaled enough to avoid the ₹-fusion-into-digits
     # problem described above.
-    upscaled = image.resize((image.width * 4, image.height * 4), Image.LANCZOS)
+    upscaled = _scaled_to_width(image, _BLOCK_TARGET_WIDTH)
     yield upscaled, "--psm 6"
     # Grayscale + autocontrast — helps on low-contrast / heavily
     # compressed screenshots where a plain upscale isn't enough alone.
@@ -580,7 +649,9 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
 
         best_text = ""
-        for variant, config in _ocr_variants(image):
+        found_payee_anywhere = False
+        likely_not_payment = False
+        for idx, (variant, config) in enumerate(_ocr_variants(image)):
             variant_text = pytesseract.image_to_string(variant, config=config)
             if len(variant_text.strip()) > len(best_text.strip()):
                 best_text = variant_text
@@ -590,16 +661,42 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
                 # surrounding text (date/payee) once heavily processed.
                 best_text = variant_text
                 break
+            if _payee_name_matches(variant_text):
+                found_payee_anywhere = True
+            # Fast-fail for screenshots that plainly aren't a payment at
+            # all (a random photo, a chat screenshot, anything
+            # unrelated) — confirmed as a real, common case: someone
+            # sends a completely unrelated photo and the bot used to
+            # burn all 4 increasingly expensive OCR passes chasing an
+            # amount/payee that was never going to be there before
+            # finally forwarding it to admin. After the first two
+            # variants (sparse-text and block-mode — the two most
+            # different rendering approaches, so this isn't just one
+            # unlucky pass), if OCR clearly produced real, substantial
+            # text but NEITHER an amount NOR our payee name has shown up
+            # anywhere yet, this isn't a payment screenshot. The
+            # remaining variants (grayscale, inverted) exist purely to
+            # refine AMOUNT readability on a screenshot that already
+            # looks like a receipt — they don't conjure payee text that
+            # plain isn't in the image. Bail out now so an unrelated
+            # photo reaches "forward to admin" in 2 OCR calls instead
+            # of 4.
+            if idx >= 1 and len(best_text.strip()) >= 20 and not found_payee_anywhere:
+                likely_not_payment = True
+                break
 
         # The top-band pass exists purely to rescue a header Tesseract
         # blind-spots on the full image (see _ocr_top_band) — if the
         # main pass above already found BOTH an amount and a date, that
         # blind spot didn't bite this time, so skip the extra full
-        # Tesseract call entirely. This is the single biggest lever on
-        # per-screenshot latency: most screenshots now finish in one
-        # OCR call instead of up to four.
+        # Tesseract call entirely. Also skipped when the fast-fail above
+        # already concluded this isn't a payment screenshot at all —
+        # reading its header text has nothing left to offer either way.
+        # This is the single biggest lever on per-screenshot latency:
+        # most screenshots now finish in one OCR call instead of up to
+        # four.
         _, quick_date = _extract_datetime(best_text)
-        if _extract_amount(best_text) and quick_date:
+        if likely_not_payment or (_extract_amount(best_text) and quick_date):
             text = best_text
         else:
             text = _ocr_top_band(image) + "\n" + best_text
@@ -845,8 +942,44 @@ async def unsolicited_screenshot_cb(client, message):
 async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     status_msg = await client.send_message(chat_id, "🔍 Reading your screenshot…")
 
-    photo_bytes = await client.download_media(file_id, in_memory=True)
-    extracted = await ocr_screenshot(bytes(photo_bytes.getbuffer()))
+    photo_bytes_io = await client.download_media(file_id, in_memory=True)
+    photo_bytes = bytes(photo_bytes_io.getbuffer())
+
+    # Checked FIRST, before any OCR at all — a simple byte scan, so this
+    # costs virtually nothing and a confirmed hit means there's nothing
+    # OCR could tell us that would change the outcome anyway (see
+    # _has_ai_provenance_metadata's docstring for what this catches and
+    # why it's trustworthy). This is also what makes a detected fake
+    # reject almost instantly instead of waiting through the OCR
+    # pipeline for something that was never going to pass anyway.
+    if _has_ai_provenance_metadata(photo_bytes):
+        request_id = await db.add_payment_request(
+            user_id=user.id, username=user.username or user.first_name,
+            screenshot_file_id=file_id, claimed_plan=claimed_plan,
+            extracted={
+                "amount": None, "raw_date": None, "parsed_date": None,
+                "confidence": "ai_generated", "ocr_text": "", "payee_ok": False,
+                "ocr_read_ok": False, "txn_id": None, "matched_plan": None,
+            },
+        )
+        appeal_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📮 Appeal to admin", callback_data=f"pay_appeal_{request_id}")]
+        ])
+        await status_msg.edit_text(
+            "❌ This image appears to have been generated or edited using an AI tool "
+            "(it contains embedded content-authenticity metadata) — rejected.\n\n"
+            "Please send the original, unedited screenshot of your actual payment. If you "
+            "believe this is a mistake, tap below to send it to an admin.",
+            reply_markup=appeal_btn,
+        )
+        await db.set_payment_request_status(request_id, "auto_rejected", None)
+        await _log_auto_rejection(
+            client, request_id, user, claimed_plan,
+            {"amount": None, "raw_date": None}, file_id, "ai_generated",
+        )
+        return
+
+    extracted = await ocr_screenshot(photo_bytes)
 
     rates = await load_plan_rates(MAIN_BOT_ID)
     upi = rates["upi"]
@@ -1090,6 +1223,37 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
             f"{PLAN_LABELS[claimed_plan]} rate. Confirmed wrong amount — rejected "
             f"automatically, no admin action needed unless the user appeals."
         )
+    elif reject_reason == "ai_generated":
+        # Deliberately a different caption/title from the ones below —
+        # this isn't an honest mismatch or an OCR ambiguity, it's
+        # detected content-authenticity metadata proving the image was
+        # AI-generated or AI-edited (see _has_ai_provenance_metadata).
+        # Worth admins seeing this flagged as a suspected deliberate
+        # fraud attempt rather than filed the same as an everyday
+        # auto-reject — built and sent separately, skipping the shared
+        # caption template below entirely.
+        caption = (
+            f"<b>⚠️ Suspected FAKE screenshot — AI-generated/edited</b>\n\n"
+            f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
+            f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
+            f"🔴 This image contains embedded C2PA content-authenticity metadata — "
+            f"proof it was generated or edited by an AI tool (e.g. ChatGPT's image "
+            f"tools). A real phone screenshot never has this. Rejected automatically; "
+            f"worth a look if the user appeals.\n\n"
+            f"Request ID: <code>{request_id}</code>"
+        )
+        try:
+            if not LOG_CHANNEL:
+                raise ValueError("LOG_CHANNEL not set")
+            await client.send_photo(chat_id=LOG_CHANNEL, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+        except Exception as e:
+            logger.warning(f"Couldn't post auto-rejection log to LOG_CHANNEL ({e}), DMing admins instead.")
+            for admin_id in ADMINS:
+                try:
+                    await client.send_photo(chat_id=admin_id, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+                except Exception as e2:
+                    logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
+        return
     else:
         reason_line = (
             f"🔴 Screenshot was readable but the payee name didn't match ours — "
