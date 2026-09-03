@@ -12,9 +12,9 @@ relayed to the admins (see "Support Q&A relay" below).
 bot) — same info, shown here.
 
 Payment flow:
-  1. User taps /start (or says hi), OR sends the screenshot photo cold
-     with no plan picked yet (see unsolicited_screenshot_cb — the photo
-     is stashed and they're asked which plan it's for).
+  1. User taps /start, OR sends the screenshot photo cold with no plan
+     picked yet (see unsolicited_screenshot_cb — the photo is stashed
+     and they're asked which plan it's for).
   2. Bot shows a "Submit Payment Screenshot" button -> asks which plan.
   3. Bot asks for the screenshot photo (unless one was already stashed
      from step 1, in which case that's used instead).
@@ -42,9 +42,12 @@ Payment flow:
 
 Support Q&A relay:
   Any other message a user sends (not /start, /plan, /myplan, or a
-  screenshot) is forwarded to every admin's PM with this bot. An admin
-  replies by using Telegram's native reply-to on that forwarded copy,
-  and the reply is relayed straight back to the user.
+  screenshot — including a bare "hi"/"hello") is forwarded to every
+  admin's PM with this bot. An admin replies by using Telegram's native
+  reply-to on that forwarded copy, and the reply is relayed straight
+  back to the user. /start also offers a dedicated "Talk to Admin"
+  button that just prompts the user to type their message, for
+  discoverability.
 
 Requires: pytesseract + tesseract-ocr/tesseract-ocr-eng system packages
 (see Dockerfile) and Pillow (already in requirements.txt).
@@ -738,30 +741,46 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
     return await asyncio.to_thread(_run_ocr_sync, photo_bytes)
 
 
-# ── Entry points: /start and a plain "hi" ────────────────────────────────
+# ── Entry points: /start ──────────────────────────────────────────────
 
 def _welcome_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🧾 Submit Payment Screenshot", callback_data="submit_upi_screenshot")]])
+
+
+def _start_markup() -> InlineKeyboardMarkup:
+    # /start specifically shows BOTH entry points side by side — payment
+    # submission and a direct way to reach an admin — rather than just
+    # the single payment button _welcome_markup() above still uses for
+    # /plan and /myplan (those are already about payment, a second
+    # "talk to admin" button there would be redundant clutter).
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧾 Submit Payment Screenshot", callback_data="submit_upi_screenshot")],
+        [InlineKeyboardButton("💬 Talk to Admin", callback_data="talk_to_admin")],
+    ])
 
 
 @Client.on_message(filters.private & filters.command("start"))
 async def admin_bot_start(client, message):
     await message.reply_text(
         "<b>👋 Welcome to Goflix Payments</b>\n\n"
-        "Paid for premium via UPI? Tap below to submit your screenshot and an admin will verify it shortly.",
+        "Paid for premium via UPI? Tap below to submit your screenshot and an admin will verify it shortly.\n\n"
+        "Have a question instead? Tap Talk to Admin, or just type your message here any time.",
         parse_mode=enums.ParseMode.HTML,
-        reply_markup=_welcome_markup()
+        reply_markup=_start_markup()
     )
 
 
-@Client.on_message(filters.private & filters.text & filters.regex(r"(?i)^(hi|hii|hai|hello|hey)$"), group=-1)
-async def admin_bot_greeting(client, message):
-    """A bare hi/hello isn't a real question, so it's handled fully here
-    (no payment button, and it never reaches the support relay below —
-    admins' time is precious, this doesn't need to bother them) and
-    cleans itself up quickly."""
-    sent = await message.reply_text("Hey! Use /plan to see plans, or just send your payment screenshot.")
-    asyncio.create_task(_delayed_delete(sent, 30))
+@Client.on_callback_query(filters.regex("^talk_to_admin$"))
+async def talk_to_admin_cb(client, query):
+    """Doesn't need to do anything beyond prompt them — whatever they
+    type next isn't claimed by any other handler, so it naturally falls
+    through to the support relay below and reaches an admin."""
+    await query.answer()
+    sent = await client.send_message(
+        chat_id=query.from_user.id,
+        text="💬 Go ahead and type your message — an admin will reply here shortly."
+    )
+    asyncio.create_task(_delayed_delete(sent, 60))
 
 
 # ── /plan and /myplan also work directly on this bot ────────────────────
@@ -1449,11 +1468,13 @@ async def pending_payments_cmd(client, message):
 
 # ── Support Q&A relay ─────────────────────────────────────────────────────
 # Lets this same bot double as a help desk: any user message that isn't
-# /start, the greeting, a payment screenshot, or an admin command falls
-# through every handler above (photos are consumed by ask()/the
-# unsolicited_screenshot_cb handler; /start and "hi" are consumed at
-# their own groups) and lands here at group=5 — the lowest priority, so
-# it only ever sees what nothing else claimed.
+# /start, a payment screenshot, or an admin command falls through every
+# handler above (photos are consumed by ask()/the unsolicited_screenshot_cb
+# handler; /start is consumed at its own command filter) and lands here
+# at group=5 — the lowest priority, so it only ever sees what nothing
+# else claimed. This now includes a bare "hi"/"hello" too — those go
+# straight to an admin like any other message, rather than being
+# special-cased with a canned reply.
 
 @Client.on_message(filters.private & filters.incoming & ~filters.user(ADMINS) & ~filters.command(["start", "plan", "myplan"]), group=5)
 async def relay_user_question_to_admins_cb(client, message):
