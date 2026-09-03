@@ -29,6 +29,12 @@ ADMINS = [int(admin) if id_pattern.search(admin) else admin for admin in environ
 auth_users = [int(user) if id_pattern.search(user) else user for user in environ.get('AUTH_USERS', '').split()]  # For Multiple Id Use One Space Between Each.
 AUTH_USERS = (auth_users + ADMINS) if auth_users else []
 
+# The single bot owner's Telegram user ID — used for commands (like /stats)
+# that should be visible to only one person, not the whole ADMINS list.
+# Falls back to the first ADMINS entry if OWNER_ID isn't set, so existing
+# deployments keep working without needing a new env var right away.
+OWNER_ID = int(environ.get('OWNER_ID', ADMINS[0] if ADMINS and isinstance(ADMINS[0], int) else 0))
+
 # This Channel Is For When User Start Your Bot Then Bot Send That User Name And Id In This Log Channel, Same For Group Also.
 LOG_CHANNEL = int(environ.get('LOG_CHANNEL', '-1003059886878'))
 
