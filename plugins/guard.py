@@ -22,11 +22,28 @@ URL_REGEX = re.compile(r"(https?://|www\.|t\.me/|@\w+)", re.IGNORECASE)
 # link guard so users can call for an admin without being punished for it.
 ADMIN_CALL_REGEX = re.compile(r"[@#]admins?\b", re.IGNORECASE)
 
+
+def _banned_word_hit(text: str, banned_words: list) -> bool:
+    """True if any of the group's admin-configured banned words appears
+    as a whole word in the message (case-insensitive). Whole-word only
+    (via \\b) so a banned word like "spam" doesn't also flag "spammer"
+    or "spamalot" — same word-boundary discipline as the other guard
+    checks. Rebuilt fresh on every call rather than cached: group
+    banned-word lists are short (tens of words at most for a moderation
+    list like this), so this costs nothing worth optimizing for, and it
+    means a word added a second ago is already enforced with zero
+    invalidation logic to get wrong."""
+    if not banned_words or not text:
+        return False
+    pattern = r"\b(" + "|".join(re.escape(w) for w in banned_words) + r")\b"
+    return bool(re.search(pattern, text, re.IGNORECASE))
+
 # ── All guard commands list ───────────────────────────────────────────────────
 GUARD_COMMANDS = [
     "guard", "guardsettings", "ghelp", "guardhelp",
     "mute", "unmute", "ban", "unban",
     "warns", "resetwarns", "bannedusers",
+    "addword", "removeword", "bannedwords",
     "start", "help", "settings", "filter",
     "connect", "disconnect", "id", "request",
     "shortlink", "fsub", "nofsub", "logs",
@@ -104,6 +121,7 @@ def settings_keyboard(s: dict, chat_id: int) -> InlineKeyboardMarkup:
         f"🛡 Guard: {'ON ✅' if enabled else 'OFF ❌'}",
         callback_data=f"gs_toggle_enabled_{chat_id}"
     )
+    word_count = len(s.get("banned_words", []))
 
     return InlineKeyboardMarkup([
         [main_btn],
@@ -113,6 +131,7 @@ def settings_keyboard(s: dict, chat_id: int) -> InlineKeyboardMarkup:
         ],
         [
             toggle_btn("📝 Long Msg", "longmsg_guard"),
+            toggle_btn("🚫 Bad Words", "word_guard"),
         ],
         [
             InlineKeyboardButton(f"⏱ Warn1: {s.get('warn1_mute', 30)}m",  callback_data=f"gs_set_warn1_{chat_id}"),
@@ -120,6 +139,9 @@ def settings_keyboard(s: dict, chat_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(f"📝 Word Limit: {s.get('word_limit', 100)}", callback_data=f"gs_set_words_{chat_id}"),
+        ],
+        [
+            InlineKeyboardButton(f"✏️ Manage Bad Words ({word_count})", callback_data=f"gs_words_0_{chat_id}"),
         ],
         [
             InlineKeyboardButton("📋 Banned Users", callback_data=f"gs_banned_0_{chat_id}"),
@@ -133,6 +155,8 @@ def settings_text(s: dict, chat_title: str = "Group") -> str:
     link_g    = "✅" if s.get("link_guard", True)          else "❌"
     forward_g = "✅" if s.get("forward_guard", True)       else "❌"
     longmsg_g = "✅" if s.get("longmsg_guard", True)       else "❌"
+    word_g    = "✅" if s.get("word_guard", True)          else "❌"
+    word_count = len(s.get("banned_words", []))
     return (
         f"🛡 **Goflix Guard Settings**\n"
         f"📌 **Group:** {chat_title}\n\n"
@@ -140,13 +164,15 @@ def settings_text(s: dict, chat_title: str = "Group") -> str:
         f"**Triggers:**\n"
         f"  {link_g} Block Links\n"
         f"  {forward_g} Block Forwards\n"
-        f"  {longmsg_g} Block Long Messages\n\n"
+        f"  {longmsg_g} Block Long Messages\n"
+        f"  {word_g} Block Bad Words (`{word_count}` word(s) in list)\n\n"
         f"**Mute Durations:**\n"
         f"  ⚠️ Warn 1 → Mute `{s.get('warn1_mute', 30)}` min\n"
         f"  ⚠️ Warn 2 → Mute `{s.get('warn2_mute', 180)}` min\n"
         f"  🚫 Warn 3 → **Ban**\n\n"
         f"**Long Msg Word Limit:** `{s.get('word_limit', 100)}` words\n\n"
-        f"_Use buttons below to toggle or adjust._"
+        f"_Use buttons below to toggle or adjust. Manage the bad-words list with_\n"
+        f"_`/addword`, `/removeword` and `/bannedwords` in the group._"
     )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -345,6 +371,106 @@ async def banned_users_cmd(client, message):
         await message.reply("📲 Banned users list sent to your PM!")
     except:
         await message.reply("❌ Start me in PM first to view banned users.")
+
+
+# ── Admin-configurable banned WORD list (distinct from banned USERS
+# above) — lets group admins maintain their own custom list of blocked
+# words/phrases without needing to touch code or bot config. Stored as
+# a plain list under the existing per-chat settings document (same
+# get_settings/update_settings used for every other guard setting), so
+# no new database collection is needed.
+
+MAX_BANNED_WORD_LENGTH = 32  # keeps callback_data comfortably under
+                             # Telegram's 64-byte limit for the
+                             # per-word "Remove" buttons below
+
+
+@Client.on_message(filters.command("addword") & filters.group)
+async def add_word_cmd(client, message):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
+        return await message.reply("❌ Admins only!")
+
+    if len(message.command) < 2:
+        return await message.reply(
+            "❌ **Usage:** `/addword <word1> [word2] [word3...]`\n"
+            "Example: `/addword spamword scamlink`"
+        )
+
+    too_long = [w for w in message.command[1:] if len(w) > MAX_BANNED_WORD_LENGTH]
+    if too_long:
+        return await message.reply(
+            f"❌ Keep each word under {MAX_BANNED_WORD_LENGTH} characters: `{', '.join(too_long)}`"
+        )
+
+    chat_id   = message.chat.id
+    new_words = [w.lower() for w in message.command[1:]]
+    s         = await get_settings(chat_id)
+    current   = set(s.get("banned_words", []))
+    added     = sorted(set(new_words) - current)
+    current.update(new_words)
+    await update_settings(chat_id, {"banned_words": sorted(current)})
+
+    if added:
+        await message.reply(f"✅ Added {len(added)} word(s) to the banned list:\n`{', '.join(added)}`")
+    else:
+        await message.reply("ℹ️ Those word(s) were already in the banned list.")
+
+
+@Client.on_message(filters.command("removeword") & filters.group)
+async def remove_word_cmd(client, message):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
+        return await message.reply("❌ Admins only!")
+
+    if len(message.command) < 2:
+        return await message.reply(
+            "❌ **Usage:** `/removeword <word1> [word2] ...`\n"
+            "See the current list with `/bannedwords`."
+        )
+
+    chat_id       = message.chat.id
+    to_remove     = {w.lower() for w in message.command[1:]}
+    s             = await get_settings(chat_id)
+    current       = s.get("banned_words", [])
+    remaining     = [w for w in current if w not in to_remove]
+    removed_count = len(current) - len(remaining)
+    await update_settings(chat_id, {"banned_words": remaining})
+
+    if removed_count:
+        await message.reply(f"✅ Removed {removed_count} word(s) from the banned list.")
+    else:
+        await message.reply("ℹ️ None of those word(s) were in the banned list.")
+
+
+@Client.on_message(filters.command(["bannedwords", "badwords"]) & filters.group)
+async def banned_words_cmd(client, message):
+    sender_id = message.from_user.id if message.from_user else 1087968824
+    if not await is_admin(client, message.chat.id, sender_id):
+        return await message.reply("❌ Admins only!")
+
+    chat_id = message.chat.id
+    s       = await get_settings(chat_id)
+    words   = sorted(s.get("banned_words", []))
+
+    if not words:
+        return await message.reply("✅ No banned words configured yet. Add some with `/addword <word>`.")
+
+    if not message.from_user:
+        # Anonymous admin — there's no PM to send this to, so just show
+        # it inline instead of silently failing.
+        return await message.reply(
+            f"🚫 **Banned Words** ({len(words)}):\n`{', '.join(words)}`\n\n"
+            f"_Remove with `/removeword <word>`._"
+        )
+
+    try:
+        await _send_words_page(client, message.from_user.id, chat_id, words, page=0)
+        await message.reply("📲 Banned words list sent to your PM!")
+    except:
+        await message.reply(
+            "❌ Start me in PM first to view the list, or use `/removeword <word>` directly here."
+        )
 
 
 @Client.on_message(filters.command(["guardhelp", "ghelp"]) & filters.group)
@@ -683,6 +809,40 @@ async def gs_banned_page(client, callback):
     await callback.answer()
 
 
+@Client.on_callback_query(filters.regex(r"^gs_words_(\d+)_(-\d+)$"))
+async def gs_words_page(client, callback):
+    page    = int(callback.matches[0].group(1))
+    chat_id = int(callback.matches[0].group(2))
+
+    if not await is_admin(client, chat_id, callback.from_user.id):
+        return await callback.answer("❌ Not admin!", show_alert=True)
+
+    s     = await get_settings(chat_id)
+    words = sorted(s.get("banned_words", []))
+    if not words:
+        return await callback.answer("✅ No banned words configured yet!", show_alert=True)
+
+    await _edit_words_page(client, callback.message, chat_id, words, page)
+    await callback.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^gs_rmword_(.+)_(-\d+)$"))
+async def gs_remove_word(client, callback):
+    word    = callback.matches[0].group(1)
+    chat_id = int(callback.matches[0].group(2))
+
+    if not await is_admin(client, chat_id, callback.from_user.id):
+        return await callback.answer("❌ Not admin!", show_alert=True)
+
+    s         = await get_settings(chat_id)
+    current   = s.get("banned_words", [])
+    remaining = [w for w in current if w != word]
+    await update_settings(chat_id, {"banned_words": remaining})
+
+    await _edit_words_page(client, callback.message, chat_id, sorted(remaining), page=0)
+    await callback.answer(f"✅ Removed '{word}'")
+
+
 # ── PM value listener (for setting warn times / word limit) ───────────────────
 
 @Client.on_message(filters.private & filters.text & filters.incoming, group=2)
@@ -897,6 +1057,61 @@ async def _build_banned_page(client, chat_id, banned_list, page=0):
 
     return text, InlineKeyboardMarkup(keyboard)
 
+
+# ── Banned WORDS page (parallel to the banned USERS page above, but no
+# async user lookups needed — it's just plain strings from settings) ──
+
+async def _send_words_page(client, send_to, chat_id, words, page=0):
+    text, markup = _build_words_page(chat_id, words, page)
+    await client.send_message(send_to, text, reply_markup=markup)
+
+
+async def _edit_words_page(client, message, chat_id, words, page=0):
+    text, markup = _build_words_page(chat_id, words, page)
+    await message.edit_text(text, reply_markup=markup)
+
+
+def _build_words_page(chat_id, words, page=0):
+    PAGE_SIZE   = 10
+    total       = len(words)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    start       = page * PAGE_SIZE
+    chunk       = words[start:start + PAGE_SIZE]
+
+    lines = [f"{i}. `{w}`" for i, w in enumerate(chunk, start=start + 1)]
+    text = (
+        f"🚫 **Guard Banned Words**\n"
+        f"**Total:** {total} | Page {page+1}/{total_pages}\n\n"
+        + ("\n".join(lines) if lines else "_(none)_")
+        + "\n\n_Add more any time with `/addword <word>` in the group._"
+    )
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"gs_words_{page-1}_{chat_id}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"gs_words_{page+1}_{chat_id}"))
+
+    # One remove button per word on this page — the word itself sits in
+    # callback_data (kept short by MAX_BANNED_WORD_LENGTH at /addword
+    # time, so this always stays comfortably under Telegram's 64-byte
+    # callback_data limit).
+    remove_btns = [
+        [InlineKeyboardButton(f"❌ Remove '{w}'", callback_data=f"gs_rmword_{w}_{chat_id}")]
+        for w in chunk
+    ]
+
+    keyboard = []
+    if nav:
+        keyboard.append(nav)
+    keyboard.extend(remove_btns)
+    keyboard.append([
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"gs_words_{page}_{chat_id}"),
+        InlineKeyboardButton("⬅️ Settings", callback_data=f"gs_refresh_{chat_id}"),
+    ])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #   ADMIN CALL — user types @admin / #admin to flag something for admins
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -951,6 +1166,11 @@ async def admin_call_handler(client: Client, message: Message):
             word_count = len(text_body.split())
             if word_count >= s.get("word_limit", 100):
                 guard_violation_reason = f"📝 Message too long ({word_count} words)"
+
+        # Check banned word
+        if not guard_violation_reason and s.get("word_guard", True):
+            if _banned_word_hit(text_body, s.get("banned_words", [])):
+                guard_violation_reason = "🚫 Banned word detected"
 
     if guard_violation_reason:
         # The @admin call also broke a guard rule — apply warn/mute/ban.
@@ -1199,6 +1419,11 @@ async def _check_and_act(client: Client, message: Message):
     if not reason and s.get("longmsg_guard", True):
         if len(text.split()) >= s.get("word_limit", 100):
             reason = f"📝 Message too long ({len(text.split())} words)"
+
+    # 4. Banned word (admin-configured list — see /addword, /removeword)
+    if not reason and s.get("word_guard", True):
+        if _banned_word_hit(text, s.get("banned_words", [])):
+            reason = "🚫 Banned word detected"
 
     if not reason:
         return
