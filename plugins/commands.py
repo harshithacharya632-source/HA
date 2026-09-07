@@ -1,4 +1,4 @@
-import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64
+import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64, math
 from Script import script
 from pyrogram.errors import MediaEmpty
 from pyrogram import Client, filters, enums
@@ -1169,21 +1169,39 @@ async def extend_premium_cmd(client, message):
     )
 
 
-@Client.on_message(filters.command('verification') & filters.user(ADMINS))
-async def verification_list_cmd(client, message):
-    """Owner-only: lists every user whose daily verification is still
-    valid today — name, id, and their verified-until date."""
-    try:
-        users = await db.get_all_verified_users()
-    except Exception as e:
-        logger.error(f"verification_list: get_all_verified_users failed: {e}")
-        return await message.reply_text("<b>❌ Something went wrong fetching the verification list. Check the logs.</b>")
+# ── Paginated /verification and /premium_list ───────────────────────────
+# Both lists can grow large once lots of users verify in a day, so instead
+# of dumping everything as multiple long messages, we show PAGE_SIZE users
+# at a time with ⬅️ Previous / ➡️ Next buttons. The full list is re-fetched
+# from the DB on every button press (cheap) so the numbers stay live and we
+# don't need any extra caching layer.
+LIST_PAGE_SIZE = 15
 
-    if not users:
-        return await message.reply_text("<b>ℹ️ No users are verified today.</b>")
 
-    lines = [f"<b>✅ Verified Users — {len(users)} today</b>\n"]
-    for i, u in enumerate(users, 1):
+def _list_pagination_keyboard(prefix, page, total_pages):
+    """Builds a single-row ⬅️ / page-indicator / ➡️ keyboard for a paginated
+    admin list. Returns None when there's only one page (no buttons needed).
+    `prefix` is 'vlist' for /verification or 'plist' for /premium_list."""
+    if total_pages <= 1:
+        return None
+
+    row = []
+    if page > 0:
+        row.append(InlineKeyboardButton("⬅️ ᴘʀᴇᴠɪᴏᴜs", callback_data=f"{prefix}#{page - 1}", style=enums.ButtonStyle.PRIMARY))
+    row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="pages", style=enums.ButtonStyle.SUCCESS))
+    if page < total_pages - 1:
+        row.append(InlineKeyboardButton("ɴᴇxᴛ ➡️", callback_data=f"{prefix}#{page + 1}", style=enums.ButtonStyle.PRIMARY))
+    return InlineKeyboardMarkup([row])
+
+
+async def _build_verified_page_text(client, users, page):
+    """Renders one page of the verified-users list as HTML text."""
+    total_pages = math.ceil(len(users) / LIST_PAGE_SIZE)
+    start = page * LIST_PAGE_SIZE
+    page_users = users[start:start + LIST_PAGE_SIZE]
+
+    lines = [f"<b>✅ Verified Users — {len(users)} today</b> (page {page + 1}/{total_pages})\n"]
+    for i, u in enumerate(page_users, start + 1):
         uid = u.get("id")
         verified_until = u.get("verified_until")
 
@@ -1196,31 +1214,18 @@ async def verification_list_cmd(client, message):
         lines.append(f"{i}. {name} (<code>{uid}</code>)\n   ✅ Verified until {verified_until}")
         await asyncio.sleep(0.03)  # gentle pacing for client.get_users calls
 
-    text = "\n\n".join(lines)
-    chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)] or [text]
-    for chunk in chunks:
-        await message.reply_text(chunk, disable_web_page_preview=True)
+    return "\n\n".join(lines), total_pages
 
 
-@Client.on_message(filters.command('premium_list') & filters.user(ADMINS))
-async def premium_list_cmd(client, message):
-    """Owner-only: lists every user with currently-active premium — name,
-    id, and remaining time — soonest-expiring first."""
-    if PREMIUM_AND_REFERAL_MODE == False:
-        return
-
-    try:
-        users = await db.get_all_premium_users()
-    except Exception as e:
-        logger.error(f"premium_list: get_all_premium_users failed: {e}")
-        return await message.reply_text("<b>❌ Something went wrong fetching the premium list. Check the logs.</b>")
-
-    if not users:
-        return await message.reply_text("<b>ℹ️ No active premium users right now.</b>")
+async def _build_premium_page_text(client, users, page):
+    """Renders one page of the active-premium-users list as HTML text."""
+    total_pages = math.ceil(len(users) / LIST_PAGE_SIZE)
+    start = page * LIST_PAGE_SIZE
+    page_users = users[start:start + LIST_PAGE_SIZE]
 
     now = datetime.datetime.now()
-    lines = [f"<b>👑 Premium Users — {len(users)} active</b>\n"]
-    for i, u in enumerate(users, 1):
+    lines = [f"<b>👑 Premium Users — {len(users)} active</b> (page {page + 1}/{total_pages})\n"]
+    for i, u in enumerate(page_users, start + 1):
         uid = u.get("id")
         expiry = u.get("expiry_time")
         remaining = expiry - now
@@ -1240,11 +1245,123 @@ async def premium_list_cmd(client, message):
         )
         await asyncio.sleep(0.03)  # gentle pacing for client.get_users calls
 
-    text = "\n\n".join(lines)
-    # Telegram caps messages at 4096 chars — split into safe chunks if the list is long.
-    chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)] or [text]
-    for chunk in chunks:
-        await message.reply_text(chunk, disable_web_page_preview=True)
+    return "\n\n".join(lines), total_pages
+
+
+@Client.on_message(filters.command('verification') & filters.user(ADMINS))
+async def verification_list_cmd(client, message):
+    """Owner-only: lists every user whose daily verification is still
+    valid today — name, id, and their verified-until date. Paginated,
+    15 users per page, with ⬅️/➡️ buttons once there's more than one page."""
+    try:
+        users = await db.get_all_verified_users()
+    except Exception as e:
+        logger.error(f"verification_list: get_all_verified_users failed: {e}")
+        return await message.reply_text("<b>❌ Something went wrong fetching the verification list. Check the logs.</b>")
+
+    if not users:
+        return await message.reply_text("<b>ℹ️ No users are verified today.</b>")
+
+    page = 0
+    text, total_pages = await _build_verified_page_text(client, users, page)
+    await message.reply_text(
+        text,
+        disable_web_page_preview=True,
+        reply_markup=_list_pagination_keyboard("vlist", page, total_pages),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^vlist#\d+$") & filters.user(ADMINS))
+async def vlist_page_cb(client, query: CallbackQuery):
+    """Handles ⬅️/➡️ presses on the /verification list."""
+    try:
+        page = int(query.data.split("#", 1)[1])
+    except (IndexError, ValueError):
+        return await query.answer()
+
+    try:
+        users = await db.get_all_verified_users()
+    except Exception as e:
+        logger.error(f"vlist_page_cb: get_all_verified_users failed: {e}")
+        return await query.answer("❌ Something went wrong. Check the logs.", show_alert=True)
+
+    if not users:
+        return await query.answer("ℹ️ No users are verified today.", show_alert=True)
+
+    total_pages = math.ceil(len(users) / LIST_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))  # clamp in case the list shrank
+    await query.answer()
+
+    text, total_pages = await _build_verified_page_text(client, users, page)
+    try:
+        await query.message.edit_text(
+            text,
+            disable_web_page_preview=True,
+            reply_markup=_list_pagination_keyboard("vlist", page, total_pages),
+        )
+    except Exception as e:
+        logger.error(f"vlist_page_cb: edit_text failed: {e}")
+
+
+@Client.on_message(filters.command('premium_list') & filters.user(ADMINS))
+async def premium_list_cmd(client, message):
+    """Owner-only: lists every user with currently-active premium — name,
+    id, and remaining time — soonest-expiring first. Paginated, 15 users
+    per page, with ⬅️/➡️ buttons once there's more than one page."""
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+
+    try:
+        users = await db.get_all_premium_users()
+    except Exception as e:
+        logger.error(f"premium_list: get_all_premium_users failed: {e}")
+        return await message.reply_text("<b>❌ Something went wrong fetching the premium list. Check the logs.</b>")
+
+    if not users:
+        return await message.reply_text("<b>ℹ️ No active premium users right now.</b>")
+
+    page = 0
+    text, total_pages = await _build_premium_page_text(client, users, page)
+    await message.reply_text(
+        text,
+        disable_web_page_preview=True,
+        reply_markup=_list_pagination_keyboard("plist", page, total_pages),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^plist#\d+$") & filters.user(ADMINS))
+async def plist_page_cb(client, query: CallbackQuery):
+    """Handles ⬅️/➡️ presses on the /premium_list list."""
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return await query.answer()
+
+    try:
+        page = int(query.data.split("#", 1)[1])
+    except (IndexError, ValueError):
+        return await query.answer()
+
+    try:
+        users = await db.get_all_premium_users()
+    except Exception as e:
+        logger.error(f"plist_page_cb: get_all_premium_users failed: {e}")
+        return await query.answer("❌ Something went wrong. Check the logs.", show_alert=True)
+
+    if not users:
+        return await query.answer("ℹ️ No active premium users right now.", show_alert=True)
+
+    total_pages = math.ceil(len(users) / LIST_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))  # clamp in case the list shrank
+    await query.answer()
+
+    text, total_pages = await _build_premium_page_text(client, users, page)
+    try:
+        await query.message.edit_text(
+            text,
+            disable_web_page_preview=True,
+            reply_markup=_list_pagination_keyboard("plist", page, total_pages),
+        )
+    except Exception as e:
+        logger.error(f"plist_page_cb: edit_text failed: {e}")
 
 
 async def premium_expiry_notifier(client):
