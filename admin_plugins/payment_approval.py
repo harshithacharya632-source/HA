@@ -20,6 +20,12 @@ Payment flow:
      from step 1, in which case that's used instead).
   4. OCR (pytesseract) pulls out an amount, a date/time, and whether the
      payee name on the screenshot looks like ours (see PAYEE_NAME_HINT).
+     If Tesseract can't find an amount at all and this still looks like
+     a real payment (not some unrelated photo), and GOOGLE_VISION_API_KEY
+     is set, a single Google Cloud Vision API call is tried as a
+     fallback before giving up — see _vision_ocr_text. With no key set,
+     this step is skipped and nothing changes from Tesseract-only
+     behavior.
   5a. Exact match — amount equals the claimed plan's rate, the payment
       timestamp is within the last hour, and the payee name matches —
       premium is granted immediately, no admin needed. A record-only
@@ -58,10 +64,12 @@ Requires: pytesseract + tesseract-ocr/tesseract-ocr-eng system packages
 
 import io
 import re
+import base64
 import asyncio
 import datetime
 import logging
 
+import requests
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -69,6 +77,7 @@ from database.users_chats_db import db
 from info import (
     ADMINS, LOG_CHANNEL, PREMIUM_AND_REFERAL_MODE, STAR_PLAN_LABELS,
     STAR_PLAN_SECONDS, OWNER_LNK, BOT_TOKEN, PAYMENT_TEXT, PAYMENT_QR,
+    GOOGLE_VISION_API_KEY,
 )
 from plugins.commands import (
     load_plan_rates, format_plan_rates, format_remaining_time, format_expiry_time,
@@ -404,6 +413,28 @@ def _extract_amount(text: str):
     return None
 
 
+def _extract_amount_strong(text: str):
+    """Same first branches _extract_amount() tries first (an explicit
+    ₹/Rs/INR-prefixed number, a bare two-decimal line, or a bare
+    "500/-" line) — but stops there and returns None rather than
+    falling through to the guessier heuristics further down that
+    function (same-line-anchored trailing amount, junk-wrapped digits,
+    a single fused letter, or a bare digit-only line). Those later
+    fallbacks exist specifically to guess an amount back out of OCR
+    corruption, and a "guess" is exactly the case where a Google Vision
+    cross-check (see _vision_ocr_text) should be allowed to override
+    Tesseract rather than being trusted outright — confirmed against a
+    real screenshot where the bare-digit-only-line fallback confidently
+    (and wrongly) returned "715" for what was actually a ₹15 payment,
+    because the ₹ glyph had fused into an extra leading digit rather
+    than vanishing cleanly the way that fallback's comment assumes."""
+    for pattern in _AMOUNT_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return m.group(1).replace(",", "")
+    return None
+
+
 def _amounts_equal(a, b) -> bool:
     """Compares screenshot amounts numerically, not as strings — OCR
     often reads '₹15.00' where the stored plan rate is just '15', and a
@@ -662,6 +693,62 @@ def _ocr_top_band(image) -> str:
         return ""
 
 
+# Google Cloud Vision's REST endpoint for one-shot text detection — a
+# plain API-key call (no OAuth/service-account signing needed), which
+# is why the setup only asks for GOOGLE_VISION_API_KEY. See
+# https://cloud.google.com/vision/docs/ocr for the request shape.
+_VISION_API_URL = "https://vision.googleapis.com/v1/images:annotate"
+
+# Google Vision is a full ML-based OCR service — meaningfully better
+# than Tesseract at exactly the case Tesseract struggles with (small,
+# colored, low-contrast text on custom app UIs, confirmed against a
+# real screenshot where Tesseract fused a ₹ glyph straight into the
+# amount's digits). It's also a paid-beyond-free-tier network call, so
+# this is deliberately used as a FALLBACK only — see where it's called
+# in _run_ocr_sync — never as a replacement for the free, local,
+# already-fast Tesseract pass that handles the everyday GPay/PhonePe/
+# Paytm/Navi case just fine on its own.
+def _vision_ocr_text(photo_bytes: bytes) -> str:
+    """Sends the raw screenshot to Google Cloud Vision's TEXT_DETECTION
+    and returns whatever full-page text it found, or "" on ANY failure
+    (no key configured, network error, quota exceeded, bad response,
+    timeout) — this must never raise, since it's a best-effort fallback
+    on top of a Tesseract result that's already in hand either way."""
+    if not GOOGLE_VISION_API_KEY:
+        return ""
+    try:
+        body = {
+            "requests": [{
+                "image": {"content": base64.b64encode(photo_bytes).decode("ascii")},
+                "features": [{"type": "TEXT_DETECTION"}],
+            }]
+        }
+        resp = requests.post(
+            _VISION_API_URL,
+            params={"key": GOOGLE_VISION_API_KEY},
+            json=body,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        vision_response = data.get("responses", [{}])[0]
+        if "error" in vision_response:
+            logger.warning(f"Vision API returned an error: {vision_response['error']}")
+            return ""
+        annotation = vision_response.get("fullTextAnnotation")
+        if annotation:
+            return annotation.get("text", "")
+        # Fallback shape Vision sometimes uses instead of
+        # fullTextAnnotation — textAnnotations[0] is the whole-image text.
+        text_annotations = vision_response.get("textAnnotations")
+        if text_annotations:
+            return text_annotations[0].get("description", "")
+        return ""
+    except Exception as e:
+        logger.warning(f"Vision API OCR call failed, continuing with Tesseract-only result: {e}")
+        return ""
+
+
 def _run_ocr_sync(photo_bytes: bytes) -> dict:
     """All the actual CPU-bound work (image decode/resize, every
     Tesseract call) — deliberately a plain SYNCHRONOUS function, never
@@ -749,6 +836,33 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         result["parsed_date"] = parsed_date
         result["payee_ok"] = _payee_name_matches(text)
         result["txn_id"] = _extract_txn_id(text)
+
+        # Tesseract found nothing, OR only found an amount via one of
+        # the weaker last-resort heuristics (see _extract_amount_strong
+        # — confirmed on a real screenshot to confidently return a
+        # WRONG amount when the ₹ glyph fuses into an extra digit
+        # instead of vanishing cleanly) — and this doesn't look like an
+        # unrelated photo. Both cases are worth the extra network call
+        # to a genuinely stronger OCR engine (see _vision_ocr_text's
+        # docstring for why this is trusted more than just another
+        # Tesseract pass) — skipped entirely (falls straight through to
+        # whatever Tesseract already found, unchanged) when
+        # GOOGLE_VISION_API_KEY isn't set or the call fails for any
+        # reason, so this can never make things worse than before.
+        if not likely_not_payment and _extract_amount_strong(text) is None:
+            vision_text = _vision_ocr_text(photo_bytes)
+            if vision_text:
+                combined = text + "\n" + vision_text
+                vision_amount = _extract_amount(combined)
+                if vision_amount:
+                    result["ocr_text"] = combined
+                    result["ocr_read_ok"] = True
+                    result["amount"] = vision_amount
+                    raw_date, parsed_date = _extract_datetime(combined)
+                    result["raw_date"] = raw_date
+                    result["parsed_date"] = parsed_date
+                    result["payee_ok"] = _payee_name_matches(combined)
+                    result["txn_id"] = _extract_txn_id(combined)
 
         if result["amount"] and parsed_date:
             age = _now_ist_naive() - parsed_date
