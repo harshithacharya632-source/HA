@@ -490,6 +490,20 @@ class Database:
             {"$set": {"status": status, "handled_by": admin_id, "handled_at": datetime.datetime.now()}}
         )
 
+    async def set_payment_request_log_message(self, request_id, message_id):
+        """Remembers which LOG_CHANNEL message (the one with the pinned
+        Approve/Reject buttons) belongs to this request, so it can be
+        unpinned again the moment an admin resolves it (see
+        approve_payment_cb/reject_payment_cb in payment_approval.py) —
+        without this, a resolved request's pin would sit there forever,
+        and the channel's single pinned-message slot would jam up after
+        the very next pending request."""
+        from bson import ObjectId
+        await self.payment_requests.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {"log_message_id": message_id}}
+        )
+
     async def find_approved_request_by_txn_id(self, txn_id):
         """Looks for an earlier request with this same OCR'd UPI/bank
         transaction ID that was already approved (auto or manual) —
