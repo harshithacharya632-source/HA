@@ -889,7 +889,19 @@ async def ocr_screenshot(photo_bytes: bytes) -> dict:
             "confidence": "low", "ocr_text": "", "payee_ok": False,
             "ocr_read_ok": False, "txn_id": None,
         }
-    return await asyncio.to_thread(_run_ocr_sync, photo_bytes)
+    # Logged so a slow request (reported as "2+ minutes" on Koyeb) can
+    # actually be diagnosed instead of guessed at — this number tells
+    # you whether the delay is in here (Tesseract/Vision) or somewhere
+    # else entirely (Telegram download, event-loop congestion from other
+    # handlers, Koyeb cold start/CPU throttling on a free-tier instance).
+    _t0 = asyncio.get_event_loop().time()
+    result = await asyncio.to_thread(_run_ocr_sync, photo_bytes)
+    elapsed = asyncio.get_event_loop().time() - _t0
+    if elapsed > 5:
+        logger.warning(f"OCR took {elapsed:.1f}s (amount={result.get('amount')!r}) — investigate if this recurs.")
+    else:
+        logger.info(f"OCR took {elapsed:.1f}s (amount={result.get('amount')!r}).")
+    return result
 
 
 # ── Entry points: /start ──────────────────────────────────────────────
@@ -1079,7 +1091,11 @@ async def unsolicited_screenshot_cb(client, message):
     # edit it into the real prompt once OCR is done.
     status_msg = await message.reply_text("🔍 Reading your screenshot…")
 
+    _dl_t0 = asyncio.get_event_loop().time()
     photo_bytes = await client.download_media(message.photo.file_id, in_memory=True)
+    _dl_elapsed = asyncio.get_event_loop().time() - _dl_t0
+    if _dl_elapsed > 5:
+        logger.warning(f"Downloading the screenshot from Telegram took {_dl_elapsed:.1f}s.")
     extracted = await ocr_screenshot(bytes(photo_bytes.getbuffer()))
 
     if extracted["ocr_read_ok"] and extracted["amount"] is None and not extracted["payee_ok"]:
@@ -1112,7 +1128,11 @@ async def unsolicited_screenshot_cb(client, message):
 async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
     status_msg = await client.send_message(chat_id, "🔍 Reading your screenshot…")
 
+    _dl_t0 = asyncio.get_event_loop().time()
     photo_bytes_io = await client.download_media(file_id, in_memory=True)
+    _dl_elapsed = asyncio.get_event_loop().time() - _dl_t0
+    if _dl_elapsed > 5:
+        logger.warning(f"Downloading the screenshot from Telegram took {_dl_elapsed:.1f}s.")
     photo_bytes = bytes(photo_bytes_io.getbuffer())
 
     # Checked FIRST, before any OCR at all — a simple byte scan, so this
