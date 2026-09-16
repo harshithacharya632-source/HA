@@ -38,6 +38,13 @@ OWNER_ID = int(environ.get('OWNER_ID', ADMINS[0] if ADMINS and isinstance(ADMINS
 # This Channel Is For When User Start Your Bot Then Bot Send That User Name And Id In This Log Channel, Same For Group Also.
 LOG_CHANNEL = int(environ.get('LOG_CHANNEL', '-1003059886878'))
 
+# Optional: Google Cloud Vision API key, used by admin_plugins/payment_approval.py
+# as a fallback OCR engine ONLY for payment screenshots that Tesseract
+# couldn't read clearly on its own (see _vision_ocr_text there) — set this
+# in Koyeb's environment variables. Left blank, that fallback is simply
+# skipped and the bot behaves exactly as before (Tesseract-only).
+GOOGLE_VISION_API_KEY = environ.get('GOOGLE_VISION_API_KEY', '')
+
 # This Is File Channel Where You Upload Your File Then Bot Automatically Save It In Database 
 CHANNELS = [int(ch) if id_pattern.search(ch) else ch for ch in environ.get('CHANNELS', '-1002954653440').split()]  # For Multiple Id Use One Space Between Each.
 
