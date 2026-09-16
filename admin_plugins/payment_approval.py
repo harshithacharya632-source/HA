@@ -34,7 +34,10 @@ Payment flow:
       ambiguous one).
   5c. Anything else (amount not readable, date stale, payee not
       detected, etc.) — sent to LOG_CHANNEL with the screenshot and
-      Approve/Reject buttons for an admin to decide.
+      Approve/Reject buttons for an admin to decide, and PINNED there
+      (only case 5c pins — 5a/5b are record-only, nothing to action) so
+      it can't get buried and sit unanswered. Unpinned automatically
+      the moment an admin taps Approve/Reject.
 
   Extending: if the user already has time remaining on an existing
   plan, a new approval (auto or manual) is added on top of what's left
@@ -183,6 +186,14 @@ _AMOUNT_PATTERNS = [
     # line) is how GPay/PhonePe/Paytm always print the amount, so this
     # is safe to use as a fallback without a currency symbol at all.
     re.compile(r'^[ \t]*([0-9][0-9,]*\.\d{2})[ \t]*$', re.MULTILINE),
+    # Bank-statement / SMS-style receipts (BHIM, some netbanking
+    # confirmation screens) commonly write a whole-rupee amount as
+    # "500/-" instead of "₹500.00" — no currency symbol AND no decimal
+    # point for either pattern above to anchor on. The trailing "/-" is
+    # itself a strong, low-false-positive marker (nothing else on a
+    # payment receipt is written that way), so this is safe as its own
+    # standalone-line fallback rather than needing a nearby anchor word.
+    re.compile(r'^[ \t]*([0-9][0-9,]*)[ \t]*/-[ \t]*$', re.MULTILINE),
 ]
 
 # Common UPI-app receipt date formats. Not exhaustive — different apps
@@ -193,6 +204,13 @@ _DATE_PATTERNS = [
     # "19 March 2026, 11:03 pm" (GPay) / "9 Mar 2026, 12:14 PM" (Navi)
     re.compile(r'\b(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4},?\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b'),
     re.compile(r'\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4},?\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b'),
+    # ISO-ish "2026-08-30 15:05" / "2026-08-30, 15:05" — seen on some
+    # bank-app and BHIM/Amazon Pay receipts that print a plain 24-hour
+    # clock with no AM/PM at all rather than the 12-hour GPay/PhonePe
+    # style above (which the pattern above can't match: it always
+    # requires day-first with a month name or slash/dash, never
+    # year-first).
+    re.compile(r'\b(\d{4}-\d{1,2}-\d{1,2},?\s+\d{1,2}:\d{2}(?::\d{2})?)\b'),
 ]
 
 # PhonePe prints it the other way round — "10:19 pm on 22 Aug 2026" —
@@ -231,6 +249,14 @@ _DATE_TRY_FORMATS = [
     "%d/%m/%Y, %I:%M %p", "%d/%m/%Y %I:%M %p",
     "%d-%m-%Y, %I:%M %p", "%d-%m-%Y %I:%M %p",
     "%d/%m/%y, %I:%M %p", "%d/%m/%y %I:%M %p",
+    # Plain 24-hour clock, no AM/PM — some bank-app/BHIM/Amazon Pay
+    # receipts print it this way (see the extra _DATE_PATTERNS entries
+    # above). Tried after every 12-hour format so a real "3:05 PM" is
+    # never misread as 24-hour first.
+    "%d/%m/%Y, %H:%M", "%d/%m/%Y %H:%M",
+    "%d-%m-%Y, %H:%M", "%d-%m-%Y %H:%M",
+    "%Y-%m-%d, %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d, %H:%M", "%Y-%m-%d %H:%M",
 ]
 
 
@@ -243,7 +269,12 @@ _DATE_TRY_FORMATS = [
 # <amount> Only" directly under it instead (e.g. "₹3" / "Rupees Three
 # Only"), which is why whole-rupee Paytm amounts (no decimal for the
 # other fallback to anchor on) were falling through as "not detected".
-_RECEIPT_STATUS_ANCHORS = ("completed", "pending", "failed", "paid to", "rupees")
+_RECEIPT_STATUS_ANCHORS = (
+    "completed", "pending", "failed", "paid to", "rupees",
+    # Wording other apps (BHIM, Amazon Pay, Cred, WhatsApp Pay) use for
+    # the same "this went through" status line.
+    "successful", "success", "transferred", "credited", "money sent",
+)
 
 # Pulls a trailing amount off the END of a line that's already been
 # confirmed (by the caller) to mention the payee/"paid to" — used by the
@@ -453,6 +484,12 @@ _TXN_ID_PATTERNS = [
     # Either one uniquely identifies the payment, so both count.
     re.compile(r'PhonePe\s+Transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
     re.compile(r'UTR[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    # Other apps' own labels for the same idea (BHIM/Amazon Pay/Cred/
+    # generic bank apps) — checked last since they're generic enough
+    # that a more specific label above should win when both are present.
+    re.compile(r'Order\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'Transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'Ref(?:erence)?\.?\s*(?:No\.?|Number)[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
 ]
 
 
@@ -1343,10 +1380,31 @@ async def _notify_admins(client, request_id, user, claimed_plan, extracted, file
     try:
         if not LOG_CHANNEL:
             raise ValueError("LOG_CHANNEL not set")
-        await client.send_photo(
+        sent = await client.send_photo(
             chat_id=LOG_CHANNEL, photo=file_id, caption=caption,
             parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn_rows)
         )
+        # This is the ONE case (a request that genuinely needs an admin
+        # to tap Approve/Reject) that gets pinned — auto-approved/
+        # auto-rejected posts are record-only and never pin. Pinning is
+        # what stops a manual-review request from getting buried under
+        # newer log channel traffic and sitting unanswered for hours —
+        # every admin in the channel gets Telegram's native pin
+        # notification the instant this lands, instead of relying on
+        # someone scrolling past it. Remembered on the request so it can
+        # be unpinned the moment it's resolved (see approve/reject
+        # callbacks below) — otherwise the channel's pin would just get
+        # silently replaced by the next pending request instead of
+        # clearing when THIS one is actually done.
+        try:
+            await client.pin_chat_message(LOG_CHANNEL, sent.id, disable_notification=False)
+            await db.set_payment_request_log_message(request_id, sent.id)
+        except Exception as pin_err:
+            logger.warning(
+                f"Posted payment request {request_id} to LOG_CHANNEL but couldn't pin it "
+                f"({pin_err}) — make sure this bot is an admin with 'Pin Messages' rights "
+                f"in LOG_CHANNEL. Falling back to unpinned (still reviewable, just less visible)."
+            )
     except Exception as e:
         logger.warning(f"Couldn't post payment request to LOG_CHANNEL ({e}), DMing admins instead.")
         for admin_id in ADMINS:
@@ -1357,6 +1415,22 @@ async def _notify_admins(client, request_id, user, claimed_plan, extracted, file
                 )
             except Exception as e2:
                 logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
+
+
+async def _unpin_log_message(client, req):
+    """Unpins the LOG_CHANNEL post for a request the moment it's
+    resolved (see _notify_admins, which is the only place that pins
+    one in the first place). Without this, a channel's limited pinned
+    slots fill up with already-handled requests, which is exactly the
+    kind of clutter that makes admins start ignoring the pin — so the
+    pin only ever means "this one still needs you"."""
+    msg_id = req.get("log_message_id")
+    if not msg_id or not LOG_CHANNEL:
+        return
+    try:
+        await client.unpin_chat_message(LOG_CHANNEL, msg_id)
+    except Exception as e:
+        logger.warning(f"Couldn't unpin resolved request {req['_id']}'s LOG_CHANNEL message: {e}")
 
 
 # ── Admin taps Approve / Reject ──────────────────────────────────────────
@@ -1385,6 +1459,7 @@ async def approve_payment_cb(client, query):
         parse_mode=enums.ParseMode.HTML,
         reply_markup=None
     )
+    await _unpin_log_message(client, req)
 
 
 @Client.on_callback_query(filters.regex(r"^pay_reject_([0-9a-fA-F]{24})$"))
@@ -1417,6 +1492,7 @@ async def reject_payment_cb(client, query):
         )
     except Exception as e:
         logger.warning(f"Couldn't DM user {req['user_id']} after rejection: {e}")
+    await _unpin_log_message(client, req)
 
 
 # ── User appeals an auto-rejection ───────────────────────────────────────
