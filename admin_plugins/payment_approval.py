@@ -77,7 +77,7 @@ from database.users_chats_db import db
 from info import (
     ADMINS, LOG_CHANNEL, PREMIUM_AND_REFERAL_MODE, STAR_PLAN_LABELS,
     STAR_PLAN_SECONDS, OWNER_LNK, BOT_TOKEN, PAYMENT_TEXT, PAYMENT_QR,
-    GOOGLE_VISION_API_KEY,
+    GOOGLE_VISION_API_KEY, OCR_SPACE_API_KEY,
 )
 from plugins.commands import (
     load_plan_rates, format_plan_rates, format_remaining_time, format_expiry_time,
@@ -749,6 +749,69 @@ def _vision_ocr_text(photo_bytes: bytes) -> str:
         return ""
 
 
+# OCR.space's free-tier endpoint. Unlike Google Cloud Vision, this needs
+# no billing account and no Cloud Console setup — get a key instantly
+# at https://ocr.space/ocrapi/freekey (just an email, no card). Trades
+# some accuracy on unusual/stylized screenshots for being trivial to
+# actually turn on, which is the point: see _cloud_ocr_text below for
+# how this and Vision are picked between.
+_OCR_SPACE_API_URL = "https://api.ocr.space/parse/image"
+
+
+def _ocrspace_ocr_text(photo_bytes: bytes) -> str:
+    """Sends the raw screenshot to OCR.space's OCREngine 2 (their more
+    accurate engine) and returns whatever text it found, or "" on ANY
+    failure (no key, network error, quota exceeded, bad response,
+    timeout) — same contract as _vision_ocr_text, so callers don't need
+    to care which cloud engine actually ran."""
+    if not OCR_SPACE_API_KEY:
+        return ""
+    try:
+        b64 = base64.b64encode(photo_bytes).decode("ascii")
+        resp = requests.post(
+            _OCR_SPACE_API_URL,
+            data={
+                "apikey": OCR_SPACE_API_KEY,
+                "base64Image": f"data:image/png;base64,{b64}",
+                "OCREngine": 2,
+                "scale": "true",
+                "language": "eng",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("IsErroredOnProcessing"):
+            logger.warning(f"OCR.space returned an error: {data.get('ErrorMessage')}")
+            return ""
+        results = data.get("ParsedResults") or []
+        if results:
+            return results[0].get("ParsedText", "")
+        return ""
+    except Exception as e:
+        logger.warning(f"OCR.space API call failed, continuing with Tesseract-only result: {e}")
+        return ""
+
+
+def _cloud_ocr_text(photo_bytes: bytes) -> str:
+    """Single entry point for "ask a cloud OCR engine instead of this
+    host's CPU" — tries Google Vision first (generally the more
+    accurate of the two on colorful/stylized custom app UIs), then
+    OCR.space, and returns "" if neither is configured or both fail.
+    Every call site in this file should go through this rather than
+    calling _vision_ocr_text/_ocrspace_ocr_text directly, so adding a
+    third engine later only means changing this one function."""
+    if GOOGLE_VISION_API_KEY:
+        text = _vision_ocr_text(photo_bytes)
+        if text:
+            return text
+    if OCR_SPACE_API_KEY:
+        text = _ocrspace_ocr_text(photo_bytes)
+        if text:
+            return text
+    return ""
+
+
 def _run_ocr_sync(photo_bytes: bytes) -> dict:
     """All the actual CPU-bound work (image decode/resize, every
     Tesseract call) — deliberately a plain SYNCHRONOUS function, never
@@ -784,7 +847,7 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         "confidence": "low", "ocr_text": "", "payee_ok": False,
         "ocr_read_ok": False, "txn_id": None,
     }
-    vision_text = ""
+    cloud_text = ""
     try:
         # Tried FIRST, before any Tesseract call, when a key is
         # configured — not just as a fallback for hard cases anymore.
@@ -806,29 +869,29 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         # number of payment screenshots a month this is likely still
         # free or close to it — but if volume grows, worth keeping an
         # eye on the Cloud Console's Vision API usage/billing page.
-        if GOOGLE_VISION_API_KEY:
-            vision_text = _vision_ocr_text(photo_bytes)
-            vision_amount = _extract_amount(vision_text) if vision_text else None
-            if vision_amount:
-                result["ocr_text"] = vision_text
+        if GOOGLE_VISION_API_KEY or OCR_SPACE_API_KEY:
+            cloud_text = _cloud_ocr_text(photo_bytes)
+            cloud_amount = _extract_amount(cloud_text) if cloud_text else None
+            if cloud_amount:
+                result["ocr_text"] = cloud_text
                 result["ocr_read_ok"] = True
-                result["amount"] = vision_amount
-                raw_date, parsed_date = _extract_datetime(vision_text)
+                result["amount"] = cloud_amount
+                raw_date, parsed_date = _extract_datetime(cloud_text)
                 result["raw_date"] = raw_date
                 result["parsed_date"] = parsed_date
-                result["payee_ok"] = _payee_name_matches(vision_text)
-                result["txn_id"] = _extract_txn_id(vision_text)
+                result["payee_ok"] = _payee_name_matches(cloud_text)
+                result["txn_id"] = _extract_txn_id(cloud_text)
                 if parsed_date:
                     age = _now_ist_naive() - parsed_date
                     if datetime.timedelta(0) <= age <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS):
                         result["confidence"] = "high"
                 return result
 
-        # Vision wasn't configured, failed, or didn't find a usable
-        # amount on its own — fall back to the original Tesseract
-        # pipeline exactly as before. vision_text (if any was already
+        # Neither cloud engine was configured, or both failed/found
+        # nothing usable — fall back to the original Tesseract pipeline
+        # exactly as before. cloud_text (if anything was already
         # fetched above) is reused as an extra merge source further
-        # down instead of calling the API a second time.
+        # down instead of calling either API a second time.
         image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
 
         best_text = ""
@@ -898,24 +961,23 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         # — confirmed on a real screenshot to confidently return a
         # WRONG amount when the ₹ glyph fuses into an extra digit
         # instead of vanishing cleanly) — and this doesn't look like an
-        # unrelated photo. Both cases are worth a Vision cross-check
-        # (see _vision_ocr_text's docstring for why this is trusted
-        # more than just another Tesseract pass) — reusing vision_text
-        # from above if it was already fetched, so this never calls the
-        # API twice for one screenshot. Skipped entirely (falls straight
-        # through to whatever Tesseract already found, unchanged) when
-        # GOOGLE_VISION_API_KEY isn't set or the call fails for any
-        # reason, so this can never make things worse than before.
+        # unrelated photo. Both cases are worth a cloud OCR cross-check
+        # (see _cloud_ocr_text) — reusing cloud_text from above if it
+        # was already fetched, so this never calls either API twice for
+        # one screenshot. Skipped entirely (falls straight through to
+        # whatever Tesseract already found, unchanged) when neither
+        # GOOGLE_VISION_API_KEY nor OCR_SPACE_API_KEY is set, or both
+        # calls fail, so this can never make things worse than before.
         if not likely_not_payment and _extract_amount_strong(text) is None:
-            if not vision_text and GOOGLE_VISION_API_KEY:
-                vision_text = _vision_ocr_text(photo_bytes)
-            if vision_text:
-                combined = text + "\n" + vision_text
-                vision_amount = _extract_amount(combined)
-                if vision_amount:
+            if not cloud_text and (GOOGLE_VISION_API_KEY or OCR_SPACE_API_KEY):
+                cloud_text = _cloud_ocr_text(photo_bytes)
+            if cloud_text:
+                combined = text + "\n" + cloud_text
+                cloud_amount = _extract_amount(combined)
+                if cloud_amount:
                     result["ocr_text"] = combined
                     result["ocr_read_ok"] = True
-                    result["amount"] = vision_amount
+                    result["amount"] = cloud_amount
                     raw_date, parsed_date = _extract_datetime(combined)
                     result["raw_date"] = raw_date
                     result["parsed_date"] = parsed_date
