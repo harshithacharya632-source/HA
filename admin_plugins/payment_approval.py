@@ -762,17 +762,73 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
     pass (each a real, multi-hundred-millisecond-to-multi-second
     Tesseract call), the ENTIRE bot was frozen: not just the user who
     sent the screenshot, but every other user's messages, every button
-    tap, everything — all queued up behind it. That's very likely the
-    dominant cause of "reading screenshot takes long," especially if
-    more than one screenshot lands around the same time. Running it in
-    a thread doesn't make Tesseract itself faster, but it means nothing
-    else the bot does has to wait for it."""
+    tap, everything — all queued up behind it. Running it in a thread
+    doesn't make Tesseract itself faster, but it means nothing else the
+    bot does has to wait for it.
+
+    IMPORTANT if this is deployed on a Koyeb Free Instance: that plan
+    is documented by Koyeb itself as 512MB RAM / 0.1 vCPU — a small
+    fraction of a real CPU core, explicitly called out as too little
+    for CPU-intensive workloads. Tesseract, especially the 1728-2304px
+    upscales this file uses for accuracy, is exactly that kind of
+    workload. On a host that constrained, the SAME Tesseract call that
+    takes ~1-2s on a normal machine can very plausibly take 10-30x
+    longer — which lines up with reports of screenshots taking 2-3+
+    minutes to verify. Running in a background thread (above) stops it
+    from freezing the whole bot, but it does NOT make the CPU any
+    faster. See where GOOGLE_VISION_API_KEY is checked just below for
+    the fix that actually addresses this: offloading the OCR work
+    itself onto Google's servers instead of this host's CPU."""
     result = {
         "amount": None, "raw_date": None, "parsed_date": None,
         "confidence": "low", "ocr_text": "", "payee_ok": False,
         "ocr_read_ok": False, "txn_id": None,
     }
+    vision_text = ""
     try:
+        # Tried FIRST, before any Tesseract call, when a key is
+        # configured — not just as a fallback for hard cases anymore.
+        # Vision runs on Google's servers, so it's bounded mainly by
+        # network latency (typically 1-3s) no matter how weak this
+        # host's CPU is — it sidesteps the Koyeb 0.1-vCPU bottleneck
+        # entirely instead of just working around it. This is also
+        # simply a more accurate OCR engine than Tesseract on the kind
+        # of small, colorful, custom-app-UI screenshot this bot has
+        # struggled with (see _vision_ocr_text's docstring). If it
+        # finds a usable amount on its own, the entire CPU-heavy
+        # Tesseract pipeline below is skipped outright.
+        #
+        # Trade-off worth knowing: this means a Vision API call now
+        # happens on EVERY submitted screenshot (not just the ambiguous
+        # ones), which uses up Google's free quota faster. Google
+        # Vision's free tier covers the first 1,000 images/month; usage
+        # beyond that is billed per image. For a bot handling a modest
+        # number of payment screenshots a month this is likely still
+        # free or close to it — but if volume grows, worth keeping an
+        # eye on the Cloud Console's Vision API usage/billing page.
+        if GOOGLE_VISION_API_KEY:
+            vision_text = _vision_ocr_text(photo_bytes)
+            vision_amount = _extract_amount(vision_text) if vision_text else None
+            if vision_amount:
+                result["ocr_text"] = vision_text
+                result["ocr_read_ok"] = True
+                result["amount"] = vision_amount
+                raw_date, parsed_date = _extract_datetime(vision_text)
+                result["raw_date"] = raw_date
+                result["parsed_date"] = parsed_date
+                result["payee_ok"] = _payee_name_matches(vision_text)
+                result["txn_id"] = _extract_txn_id(vision_text)
+                if parsed_date:
+                    age = _now_ist_naive() - parsed_date
+                    if datetime.timedelta(0) <= age <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS):
+                        result["confidence"] = "high"
+                return result
+
+        # Vision wasn't configured, failed, or didn't find a usable
+        # amount on its own — fall back to the original Tesseract
+        # pipeline exactly as before. vision_text (if any was already
+        # fetched above) is reused as an extra merge source further
+        # down instead of calling the API a second time.
         image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
 
         best_text = ""
@@ -842,15 +898,17 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         # — confirmed on a real screenshot to confidently return a
         # WRONG amount when the ₹ glyph fuses into an extra digit
         # instead of vanishing cleanly) — and this doesn't look like an
-        # unrelated photo. Both cases are worth the extra network call
-        # to a genuinely stronger OCR engine (see _vision_ocr_text's
-        # docstring for why this is trusted more than just another
-        # Tesseract pass) — skipped entirely (falls straight through to
-        # whatever Tesseract already found, unchanged) when
+        # unrelated photo. Both cases are worth a Vision cross-check
+        # (see _vision_ocr_text's docstring for why this is trusted
+        # more than just another Tesseract pass) — reusing vision_text
+        # from above if it was already fetched, so this never calls the
+        # API twice for one screenshot. Skipped entirely (falls straight
+        # through to whatever Tesseract already found, unchanged) when
         # GOOGLE_VISION_API_KEY isn't set or the call fails for any
         # reason, so this can never make things worse than before.
         if not likely_not_payment and _extract_amount_strong(text) is None:
-            vision_text = _vision_ocr_text(photo_bytes)
+            if not vision_text and GOOGLE_VISION_API_KEY:
+                vision_text = _vision_ocr_text(photo_bytes)
             if vision_text:
                 combined = text + "\n" + vision_text
                 vision_amount = _extract_amount(combined)
