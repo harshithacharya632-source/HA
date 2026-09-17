@@ -1086,15 +1086,20 @@ async def claim_plan_then_ask_screenshot_cb(client, query):
 
     # Did they already send a screenshot before picking a plan (caught by
     # unsolicited_screenshot_cb below)? If so, use that instead of asking
-    # them to send it again.
-    stashed_file_id = await db.pop_pending_screenshot(query.from_user.id)
+    # them to send it again — and reuse the OCR it already ran instead
+    # of paying for a second full read (Vision call included) of the
+    # exact same photo.
+    stashed_file_id, stashed_extracted = await db.pop_pending_screenshot(query.from_user.id)
     if stashed_file_id:
         await client.send_message(
             chat_id=query.from_user.id,
             text=f"<b>Got it — {PLAN_LABELS[plan]}.</b> Checking the screenshot you already sent…",
             parse_mode=enums.ParseMode.HTML
         )
-        return await _handle_screenshot(client, query.from_user, query.from_user.id, stashed_file_id, plan)
+        return await _handle_screenshot(
+            client, query.from_user, query.from_user.id, stashed_file_id, plan,
+            cached_extracted=stashed_extracted,
+        )
 
     prompt = await client.send_message(
         chat_id=query.from_user.id,
@@ -1169,7 +1174,7 @@ async def unsolicited_screenshot_cb(client, message):
             pass
         return await relay_user_question_to_admins_cb(client, message)
 
-    await db.set_pending_screenshot(message.from_user.id, message.photo.file_id)
+    await db.set_pending_screenshot(message.from_user.id, message.photo.file_id, extracted)
     rates = await load_plan_rates(MAIN_BOT_ID)
     upi = rates["upi"]
     btn = [
@@ -1183,7 +1188,7 @@ async def unsolicited_screenshot_cb(client, message):
     )
 
 
-async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
+async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, cached_extracted=None):
     status_msg = await client.send_message(chat_id, "🔍 Reading your screenshot…")
 
     _dl_t0 = asyncio.get_event_loop().time()
@@ -1227,7 +1232,14 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str):
         )
         return
 
-    extracted = await ocr_screenshot(photo_bytes)
+    # Reuse the OCR result from unsolicited_screenshot_cb's first read
+    # when we have one (see pop_pending_screenshot) — same photo, so
+    # re-running Tesseract/Vision on it again would just be a second
+    # bill and a second wait for an answer we already have. Falls back
+    # to a fresh OCR run whenever there's nothing cached (the normal
+    # /start → pick plan → send screenshot order, or a stash saved
+    # before this field existed).
+    extracted = cached_extracted if cached_extracted is not None else await ocr_screenshot(photo_bytes)
 
     rates = await load_plan_rates(MAIN_BOT_ID)
     upi = rates["upi"]
