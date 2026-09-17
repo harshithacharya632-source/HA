@@ -528,18 +528,35 @@ class Database:
     # here (keyed by user, upserted so a second stray screenshot just
     # replaces the first) and pop it once they tap a plan button, instead
     # of asking them to resend the photo.
-    async def set_pending_screenshot(self, user_id, file_id):
+    #
+    # extracted is the OCR result computed on the FIRST read (see
+    # unsolicited_screenshot_cb in payment_approval.py). Stashing it here
+    # and handing it back on pop_pending_screenshot means the SECOND
+    # read (once they pick a plan, see _handle_screenshot) can reuse it
+    # instead of re-running OCR on the same photo from scratch — that
+    # used to mean two full OCR passes (and, once Vision is configured,
+    # two billed Vision API calls) per screenshot in this flow, for no
+    # reason: the image never changes between "got a screenshot" and
+    # "which plan is this for".
+    async def set_pending_screenshot(self, user_id, file_id, extracted=None):
         await self.pending_screenshots.update_one(
             {"user_id": int(user_id)},
-            {"$set": {"user_id": int(user_id), "file_id": file_id, "created_at": datetime.datetime.now()}},
+            {"$set": {
+                "user_id": int(user_id), "file_id": file_id,
+                "extracted": extracted, "created_at": datetime.datetime.now(),
+            }},
             upsert=True
         )
 
     async def pop_pending_screenshot(self, user_id):
         """Fetches and deletes in one step so the same stashed screenshot
-        can never be claimed twice."""
+        can never be claimed twice. Returns (file_id, extracted) — extracted
+        is None for anything stashed before this field existed, so the
+        caller can safely re-run OCR in that case."""
         doc = await self.pending_screenshots.find_one_and_delete({"user_id": int(user_id)})
-        return doc["file_id"] if doc else None
+        if not doc:
+            return None, None
+        return doc["file_id"], doc.get("extracted")
 
     # ── Support Q&A relay (AdminBot doubles as a help desk) ─────────────
     # Any message a user sends that isn't part of the screenshot flow
