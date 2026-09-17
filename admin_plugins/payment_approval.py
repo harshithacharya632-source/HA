@@ -445,6 +445,42 @@ def _amounts_equal(a, b) -> bool:
         return False
 
 
+def _rupee_fusion_corrected_amount(amount_read, claimed_amount):
+    """Checks for one specific, now repeatedly-confirmed OCR failure:
+    the ₹ glyph getting misread as an extra digit fused onto the FRONT
+    of the true amount, instead of vanishing cleanly. Confirmed on the
+    same real ₹15 payment screenshot across THREE different reads —
+    Tesseract returned "215" and, on a rescue pass, "715"; OCR.space
+    (a completely different, cloud-based engine) returned "315" on an
+    unrelated, cleanly-formatted GPay receipt. Three different engines,
+    three different extra leading digits, same real amount both times
+    — that pattern (not the specific digit) is the signature of this
+    bug, not of a genuinely different, wrong amount.
+
+    Returns the corrected amount as a string if stripping exactly the
+    FIRST character of amount_read produces a number that EXACTLY
+    equals the plan's current, live price (from load_plan_rates() —
+    never a hardcoded guess), else None.
+
+    Deliberately conservative: this is used to move a would-be
+    auto-REJECT into manual admin review with a note, never straight
+    to auto-approve (see _handle_screenshot) — matching the claimed
+    price after stripping a digit is suggestive, not proof, since a
+    genuinely wrong amount could in principle collide with this same
+    pattern by coincidence. An admin still looks at the actual
+    screenshot before anything is approved."""
+    if not amount_read or claimed_amount is None:
+        return None
+    if len(amount_read) < 2:
+        return None
+    stripped = amount_read[1:]
+    if not re.match(r'^[0-9]+(\.[0-9]{1,2})?$', stripped):
+        return None
+    if _amounts_equal(stripped, claimed_amount):
+        return stripped
+    return None
+
+
 def _normalize_meridiem(raw: str) -> str:
     """"11:06am" (no space before am/pm) is exactly how GPay prints it —
     but every %I:%M %p format below requires a space there, so strptime
@@ -1308,6 +1344,15 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     claimed_amount = upi.get(claimed_plan)
     amount_read = extracted["amount"]
     amount_matches = _amounts_equal(amount_read, claimed_amount)
+    fusion_corrected_amount = None
+    if not amount_matches and amount_read:
+        # Would otherwise fall straight into the confirmed-wrong-amount
+        # auto-reject below — check for the ₹-fusion pattern first (see
+        # _rupee_fusion_corrected_amount's docstring). This can only
+        # ever soften a reject into a manual review, never create a new
+        # auto-approve, so it's a strict improvement for genuine
+        # customers being wrongly turned away — never a new risk.
+        fusion_corrected_amount = _rupee_fusion_corrected_amount(amount_read, claimed_amount)
     extracted["matched_plan"] = claimed_plan if amount_matches else None
 
     # Five-way decision:
@@ -1364,7 +1409,7 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     # the right amount and only failing to prove it's fresh — this is
     # never "manual/ambiguous", it is a definite reject with an appeal
     # button, no admin action needed unless the user appeals.
-    amount_confirmed_wrong = amount_read is not None and not amount_matches
+    amount_confirmed_wrong = amount_read is not None and not amount_matches and not fusion_corrected_amount
 
     reject_reason = None
     if duplicate_of:
@@ -1378,6 +1423,23 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
         decision = "reject"
         reject_reason = "amount_mismatch"
         extracted["confidence"] = "wrong_amount"
+    elif fusion_corrected_amount:
+        # OCR read a number that doesn't match the claimed plan, but it
+        # matches exactly once the likely ₹-symbol-fusion digit is
+        # stripped (see _rupee_fusion_corrected_amount) — too
+        # suspicious of an OCR artifact to auto-reject a possibly-
+        # genuine payment, but not proven enough to auto-approve
+        # either. An admin gets a single confident button for the
+        # claimed plan, with both readings shown, instead of the full
+        # per-plan picker.
+        decision = "manual"
+        extracted["confidence"] = "fusion_suspect"
+        extracted["fusion_note"] = (
+            f"OCR read ₹{amount_read}, which doesn't match the {PLAN_LABELS[claimed_plan]} "
+            f"price (₹{claimed_amount}) — but ₹{fusion_corrected_amount} does, once what's "
+            f"likely a misread ₹ symbol is stripped off the front. Please check the actual "
+            f"screenshot before approving."
+        )
     elif extracted["ocr_read_ok"] and not extracted["payee_ok"]:
         decision = "reject"
         reject_reason = "payee"
@@ -1610,6 +1672,11 @@ async def _notify_admins(client, request_id, user, claimed_plan, extracted, file
     amount_line = f"{extracted['amount']}Rs" if extracted["amount"] else "not detected"
     if extracted["confidence"] == "high":
         confidence_line = "🟢 Amount matched — just tap Approve (date/payee couldn't be auto-confirmed)"
+    elif extracted["confidence"] == "fusion_suspect":
+        # See _rupee_fusion_corrected_amount — OCR's reading doesn't
+        # match the claimed plan, but very likely only because a
+        # misread ₹ symbol fused an extra digit onto the front of it.
+        confidence_line = f"🟠 {extracted['fusion_note']}"
     elif not extracted["ocr_read_ok"]:
         confidence_line = "⚪ OCR couldn't read this screenshot clearly — please check it manually"
     else:
@@ -1626,7 +1693,10 @@ async def _notify_admins(client, request_id, user, claimed_plan, extracted, file
     )
 
     btn_rows = []
-    if extracted["confidence"] == "high":
+    if extracted["confidence"] in ("high", "fusion_suspect"):
+        # Either a clean match, or a single, well-justified candidate
+        # plan (fusion_suspect) — one confident button rather than
+        # making the admin pick from the full per-plan list.
         btn_rows.append([InlineKeyboardButton(f"✅ Approve — {PLAN_LABELS[claimed_plan]}", callback_data=f"pay_approve_{request_id}_{claimed_plan}")])
     else:
         # Ambiguous: let the admin pick the correct plan explicitly.
