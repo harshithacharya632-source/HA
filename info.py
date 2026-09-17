@@ -45,6 +45,14 @@ LOG_CHANNEL = int(environ.get('LOG_CHANNEL', '-1003059886878'))
 # skipped and the bot behaves exactly as before (Tesseract-only).
 GOOGLE_VISION_API_KEY = environ.get('GOOGLE_VISION_API_KEY', '')
 
+# Optional alternative to GOOGLE_VISION_API_KEY above — OCR.space
+# (https://ocr.space/ocrapi/freekey) gives an instant free API key by
+# email with NO credit card and NO billing account required, unlike
+# Google Cloud Vision. If both are set, Google Vision is tried first
+# (generally more accurate on stylized/colorful app screenshots) and
+# this is the fallback; set only this one to skip Google Cloud entirely.
+OCR_SPACE_API_KEY = environ.get('OCR_SPACE_API_KEY', '')
+
 # This Is File Channel Where You Upload Your File Then Bot Automatically Save It In Database 
 CHANNELS = [int(ch) if id_pattern.search(ch) else ch for ch in environ.get('CHANNELS', '-1002954653440').split()]  # For Multiple Id Use One Space Between Each.
 
