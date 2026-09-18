@@ -765,7 +765,24 @@ def _vision_ocr_text(photo_bytes: bytes) -> str:
             json=body,
             timeout=10,
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            # Google always sends a detailed JSON body on failure (e.g.
+            # {"error": {"code": 403, "message": "...", "status":
+            # "PERMISSION_DENIED"}}) — resp.raise_for_status() would
+            # discard all of that and leave only a generic "403 Client
+            # Error: Forbidden" in the log, which is exactly what
+            # happened in production and made this genuinely
+            # undiagnosable from the logs alone (billing not enabled?
+            # API not enabled? key restricted to the wrong thing?
+            # revoked? all four look identical as a bare "403"). Log
+            # Google's own message so the NEXT failure is actually
+            # diagnosable without more guessing.
+            try:
+                err_detail = resp.json().get("error", {}).get("message", resp.text[:300])
+            except Exception:
+                err_detail = resp.text[:300]
+            logger.warning(f"Vision API HTTP {resp.status_code}: {err_detail}")
+            return ""
         data = resp.json()
         vision_response = data.get("responses", [{}])[0]
         if "error" in vision_response:
@@ -840,11 +857,15 @@ def _cloud_ocr_text(photo_bytes: bytes) -> str:
     if GOOGLE_VISION_API_KEY:
         text = _vision_ocr_text(photo_bytes)
         if text:
+            logger.info("Cloud OCR: Google Vision succeeded.")
             return text
     if OCR_SPACE_API_KEY:
         text = _ocrspace_ocr_text(photo_bytes)
         if text:
+            logger.info("Cloud OCR: OCR.space succeeded.")
             return text
+    if not GOOGLE_VISION_API_KEY and not OCR_SPACE_API_KEY:
+        logger.info("Cloud OCR: neither GOOGLE_VISION_API_KEY nor OCR_SPACE_API_KEY is set — Tesseract only.")
     return ""
 
 
