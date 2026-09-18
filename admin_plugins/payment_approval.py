@@ -1403,11 +1403,25 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     # if the owner just changed week from 3Rs to 15Rs, an old 3Rs
     # screenshot submitted after the change reads 3 here and 15 as
     # claimed_amount, so amount_matches is False and this branch fires).
-    # This must be checked before the payee/stale-date rejects below:
-    # a wrong amount is real (mismatched dollar value), whereas the
-    # payee/date rejects should only apply to something CLAIMING to be
-    # the right amount and only failing to prove it's fresh — this is
-    # never "manual/ambiguous", it is a definite reject with an appeal
+    # This must be checked before the amount/date rejects below: if the
+    # payee name isn't found anywhere on the screenshot at all, this
+    # was never a payment to us in the first place (confirmed on a real
+    # screenshot: "Paid to Arpit Patidar" — a real, successful payment,
+    # just to someone else entirely) — no amount or date reasoning is
+    # even relevant at that point. This is also a more reliable signal
+    # to lead with than the amount: a name either substantially appears
+    # in the OCR text or it doesn't, whereas the amount digits are the
+    # single most OCR-error-prone part of any of these screenshots (see
+    # _rupee_fusion_corrected_amount) — leading with the noisier signal
+    # produced misleading messages like "amount ₹0 doesn't match ₹200"
+    # for a screenshot whose real problem was never the amount at all.
+    payee_confirmed_wrong = extracted["ocr_read_ok"] and not extracted["payee_ok"]
+
+    # This must be checked before the date rejects below: a wrong
+    # amount is real (mismatched dollar value), whereas the stale-date
+    # reject should only apply to something claiming to be the right
+    # amount and only failing to prove it's fresh — this is never
+    # "manual/ambiguous", it is a definite reject with an appeal
     # button, no admin action needed unless the user appeals.
     amount_confirmed_wrong = amount_read is not None and not amount_matches and not fusion_corrected_amount
 
@@ -1419,6 +1433,10 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     elif extracted["payee_ok"] and amount_matches and date_recent:
         decision = "exact"
         extracted["confidence"] = "high"
+    elif payee_confirmed_wrong:
+        decision = "reject"
+        reject_reason = "payee"
+        extracted["confidence"] = "not_verified"
     elif amount_confirmed_wrong:
         decision = "reject"
         reject_reason = "amount_mismatch"
@@ -1440,10 +1458,6 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
             f"likely a misread ₹ symbol is stripped off the front. Please check the actual "
             f"screenshot before approving."
         )
-    elif extracted["ocr_read_ok"] and not extracted["payee_ok"]:
-        decision = "reject"
-        reject_reason = "payee"
-        extracted["confidence"] = "not_verified"
     elif date_known_stale:
         decision = "reject"
         reject_reason = "stale_date"
