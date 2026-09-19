@@ -447,20 +447,24 @@ def _amounts_equal(a, b) -> bool:
 
 def _rupee_fusion_corrected_amount(amount_read, claimed_amount):
     """Checks for one specific, now repeatedly-confirmed OCR failure:
-    the ₹ glyph getting misread as an extra digit fused onto the FRONT
-    of the true amount, instead of vanishing cleanly. Confirmed on the
-    same real ₹15 payment screenshot across THREE different reads —
-    Tesseract returned "215" and, on a rescue pass, "715"; OCR.space
-    (a completely different, cloud-based engine) returned "315" on an
-    unrelated, cleanly-formatted GPay receipt. Three different engines,
-    three different extra leading digits, same real amount both times
-    — that pattern (not the specific digit) is the signature of this
-    bug, not of a genuinely different, wrong amount.
+    an extra stray digit getting fused onto the true amount — either
+    PREPENDED (the ₹ glyph misread as a leading digit) or APPENDED (an
+    extra trailing digit from some other artifact of the glyph/font).
+    Confirmed on the same real ₹15 payment across three engines/reads —
+    Tesseract returned "215" and "715" (leading-digit fusion),
+    OCR.space returned "315" (also leading) — and, separately, on a
+    real ₹20 payment, OCR.space this time returned "200" (a TRAILING
+    zero appended instead). Four different engines/reads, four
+    different extra digits, front or back, same two real amounts —
+    that pattern (an extra digit at one end, not the specific digit or
+    which end) is the signature of this bug, not of a genuinely
+    different, wrong amount.
 
     Returns the corrected amount as a string if stripping exactly the
-    FIRST character of amount_read produces a number that EXACTLY
-    equals the plan's current, live price (from load_plan_rates() —
-    never a hardcoded guess), else None.
+    FIRST or LAST character of amount_read produces a number that
+    EXACTLY equals the plan's current, live price (from
+    load_plan_rates() — never a hardcoded guess), else None. Tries
+    stripping the front first (the more commonly observed case so far).
 
     Deliberately conservative: this is used to move a would-be
     auto-REJECT into manual admin review with a note, never straight
@@ -473,11 +477,11 @@ def _rupee_fusion_corrected_amount(amount_read, claimed_amount):
         return None
     if len(amount_read) < 2:
         return None
-    stripped = amount_read[1:]
-    if not re.match(r'^[0-9]+(\.[0-9]{1,2})?$', stripped):
-        return None
-    if _amounts_equal(stripped, claimed_amount):
-        return stripped
+    for candidate in (amount_read[1:], amount_read[:-1]):
+        if not re.match(r'^[0-9]+(\.[0-9]{1,2})?$', candidate):
+            continue
+        if _amounts_equal(candidate, claimed_amount):
+            return candidate
     return None
 
 
@@ -1446,14 +1450,43 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     # button, no admin action needed unless the user appeals.
     amount_confirmed_wrong = amount_read is not None and not amount_matches and not fusion_corrected_amount
 
+    # "Confirmed enough to auto-approve" now covers more than an exact
+    # match: payee confirmed AND amount confirmed (either a literal OCR
+    # match, or the ₹-fusion correction above — which, by this point,
+    # has independently resolved to the correct amount on FOUR separate
+    # real screenshots across three different OCR engines, so it has
+    # earned enough trust to drive an auto-approve, not just a
+    # one-tap-for-an-admin manual review) AND the date is not KNOWN to
+    # be stale (genuinely recent, OR OCR simply couldn't read a date at
+    # all — an OCR gap is not evidence of fraud, so it no longer blocks
+    # auto-approval by itself). Built at the requester's explicit
+    # request: payments often land at odd hours (midnight, work hours)
+    # when no admin is available to tap Approve, and every one of these
+    # signals individually is already a strong, specific check — a
+    # confirmed WRONG signal on any of them (wrong payee, wrong amount
+    # with no fusion explanation, or a definitely-stale date) still
+    # hard-rejects exactly as before; this only removes the requirement
+    # for a human tap on cases where nothing actually looks wrong.
+    amount_confirmed = amount_matches or bool(fusion_corrected_amount)
+    auto_approvable = extracted["payee_ok"] and amount_confirmed and not date_known_stale
+
     reject_reason = None
     if duplicate_of:
         decision = "reject"
         reject_reason = "duplicate"
         extracted["confidence"] = "duplicate"
-    elif extracted["payee_ok"] and amount_matches and date_recent:
+    elif auto_approvable:
         decision = "exact"
         extracted["confidence"] = "high"
+        if fusion_corrected_amount:
+            # Store the corrected value, not the raw misread one, so
+            # the DB/duplicate-detection/audit trail all reflect the
+            # true amount rather than the OCR artifact.
+            extracted["amount"] = fusion_corrected_amount
+            extracted["fusion_note"] = (
+                f"Auto-approved: OCR read ₹{amount_read}, corrected to ₹{fusion_corrected_amount} "
+                f"(matches {PLAN_LABELS[claimed_plan]} price) after stripping a likely misread ₹ symbol."
+            )
     elif payee_confirmed_wrong:
         decision = "reject"
         reject_reason = "payee"
@@ -1463,14 +1496,12 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
         reject_reason = "amount_mismatch"
         extracted["confidence"] = "wrong_amount"
     elif fusion_corrected_amount:
-        # OCR read a number that doesn't match the claimed plan, but it
-        # matches exactly once the likely ₹-symbol-fusion digit is
-        # stripped (see _rupee_fusion_corrected_amount) — too
-        # suspicious of an OCR artifact to auto-reject a possibly-
-        # genuine payment, but not proven enough to auto-approve
-        # either. An admin gets a single confident button for the
-        # claimed plan, with both readings shown, instead of the full
-        # per-plan picker.
+        # Only reachable now when the fusion-corrected amount matches
+        # but payee wasn't confirmed, or the date was confirmed stale —
+        # two uncertain signals stacked together is still too much to
+        # auto-approve blind, so this stays a manual, single-button
+        # review rather than a hard reject (still likely a genuine
+        # payment, just not confidently enough to skip a human).
         decision = "manual"
         extracted["confidence"] = "fusion_suspect"
         extracted["fusion_note"] = (
@@ -1501,10 +1532,20 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     )
 
     if decision == "exact":
-        sent = await status_msg.edit_text("✅ All clear! Thank you for purchasing GoFlix Premium 🎉")
-        asyncio.create_task(_delayed_delete(sent, 60))
-        await _grant_premium(client, request_id, user.id, claimed_plan, auto=True)
-        await _log_auto_approval(client, request_id, user, claimed_plan, extracted, file_id)
+        grant_result = await _grant_premium(client, request_id, user.id, claimed_plan, auto=True)
+        if grant_result["db_ok"]:
+            sent = await status_msg.edit_text("✅ All clear! Thank you for purchasing GoFlix Premium 🎉")
+            asyncio.create_task(_delayed_delete(sent, 60))
+        else:
+            # Don't tell the user everything's fine when the database
+            # write itself failed — that's exactly the silent-failure
+            # gap that made a real approval look successful in the log
+            # while the user never actually got premium.
+            await status_msg.edit_text(
+                "⚠️ Your payment was verified, but something went wrong granting premium. "
+                f"An admin has been notified — please wait a moment or contact {OWNER_LNK}."
+            )
+        await _log_auto_approval(client, request_id, user, claimed_plan, extracted, file_id, grant_result)
         return
 
     if decision == "reject":
@@ -1559,19 +1600,45 @@ async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, adm
     Extends on top of any time the user already has left, instead of
     overwriting it — a user with 6 days left on a 1-week plan who then
     buys a 1-month plan ends up with 1 month + 6 days, not just 1 month.
+
+    Returns a status dict instead of nothing: {db_ok, verified,
+    admin_bot_dm_ok, main_bot_dm_ok, error}. Confirmed necessary — a
+    real case showed an admin's "Approved — granted" message with no
+    way to tell whether the grant actually took effect or whether the
+    user was ever told. db_ok is whether the database write itself
+    succeeded; verified is a re-read through db.has_premium_access —
+    the SAME check every other part of the bot uses to gate premium
+    features — so this is proof the grant took effect, not just proof
+    the code ran without throwing. The two dm_ok flags are whether the
+    "premium unlocked" message could actually be delivered (a user who
+    has never started the main bot, only the AdminBot, will silently
+    fail that DM — Telegram blocks bots from messaging users first).
+    Callers use this to surface a problem to the admin instead of
+    reporting bare success no matter what actually happened.
     """
+    result = {
+        "db_ok": False, "verified": False,
+        "admin_bot_dm_ok": False, "main_bot_dm_ok": False, "error": None,
+    }
     seconds = PLAN_SECONDS[plan]
     now = datetime.datetime.now()
-    existing = await db.get_user(user_id)
-    current_expiry = existing.get("expiry_time") if existing else None
-    base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
-    expiry_time = base_time + datetime.timedelta(seconds=seconds)
+    try:
+        existing = await db.get_user(user_id)
+        current_expiry = existing.get("expiry_time") if existing else None
+        base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
+        expiry_time = base_time + datetime.timedelta(seconds=seconds)
 
-    await db.update_user({
-        "id": user_id, "expiry_time": expiry_time,
-        "expiry_reminder_sent": False, "expired_notified": False,
-    })
-    await db.set_payment_request_status(request_id, "auto_approved" if auto else "approved", admin_id)
+        await db.update_user({
+            "id": user_id, "expiry_time": expiry_time,
+            "expiry_reminder_sent": False, "expired_notified": False,
+        })
+        await db.set_payment_request_status(request_id, "auto_approved" if auto else "approved", admin_id)
+        result["db_ok"] = True
+        result["verified"] = await db.has_premium_access(user_id)
+    except Exception as e:
+        logger.warning(f"CRITICAL: failed to grant premium for user {user_id}, request {request_id}: {e}")
+        result["error"] = str(e)
+        return result
 
     unlock_text = (
         "<b>👑 ᴄᴏɴɢʀᴀᴛꜱ 👑</b>\n\n"
@@ -1584,32 +1651,63 @@ async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, adm
     # time), so the unlock is visible wherever they check next.
     try:
         await client.send_message(chat_id=user_id, text=unlock_text, parse_mode=enums.ParseMode.HTML)
+        result["admin_bot_dm_ok"] = True
     except Exception as e:
         logger.warning(f"Couldn't DM user {user_id} after granting premium (AdminBot): {e}")
     try:
         await TechVJBot.send_message(chat_id=user_id, text=unlock_text, parse_mode=enums.ParseMode.HTML)
+        result["main_bot_dm_ok"] = True
     except Exception as e:
         logger.warning(f"Couldn't DM user {user_id} after granting premium (main bot): {e}")
 
+    return result
 
-async def _log_auto_approval(client, request_id, user, plan: str, extracted, file_id):
+
+async def _log_auto_approval(client, request_id, user, plan: str, extracted, file_id, grant_result):
     """Posts a record-only copy to LOG_CHANNEL for auto-approved payments
-    — no buttons, nothing for an admin to action, just an audit trail
-    ('the premium list') of who got premium and why."""
+    — normally no buttons, nothing for an admin to action, just an audit
+    trail ('the premium list') of who got premium and why. If the grant
+    itself had a problem (grant_result — see _grant_premium), this stops
+    being record-only: it gets a clear warning line and, like a manual-
+    review post, gets PINNED, since "auto-approved" silently failing to
+    actually deliver premium is exactly the kind of thing that otherwise
+    goes unnoticed for a long time."""
+    needs_attention = not grant_result["db_ok"] or not grant_result["verified"] or (
+        not grant_result["admin_bot_dm_ok"] and not grant_result["main_bot_dm_ok"]
+    )
+    if not grant_result["db_ok"]:
+        status_line = f"🔴 <b>FAILED to grant premium in the database</b> ({grant_result['error']}) — needs manual action."
+    elif not grant_result["verified"]:
+        status_line = "⚠️ <b>Granted, but a re-check right after still shows no active premium</b> — please verify manually."
+    elif not grant_result["admin_bot_dm_ok"] and not grant_result["main_bot_dm_ok"]:
+        status_line = "⚠️ <b>Premium is active, but the user couldn't be notified</b> — they may not know yet."
+    else:
+        status_line = f"🟢 Payee matched + amount matched + within {MAX_SCREENSHOT_AGE_HOURS}h — granted automatically, no admin action needed."
+    # extracted["fusion_note"] is only set when this auto-approval used
+    # the ₹-fusion correction (see the auto_approvable branch above) —
+    # shown here so the audit trail is honest about it even though no
+    # admin had to act on it.
+    if extracted.get("fusion_note"):
+        status_line += f"\nℹ️ {extracted['fusion_note']}"
+
     caption = (
         f"<b>✅ All clear — thank you for purchasing GoFlix Premium!</b>\n\n"
         f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
         f"📦 Plan: <b>{PLAN_LABELS[plan]}</b>\n"
         f"🔎 OCR amount: {extracted['amount']}Rs\n"
         f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
-        f"🟢 Payee matched + amount matched + within {MAX_SCREENSHOT_AGE_HOURS}h — "
-        f"granted automatically, no admin action needed.\n\n"
+        f"{status_line}\n\n"
         f"Request ID: <code>{request_id}</code>"
     )
     try:
         if not LOG_CHANNEL:
             raise ValueError("LOG_CHANNEL not set")
-        await client.send_photo(chat_id=LOG_CHANNEL, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+        sent = await client.send_photo(chat_id=LOG_CHANNEL, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+        if needs_attention:
+            try:
+                await client.pin_chat_message(LOG_CHANNEL, sent.id, disable_notification=False)
+            except Exception as pin_err:
+                logger.warning(f"Posted a failed-auto-grant notice but couldn't pin it: {pin_err}")
     except Exception as e:
         logger.warning(f"Couldn't post auto-approval log to LOG_CHANNEL ({e}), DMing admins instead.")
         for admin_id in ADMINS:
@@ -1822,11 +1920,37 @@ async def approve_payment_cb(client, query):
         return await query.answer("Invalid plan.", show_alert=True)
 
     user_id = req["user_id"]
-    await _grant_premium(client, request_id, user_id, plan, auto=False, admin_id=query.from_user.id)
+    grant_result = await _grant_premium(client, request_id, user_id, plan, auto=False, admin_id=query.from_user.id)
+
+    if not grant_result["db_ok"]:
+        # Never report success when the database write itself failed —
+        # this is exactly the silent-failure case that made a real
+        # "Approved — granted" message misleading. Left "pending" (not
+        # marked approved) so the admin can just tap Approve again once
+        # whatever DB issue this was clears up.
+        await query.answer("⚠️ FAILED to grant premium — DB error, see logs. Not marked approved.", show_alert=True)
+        await query.message.edit_caption(
+            query.message.caption + f"\n\n🔴 <b>FAILED to grant premium</b> ({grant_result['error']}). "
+            f"Still pending — try Approve again once this is fixed.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    status_note = ""
+    if not grant_result["verified"]:
+        status_note = (
+            "\n\n⚠️ <b>Granted in the database, but a re-check right after still shows no active "
+            "premium for this user</b> — please verify manually before assuming this worked."
+        )
+    elif not grant_result["admin_bot_dm_ok"] and not grant_result["main_bot_dm_ok"]:
+        status_note = (
+            "\n\n⚠️ <b>Premium is active, but the user couldn't be notified</b> (they may have never "
+            "started the main bot or this one) — they may not know it's unlocked yet."
+        )
 
     await query.answer("Approved — premium granted.")
     await query.message.edit_caption(
-        query.message.caption + f"\n\n✅ <b>Approved by {query.from_user.mention} — {PLAN_LABELS[plan]} granted.</b>",
+        query.message.caption + f"\n\n✅ <b>Approved by {query.from_user.mention} — {PLAN_LABELS[plan]} granted.</b>{status_note}",
         parse_mode=enums.ParseMode.HTML,
         reply_markup=None
     )
