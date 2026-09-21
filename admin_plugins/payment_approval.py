@@ -1496,34 +1496,37 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
         reject_reason = "amount_mismatch"
         extracted["confidence"] = "wrong_amount"
     elif fusion_corrected_amount:
-        # Only reachable now when the fusion-corrected amount matches
-        # but payee wasn't confirmed, or the date was confirmed stale —
-        # two uncertain signals stacked together is still too much to
-        # auto-approve blind, so this stays a manual, single-button
-        # review rather than a hard reject (still likely a genuine
-        # payment, just not confidently enough to skip a human).
-        decision = "manual"
+        # Reachable when the fusion-corrected amount matches but payee
+        # wasn't confirmed, or the date was confirmed stale — two
+        # uncertain signals stacked together, so this rejects rather
+        # than auto-approving blind. Per policy: everything either
+        # clears automatically or is rejected automatically, with no
+        # standing manual queue — a genuine user who gets this wrong
+        # can still reach a human via the Appeal button on the reject
+        # message itself.
+        decision = "reject"
+        reject_reason = "fusion_suspect"
         extracted["confidence"] = "fusion_suspect"
         extracted["fusion_note"] = (
             f"OCR read ₹{amount_read}, which doesn't match the {PLAN_LABELS[claimed_plan]} "
             f"price (₹{claimed_amount}) — but ₹{fusion_corrected_amount} does, once what's "
-            f"likely a misread ₹ symbol is stripped off the front. Please check the actual "
-            f"screenshot before approving."
+            f"likely a misread ₹ symbol is stripped off the front. Payee or date also "
+            f"couldn't be confirmed, so this was rejected rather than auto-approved — "
+            f"check the actual screenshot if the user appeals."
         )
     elif date_known_stale:
         decision = "reject"
         reject_reason = "stale_date"
         extracted["confidence"] = "stale_date"
     else:
-        decision = "manual"
-        # Only reachable now when the amount itself couldn't be read at
-        # all (amount_read is None) but everything else looked plausible
-        # — a genuinely ambiguous OCR failure, not the user's fault, so
-        # it goes to an admin instead of being auto-rejected. Amount
-        # ALWAYS matches here when reachable (a confirmed wrong amount is
-        # caught above), so the admin gets a single confident Approve
-        # button rather than a per-plan picker.
-        extracted["confidence"] = "high" if amount_matches else "low"
+        # Reachable when the amount itself couldn't be read at all
+        # (amount_read is None) — no amount signal at all to auto-
+        # approve on, so this rejects rather than sitting in a manual
+        # queue. The Appeal button on the reject message is the safety
+        # net for a genuine payment that OCR simply couldn't read.
+        decision = "reject"
+        reject_reason = "unreadable"
+        extracted["confidence"] = "low"
 
     request_id = await db.add_payment_request(
         user_id=user.id, username=user.username or user.first_name,
@@ -1552,30 +1555,22 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
         appeal_btn = InlineKeyboardMarkup([
             [InlineKeyboardButton("📮 Appeal to admin", callback_data=f"pay_appeal_{request_id}")]
         ])
-        if reject_reason == "duplicate":
-            reject_text = (
-                "❌ This payment has already been credited once — rejected.\n\n"
-                "If you believe this is a mistake, tap below to send it to an admin."
-            )
-        elif reject_reason == "stale_date":
-            reject_text = (
-                "❌ This screenshot's payment date/time isn't recent — rejected.\n\n"
-                "Please send a screenshot of a payment you just made. If this IS a fresh "
-                "payment and the date was misread, tap below to send it to an admin."
-            )
-        elif reject_reason == "amount_mismatch":
-            reject_text = (
-                f"❌ The amount on this screenshot (₹{extracted['amount']}) doesn't match "
-                f"the current {PLAN_LABELS[claimed_plan]} price (₹{claimed_amount}) — rejected.\n\n"
-                f"This rate isn't in the current plan list — please check /plan again for "
-                f"today's price, pay the correct amount, and send a fresh screenshot of that "
-                f"payment. If you believe this is a mistake, tap below to send it to an admin."
-            )
-        else:
-            reject_text = (
-                "❌ This screenshot isn't verified as a payment to us — rejected.\n\n"
-                "If you think this is a mistake, tap below to send it to an admin for a manual check."
-            )
+        # One generic message for every reject reason — the specific
+        # cause (wrong amount, wrong payee, stale/reused screenshot,
+        # OCR couldn't read it, fusion-suspect, duplicate) is deliberately
+        # NOT shown to the user, only to admins via LOG_CHANNEL (see
+        # _log_auto_rejection). Built at the requester's explicit
+        # request: showing the exact detection reason to users risks
+        # teaching people how to word or format a screenshot to slip
+        # past the checks, and a plain "not approved, try again" is all
+        # a genuine user needs to act on anyway. The Appeal button still
+        # reaches a real admin for anyone who believes this is wrong.
+        reject_text = (
+            "❌ <b>Your payment is not approved.</b>\n\n"
+            "Please make sure you've paid the correct amount for your plan and send a fresh "
+            "screenshot of that payment as soon as possible.\n\n"
+            "If you believe this is a mistake, tap below to send it to an admin."
+        )
         # Not auto-deleted like the other status messages — it carries
         # the Appeal button, which needs to stay clickable whenever the
         # user gets around to it, not just for the next minute.
@@ -1584,6 +1579,12 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
         await _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id, reject_reason)
         return
 
+    # Should no longer be reachable — every branch above now resolves to
+    # either "exact" or "reject" (see the requester's explicit "no
+    # standing manual queue" policy). Left in only as a defensive
+    # fallback in case a future code path forgets to set a decision
+    # explicitly, so that case still reaches a human instead of being
+    # silently dropped.
     sent = await status_msg.edit_text(
         "✅ Got it! Your screenshot is with the admins for a quick check — "
         "you'll get a message the moment it's approved."
@@ -1771,6 +1772,27 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
                 except Exception as e2:
                     logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
         return
+    elif reject_reason == "payee":
+        reason_line = (
+            f"🔴 Screenshot was readable but the payee name didn't match ours — "
+            f"doesn't look like a real payment to us. Rejected automatically, "
+            f"no admin action needed."
+        )
+    elif reject_reason == "fusion_suspect":
+        # See _rupee_fusion_corrected_amount — a plausible ₹-fusion
+        # correction WAS found (extracted["fusion_note"] has the exact
+        # detail), but payee or date also couldn't be confirmed, so
+        # this stacks two uncertain signals and gets auto-rejected
+        # rather than auto-approved. Worth a closer look if the user
+        # appeals — this is the single most likely "actually a real
+        # payment" auto-reject reason.
+        reason_line = f"🟠 {extracted.get('fusion_note', 'Amount unclear after a possible ₹ symbol misread.')} Rejected automatically — worth a look if the user appeals."
+    elif reject_reason == "unreadable":
+        reason_line = (
+            f"🔴 OCR couldn't find an amount anywhere on this screenshot at all. "
+            f"Rejected automatically — worth a look if the user appeals, since this "
+            f"can happen on a genuine payment OCR simply failed to read."
+        )
     else:
         reason_line = (
             f"🔴 Screenshot was readable but the payee name didn't match ours — "
