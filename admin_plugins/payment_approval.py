@@ -1457,18 +1457,17 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     # real screenshots across three different OCR engines, so it has
     # earned enough trust to drive an auto-approve, not just a
     # one-tap-for-an-admin manual review) AND the date is not KNOWN to
-    # be stale (genuinely recent, OR OCR simply couldn't read a date at
-    # all — an OCR gap is not evidence of fraud, so it no longer blocks
-    # auto-approval by itself). Built at the requester's explicit
-    # request: payments often land at odd hours (midnight, work hours)
-    # when no admin is available to tap Approve, and every one of these
-    # signals individually is already a strong, specific check — a
-    # confirmed WRONG signal on any of them (wrong payee, wrong amount
-    # with no fusion explanation, or a definitely-stale date) still
-    # hard-rejects exactly as before; this only removes the requirement
-    # for a human tap on cases where nothing actually looks wrong.
+    # be stale AND actually confirmed recent — a date OCR simply
+    # couldn't read is NOT good enough on its own (reverted per explicit
+    # follow-up request: a readable date is required, not just "not
+    # known to be stale"). A confirmed WRONG signal on any of these
+    # (wrong payee, wrong amount with no fusion explanation, or a
+    # definitely-stale date) still hard-rejects exactly as before; this
+    # only removes the requirement for a human tap on cases where
+    # nothing actually looks wrong AND every signal, including the
+    # date, was positively confirmed.
     amount_confirmed = amount_matches or bool(fusion_corrected_amount)
-    auto_approvable = extracted["payee_ok"] and amount_confirmed and not date_known_stale
+    auto_approvable = extracted["payee_ok"] and amount_confirmed and date_recent
 
     reject_reason = None
     if duplicate_of:
@@ -1495,29 +1494,47 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
         decision = "reject"
         reject_reason = "amount_mismatch"
         extracted["confidence"] = "wrong_amount"
+    elif date_known_stale:
+        decision = "reject"
+        reject_reason = "stale_date"
+        extracted["confidence"] = "stale_date"
+    elif extracted["payee_ok"] and amount_confirmed:
+        # Payee confirmed AND amount confirmed (a literal match, or via
+        # the ₹-fusion correction) — but the date genuinely couldn't be
+        # read at all (not stale, just unreadable). Per explicit
+        # request, this no longer auto-approves: a readable, confirmed-
+        # recent date is required. Rejected with its own specific
+        # reason rather than lumped in as "unreadable" — the amount and
+        # payee were both fine here, only the date is the gap.
+        decision = "reject"
+        reject_reason = "date_unconfirmed"
+        extracted["confidence"] = "date_unconfirmed"
+        if fusion_corrected_amount:
+            extracted["amount"] = fusion_corrected_amount
+            extracted["fusion_note"] = (
+                f"OCR read ₹{amount_read}, corrected to ₹{fusion_corrected_amount} (matches "
+                f"{PLAN_LABELS[claimed_plan]} price) after stripping a likely misread ₹ symbol — "
+                f"but no date/time could be read at all, so this was rejected rather than "
+                f"auto-approved. Check the actual screenshot if the user appeals."
+            )
     elif fusion_corrected_amount:
         # Reachable when the fusion-corrected amount matches but payee
-        # wasn't confirmed, or the date was confirmed stale — two
-        # uncertain signals stacked together, so this rejects rather
-        # than auto-approving blind. Per policy: everything either
-        # clears automatically or is rejected automatically, with no
-        # standing manual queue — a genuine user who gets this wrong
-        # can still reach a human via the Appeal button on the reject
-        # message itself.
+        # wasn't confirmed either — two uncertain signals stacked
+        # together, so this rejects rather than auto-approving blind.
+        # Per policy: everything either clears automatically or is
+        # rejected automatically, with no standing manual queue — a
+        # genuine user who gets this wrong can still reach a human via
+        # the Appeal button on the reject message itself.
         decision = "reject"
         reject_reason = "fusion_suspect"
         extracted["confidence"] = "fusion_suspect"
         extracted["fusion_note"] = (
             f"OCR read ₹{amount_read}, which doesn't match the {PLAN_LABELS[claimed_plan]} "
             f"price (₹{claimed_amount}) — but ₹{fusion_corrected_amount} does, once what's "
-            f"likely a misread ₹ symbol is stripped off the front. Payee or date also "
-            f"couldn't be confirmed, so this was rejected rather than auto-approved — "
-            f"check the actual screenshot if the user appeals."
+            f"likely a misread ₹ symbol is stripped off the front. Rejected anyway because "
+            f"the payee name couldn't be confirmed on this screenshot — check the actual "
+            f"screenshot if the user appeals."
         )
-    elif date_known_stale:
-        decision = "reject"
-        reject_reason = "stale_date"
-        extracted["confidence"] = "stale_date"
     else:
         # Reachable when the amount itself couldn't be read at all
         # (amount_read is None) — no amount signal at all to auto-
@@ -1781,12 +1798,26 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
     elif reject_reason == "fusion_suspect":
         # See _rupee_fusion_corrected_amount — a plausible ₹-fusion
         # correction WAS found (extracted["fusion_note"] has the exact
-        # detail), but payee or date also couldn't be confirmed, so
-        # this stacks two uncertain signals and gets auto-rejected
-        # rather than auto-approved. Worth a closer look if the user
-        # appeals — this is the single most likely "actually a real
-        # payment" auto-reject reason.
+        # detail), but the payee ALSO couldn't be confirmed, so this
+        # stacks two uncertain signals and gets auto-rejected rather
+        # than auto-approved. Worth a closer look if the user appeals —
+        # this is one of the more likely "actually a real payment"
+        # auto-reject reasons.
         reason_line = f"🟠 {extracted.get('fusion_note', 'Amount unclear after a possible ₹ symbol misread.')} Rejected automatically — worth a look if the user appeals."
+    elif reject_reason == "date_unconfirmed":
+        # Payee and amount both checked out (a literal match or via the
+        # ₹-fusion correction — extracted["fusion_note"] has the detail
+        # if so) but no date/time could be read at all. A readable,
+        # confirmed-recent date is required for auto-approval (reverted
+        # per explicit follow-up request — an unreadable date used to
+        # still auto-approve, now it doesn't). Also one of the more
+        # likely "actually a real payment" auto-reject reasons.
+        reason_line = (
+            f"🟠 Payee and amount both checked out"
+            f"{' (' + extracted['fusion_note'] + ')' if extracted.get('fusion_note') else ''}, "
+            f"but no date/time could be read on this screenshot at all. Rejected automatically "
+            f"— worth a look if the user appeals."
+        )
     elif reject_reason == "unreadable":
         reason_line = (
             f"🔴 OCR couldn't find an amount anywhere on this screenshot at all. "
