@@ -180,6 +180,41 @@ async def _delayed_delete(message, delay: int):
 
 # ── OCR extraction ──────────────────────────────────────────────────────
 
+# Third-party ad banners are common on the kind of "Split Expense" test
+# screenshots this bot has been getting, and confirmed to actively
+# contaminate extraction: a real ₹2 payment's screenshot had an ad
+# reading "Watch 2000+ Shows Daily... ₹1... Claim Now" directly beneath
+# the payment card, and the amount that reached this bot came back as
+# "330.4" — not present as literal text anywhere, so some combination of
+# the ad's own numbers got merged in by whichever OCR engine ran. These
+# phrases are deliberately specific to third-party app-install/streaming
+# ad templates, NOT to legitimate payment-app promotional text a real
+# receipt can contain (e.g. Navi's own "Get up to ₹1,000 on every
+# payment" cashback teaser, which is part of a genuine receipt and must
+# NOT be stripped) — only phrasing that a real UPI payment confirmation
+# would never itself contain.
+_AD_MARKER_PATTERN = re.compile(
+    r'\b(claim\s*now|shows?\s+daily|watch\s+\d+\+|download\s+(the\s+)?app|install\s+now|'
+    r'subscribe\s+now|unlock\s+now|grab\s+(this\s+)?(deal|offer)\s+now|recharge\s+now)\b',
+    re.IGNORECASE,
+)
+
+
+def _strip_ad_content(text: str) -> str:
+    """Truncates OCR'd text at the first ad-marker phrase (see
+    _AD_MARKER_PATTERN) — the payment card always renders ABOVE any ad
+    banner in every screenshot seen so far, so everything from the ad
+    onward is thrown away rather than being handed to the amount/date/
+    txn-id extractors, which have no way to tell a genuine transaction
+    number apart from an ad's own pricing text. Applied uniformly to
+    every OCR source (every Tesseract variant AND any cloud OCR result)
+    right where the raw text first comes back, so nothing downstream
+    ever sees ad content. A screenshot with no ad content at all is
+    returned completely unchanged."""
+    m = _AD_MARKER_PATTERN.search(text)
+    return text[:m.start()] if m else text
+
+
 _AMOUNT_PATTERNS = [
     # Best case: OCR read the currency symbol/prefix correctly.
     # (?<![A-Za-z]) stops "Rs" from matching as the tail of some other
@@ -932,6 +967,7 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         # eye on the Cloud Console's Vision API usage/billing page.
         if GOOGLE_VISION_API_KEY or OCR_SPACE_API_KEY:
             cloud_text = _cloud_ocr_text(photo_bytes)
+            cloud_text = _strip_ad_content(cloud_text)
             cloud_amount = _extract_amount(cloud_text) if cloud_text else None
             if cloud_amount:
                 result["ocr_text"] = cloud_text
@@ -960,6 +996,7 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         likely_not_payment = False
         for idx, (variant, config) in enumerate(_ocr_variants(image)):
             variant_text = pytesseract.image_to_string(variant, config=config)
+            variant_text = _strip_ad_content(variant_text)
             if len(variant_text.strip()) > len(best_text.strip()):
                 best_text = variant_text
             if _extract_amount(variant_text):
@@ -1007,6 +1044,7 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
             text = best_text
         else:
             text = _ocr_top_band(image) + "\n" + best_text
+        text = _strip_ad_content(text)
 
         result["ocr_text"] = text
         result["ocr_read_ok"] = len(text.strip()) >= 20
@@ -1032,6 +1070,7 @@ def _run_ocr_sync(photo_bytes: bytes) -> dict:
         if not likely_not_payment and _extract_amount_strong(text) is None:
             if not cloud_text and (GOOGLE_VISION_API_KEY or OCR_SPACE_API_KEY):
                 cloud_text = _cloud_ocr_text(photo_bytes)
+                cloud_text = _strip_ad_content(cloud_text)
             if cloud_text:
                 combined = text + "\n" + cloud_text
                 cloud_amount = _extract_amount(combined)
