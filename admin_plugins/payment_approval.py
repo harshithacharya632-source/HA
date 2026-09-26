@@ -257,6 +257,22 @@ _DATE_PATTERNS = [
     re.compile(r'\b(\d{4}-\d{1,2}-\d{1,2},?\s+\d{1,2}:\d{2}(?::\d{2})?)\b'),
 ]
 
+# Confirmed on a real, fresh Paytm receipt: Paytm prints "26 Sep, 09:09
+# PM" — no year at all — which none of the patterns above can match
+# (every one of them requires a 4-digit year right after the month).
+# That's a real gap, not an OCR failure: the date was clearly visible
+# and OCR read it fine, there was simply no pattern that could capture a
+# year-less date at all, so it silently fell through to "not detected."
+# date_part and time_part are captured separately (rather than as one
+# group like the patterns above) because the year has to be spliced in
+# between them before this can be handed to strptime — see
+# _extract_datetime, which assumes the CURRENT year since a payment
+# must be within its 2-hour freshness window anyway, making a
+# year-boundary mismatch essentially impossible to hit for real.
+_DATE_PATTERN_NO_YEAR = re.compile(
+    r'\b(\d{1,2}\s+[A-Za-z]{3,9}),?\s+(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b'
+)
+
 # PhonePe prints it the other way round — "10:19 pm on 22 Aug 2026" —
 # time first, then the date, joined by "on". Handled separately since
 # the two pieces need to be rejoined into "date, time" order before the
@@ -582,6 +598,24 @@ def _extract_datetime(text: str):
         date_part, time_part = m.group(1), m.group(2)
         raw = f"{date_part}, {time_part}"
         normalized = _normalize_month_abbrev(_normalize_meridiem(raw))
+        for fmt in _DATE_TRY_FORMATS:
+            try:
+                return raw, datetime.datetime.strptime(normalized, fmt)
+            except ValueError:
+                continue
+        return raw, None
+
+    # Last resort: a year-less date (see _DATE_PATTERN_NO_YEAR — confirmed
+    # on a real Paytm receipt, "26 Sep, 09:09 PM"). Tried only after every
+    # year-containing pattern above has failed, so a screenshot that DOES
+    # print a year always matches one of those more specific patterns
+    # first rather than this one.
+    m = _DATE_PATTERN_NO_YEAR.search(text)
+    if m:
+        date_part, time_part = m.group(1), m.group(2)
+        raw = f"{date_part}, {time_part}"
+        current_year = _now_ist_naive().year
+        normalized = _normalize_month_abbrev(_normalize_meridiem(f"{date_part} {current_year}, {time_part}"))
         for fmt in _DATE_TRY_FORMATS:
             try:
                 return raw, datetime.datetime.strptime(normalized, fmt)
