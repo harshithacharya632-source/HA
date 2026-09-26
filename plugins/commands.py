@@ -2145,7 +2145,15 @@ async def give_premium_cmd_handler(client, message):
         time = message.command[2]        
         seconds = await get_seconds(time)
         if seconds > 0:
-            expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+            # Extend on top of any time the user already has left, instead
+            # of overwriting it — same rule as the UPI and Stars flows: a
+            # user with 7 days left who is manually given 2 more days ends
+            # up with 7 + 2 = 9 days, not just 2.
+            now = datetime.datetime.now()
+            existing = await db.get_user(user_id)
+            current_expiry = existing.get("expiry_time") if existing else None
+            base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
+            expiry_time = base_time + datetime.timedelta(seconds=seconds)
             user_data = {"id": user_id, "expiry_time": expiry_time, "expiry_reminder_sent": False, "expired_notified": False} 
             await db.update_user(user_data)  # Use the update_user method to update or insert user data
             await message.reply_text("Premium access added to the user.")            
@@ -2301,7 +2309,17 @@ async def star_payment_success_handler(client, message):
 
     user_id = message.from_user.id
     charge_id = message.successful_payment.telegram_payment_charge_id
-    expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+
+    # Extend on top of any time the user already has left, instead of
+    # overwriting it — same rule as the UPI and manual /add_premium
+    # flows: a user with 7 days left who buys a 2-day plan with Stars
+    # ends up with 7 + 2 = 9 days, not just 2.
+    now = datetime.datetime.now()
+    existing = await db.get_user(user_id)
+    current_expiry = existing.get("expiry_time") if existing else None
+    base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
+    expiry_time = base_time + datetime.timedelta(seconds=seconds)
+
     user_data = {
         "id": user_id,
         "expiry_time": expiry_time,
