@@ -530,13 +530,31 @@ def _normalize_meridiem(raw: str) -> str:
     return re.sub(r'(\d)\s*(am|pm)\b', r'\1 \2', raw, flags=re.IGNORECASE)
 
 
+def _normalize_month_abbrev(raw: str) -> str:
+    """"26 Sept 2026" is a real, common app rendering — but Python's
+    strptime is strict: %b only matches the exact 3-letter "Sep", %B
+    only the full "September", so the informal 4-letter "Sept" matches
+    NEITHER and parsing silently fails. Confirmed as a real bug: the
+    date was captured as text just fine (shown correctly in the log's
+    "OCR date" line) but never became a usable datetime, so the reject
+    message wrongly said "no date/time could be read at all" when it
+    plainly had been — this closes that specific gap. "Sept" is the
+    only month name in English with a commonly-used 4-letter informal
+    abbreviation that differs from strptime's expected 3-letter one
+    (compare "Sept" vs "Sep" — every other month's informal abbreviation
+    already matches its formal 3-letter one, e.g. nobody writes "Jant"
+    for January), so this is the one targeted substitution needed rather
+    than a general-purpose fuzzy month matcher."""
+    return re.sub(r'\bSept\b', 'Sep', raw, flags=re.IGNORECASE)
+
+
 def _extract_datetime(text: str):
     """Returns (raw_string, parsed_datetime_or_None)."""
     for pattern in _DATE_PATTERNS:
         m = pattern.search(text)
         if m:
             raw = m.group(1)
-            normalized = _normalize_meridiem(raw)
+            normalized = _normalize_month_abbrev(_normalize_meridiem(raw))
             for fmt in _DATE_TRY_FORMATS:
                 try:
                     return raw, datetime.datetime.strptime(normalized, fmt)
@@ -549,7 +567,7 @@ def _extract_datetime(text: str):
         if m:
             time_part, date_part = m.group(1), m.group(2)
             raw = f"{date_part}, {time_part}"
-            normalized = _normalize_meridiem(raw)
+            normalized = _normalize_month_abbrev(_normalize_meridiem(raw))
             for fmt in _DATE_TRY_FORMATS:
                 try:
                     return raw, datetime.datetime.strptime(normalized, fmt)
@@ -563,7 +581,7 @@ def _extract_datetime(text: str):
     if m:
         date_part, time_part = m.group(1), m.group(2)
         raw = f"{date_part}, {time_part}"
-        normalized = _normalize_meridiem(raw)
+        normalized = _normalize_month_abbrev(_normalize_meridiem(raw))
         for fmt in _DATE_TRY_FORMATS:
             try:
                 return raw, datetime.datetime.strptime(normalized, fmt)
