@@ -1417,6 +1417,23 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
         # auto-approve, so it's a strict improvement for genuine
         # customers being wrongly turned away — never a new risk.
         fusion_corrected_amount = _rupee_fusion_corrected_amount(amount_read, claimed_amount)
+        if fusion_corrected_amount:
+            # Set here, unconditionally, rather than only inside whichever
+            # branch below ends up firing — confirmed necessary: a
+            # screenshot that's BOTH fusion-correctable AND rejected for
+            # an unrelated reason (e.g. a stale date, checked before the
+            # fusion branches below) used to show the raw misread amount
+            # with no indication the correction was ever found, making it
+            # look like amount detection had failed when it had actually
+            # succeeded. This is shown in every rejection's "OCR amount"
+            # line (see _log_auto_rejection) no matter which check ends
+            # up being the actual reason for the reject.
+            extracted["fusion_note"] = (
+                f"OCR read ₹{amount_read}, which doesn't match the {PLAN_LABELS[claimed_plan]} "
+                f"price (₹{claimed_amount}) — but ₹{fusion_corrected_amount} does, once what's "
+                f"likely a misread ₹ symbol is stripped off the front."
+            )
+            extracted["fusion_corrected_amount"] = fusion_corrected_amount
     extracted["matched_plan"] = claimed_plan if amount_matches else None
 
     # Five-way decision:
@@ -1870,6 +1887,15 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
             f"no admin action needed."
         )
     amount_display = f"{extracted['amount']}Rs" if extracted['amount'] else 'not detected'
+    # Shown regardless of WHICH check ended up being the actual reject
+    # reason — confirmed necessary: a screenshot that's both fusion-
+    # correctable AND rejected for something else entirely (most often
+    # a stale date, which is checked before the fusion-specific branches
+    # above) used to display only the raw misread number with no
+    # indication a correction was ever found, making it look like
+    # amount detection had failed when it had actually succeeded fine.
+    if extracted.get("fusion_corrected_amount") and reject_reason not in ("fusion_suspect", "date_unconfirmed"):
+        amount_display += f" (likely ₹{extracted['fusion_corrected_amount']} once a misread ₹ symbol is corrected for)"
     caption = (
         f"<b>❌ Auto-rejected — not verified</b>\n\n"
         f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
