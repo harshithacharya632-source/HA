@@ -161,8 +161,28 @@ USE_CAPTION_FILTER = bool(environ.get('USE_CAPTION_FILTER', True))
 
 # Token Verification Info :
 VERIFY = bool(environ.get('VERIFY', True))
-VERIFY_SHORTLINK_URL = environ.get('VERIFY_SHORTLINK_URL', 'indiaearnx.com')
-VERIFY_SHORTLINK_API = environ.get('VERIFY_SHORTLINK_API', 'dbf3de7f651ff9c6df2484b353772918a4277635')
+
+# ============ VERIFY SHORTENER PROVIDERS ============
+# Which one is currently active: "indiaearnx" or "linkskito"
+VERIFY_SHORTENER_PROVIDER = environ.get('VERIFY_SHORTENER_PROVIDER', 'linkskito')
+
+# IndiaEarnX credentials (kept here even when turned off, so you can switch back anytime)
+INDIAEARNX_URL = environ.get('INDIAEARNX_URL', 'indiaearnx.com')
+INDIAEARNX_API = environ.get('INDIAEARNX_API', 'dbf3de7f651ff9c6df2484b353772918a4277635')
+
+# Linkskito credentials
+LINKSKITO_URL = environ.get('LINKSKITO_URL', 'linkskito.com')
+LINKSKITO_API = environ.get('LINKSKITO_API', '40dd4a4cfbb04cd6cbf66c3d928084375a60e781')
+
+# Resolves the active provider into the two vars the rest of the bot actually uses.
+# To switch shorteners later, just change VERIFY_SHORTENER_PROVIDER above.
+if VERIFY_SHORTENER_PROVIDER == 'linkskito':
+    VERIFY_SHORTLINK_URL = LINKSKITO_URL
+    VERIFY_SHORTLINK_API = LINKSKITO_API
+else:
+    VERIFY_SHORTLINK_URL = INDIAEARNX_URL
+    VERIFY_SHORTLINK_API = INDIAEARNX_API
+
 VERIFY_TUTORIAL = environ.get('VERIFY_TUTORIAL', 'https://t.me/Godlixhowtoverify')
 
 # If You Fill Second Shortner Then Bot Attach Both First And Second Shortner And Use It For Verify.
