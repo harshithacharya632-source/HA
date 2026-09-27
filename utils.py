@@ -508,7 +508,7 @@ async def get_tutorial(chat_id):
     return settings['tutorial']
 
 
-# ================== [INDIAEARNX VERIFICATION SHORTENER] ==================
+# ================== [VERIFICATION SHORTENER: INDIAEARNX / LINKSKITO] ==================
 
 async def get_verify_shorted_link(link, url, api):
     API = api.strip()
@@ -517,23 +517,26 @@ async def get_verify_shorted_link(link, url, api):
 
     if "indiaearnx.com" in URL:
         api_url = "https://indiaearnx.com/api"
-        params = {"api": API, "url": quote(link)}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(api_url, params=params) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get("status") == "success":
-                            shortened = result.get("shortenedUrl")
-                            if shortened:
-                                shortened = shortened.replace("\\/", "/")
-                                logger.info(f"[INDIAEARNX] Shortened: {shortened}")
-                                return shortened
-        except Exception as e:
-            logger.error(f"IndiaEarnX error: {e}")
-        return link
+    elif "linkskito.com" in URL:
+        api_url = "https://linkskito.com/api"
     else:
         return link
+
+    params = {"api": API, "url": quote(link)}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, params=params) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    if result.get("status") == "success":
+                        shortened = result.get("shortenedUrl")
+                        if shortened:
+                            shortened = shortened.replace("\\/", "/")
+                            logger.info(f"[VERIFY] Shortened via {URL}: {shortened}")
+                            return shortened
+    except Exception as e:
+        logger.error(f"Verify shortener ({URL}) error: {e}")
+    return link
 
 # ================== [VERIFICATION SYSTEM] ==================
 
