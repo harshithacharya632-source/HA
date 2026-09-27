@@ -1,4 +1,4 @@
-import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64
+import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64, math
 from Script import script
 from pyrogram.errors import MediaEmpty
 from pyrogram import Client, filters, enums
@@ -1169,21 +1169,39 @@ async def extend_premium_cmd(client, message):
     )
 
 
-@Client.on_message(filters.command('verification') & filters.user(ADMINS))
-async def verification_list_cmd(client, message):
-    """Owner-only: lists every user whose daily verification is still
-    valid today — name, id, and their verified-until date."""
-    try:
-        users = await db.get_all_verified_users()
-    except Exception as e:
-        logger.error(f"verification_list: get_all_verified_users failed: {e}")
-        return await message.reply_text("<b>❌ Something went wrong fetching the verification list. Check the logs.</b>")
+# ── Paginated /verification and /premium_list ───────────────────────────
+# Both lists can grow large once lots of users verify in a day, so instead
+# of dumping everything as multiple long messages, we show PAGE_SIZE users
+# at a time with ⬅️ Previous / ➡️ Next buttons. The full list is re-fetched
+# from the DB on every button press (cheap) so the numbers stay live and we
+# don't need any extra caching layer.
+LIST_PAGE_SIZE = 15
 
-    if not users:
-        return await message.reply_text("<b>ℹ️ No users are verified today.</b>")
 
-    lines = [f"<b>✅ Verified Users — {len(users)} today</b>\n"]
-    for i, u in enumerate(users, 1):
+def _list_pagination_keyboard(prefix, page, total_pages):
+    """Builds a single-row ⬅️ / page-indicator / ➡️ keyboard for a paginated
+    admin list. Returns None when there's only one page (no buttons needed).
+    `prefix` is 'vlist' for /verification or 'plist' for /premium_list."""
+    if total_pages <= 1:
+        return None
+
+    row = []
+    if page > 0:
+        row.append(InlineKeyboardButton("⬅️ ᴘʀᴇᴠɪᴏᴜs", callback_data=f"{prefix}#{page - 1}", style=enums.ButtonStyle.PRIMARY))
+    row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="pages", style=enums.ButtonStyle.SUCCESS))
+    if page < total_pages - 1:
+        row.append(InlineKeyboardButton("ɴᴇxᴛ ➡️", callback_data=f"{prefix}#{page + 1}", style=enums.ButtonStyle.PRIMARY))
+    return InlineKeyboardMarkup([row])
+
+
+async def _build_verified_page_text(client, users, page):
+    """Renders one page of the verified-users list as HTML text."""
+    total_pages = math.ceil(len(users) / LIST_PAGE_SIZE)
+    start = page * LIST_PAGE_SIZE
+    page_users = users[start:start + LIST_PAGE_SIZE]
+
+    lines = [f"<b>✅ Verified Users — {len(users)} today</b> (page {page + 1}/{total_pages})\n"]
+    for i, u in enumerate(page_users, start + 1):
         uid = u.get("id")
         verified_until = u.get("verified_until")
 
@@ -1196,31 +1214,18 @@ async def verification_list_cmd(client, message):
         lines.append(f"{i}. {name} (<code>{uid}</code>)\n   ✅ Verified until {verified_until}")
         await asyncio.sleep(0.03)  # gentle pacing for client.get_users calls
 
-    text = "\n\n".join(lines)
-    chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)] or [text]
-    for chunk in chunks:
-        await message.reply_text(chunk, disable_web_page_preview=True)
+    return "\n\n".join(lines), total_pages
 
 
-@Client.on_message(filters.command('premium_list') & filters.user(ADMINS))
-async def premium_list_cmd(client, message):
-    """Owner-only: lists every user with currently-active premium — name,
-    id, and remaining time — soonest-expiring first."""
-    if PREMIUM_AND_REFERAL_MODE == False:
-        return
-
-    try:
-        users = await db.get_all_premium_users()
-    except Exception as e:
-        logger.error(f"premium_list: get_all_premium_users failed: {e}")
-        return await message.reply_text("<b>❌ Something went wrong fetching the premium list. Check the logs.</b>")
-
-    if not users:
-        return await message.reply_text("<b>ℹ️ No active premium users right now.</b>")
+async def _build_premium_page_text(client, users, page):
+    """Renders one page of the active-premium-users list as HTML text."""
+    total_pages = math.ceil(len(users) / LIST_PAGE_SIZE)
+    start = page * LIST_PAGE_SIZE
+    page_users = users[start:start + LIST_PAGE_SIZE]
 
     now = datetime.datetime.now()
-    lines = [f"<b>👑 Premium Users — {len(users)} active</b>\n"]
-    for i, u in enumerate(users, 1):
+    lines = [f"<b>👑 Premium Users — {len(users)} active</b> (page {page + 1}/{total_pages})\n"]
+    for i, u in enumerate(page_users, start + 1):
         uid = u.get("id")
         expiry = u.get("expiry_time")
         remaining = expiry - now
@@ -1240,11 +1245,123 @@ async def premium_list_cmd(client, message):
         )
         await asyncio.sleep(0.03)  # gentle pacing for client.get_users calls
 
-    text = "\n\n".join(lines)
-    # Telegram caps messages at 4096 chars — split into safe chunks if the list is long.
-    chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)] or [text]
-    for chunk in chunks:
-        await message.reply_text(chunk, disable_web_page_preview=True)
+    return "\n\n".join(lines), total_pages
+
+
+@Client.on_message(filters.command('verification') & filters.user(ADMINS))
+async def verification_list_cmd(client, message):
+    """Owner-only: lists every user whose daily verification is still
+    valid today — name, id, and their verified-until date. Paginated,
+    15 users per page, with ⬅️/➡️ buttons once there's more than one page."""
+    try:
+        users = await db.get_all_verified_users()
+    except Exception as e:
+        logger.error(f"verification_list: get_all_verified_users failed: {e}")
+        return await message.reply_text("<b>❌ Something went wrong fetching the verification list. Check the logs.</b>")
+
+    if not users:
+        return await message.reply_text("<b>ℹ️ No users are verified today.</b>")
+
+    page = 0
+    text, total_pages = await _build_verified_page_text(client, users, page)
+    await message.reply_text(
+        text,
+        disable_web_page_preview=True,
+        reply_markup=_list_pagination_keyboard("vlist", page, total_pages),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^vlist#\d+$") & filters.user(ADMINS))
+async def vlist_page_cb(client, query: CallbackQuery):
+    """Handles ⬅️/➡️ presses on the /verification list."""
+    try:
+        page = int(query.data.split("#", 1)[1])
+    except (IndexError, ValueError):
+        return await query.answer()
+
+    try:
+        users = await db.get_all_verified_users()
+    except Exception as e:
+        logger.error(f"vlist_page_cb: get_all_verified_users failed: {e}")
+        return await query.answer("❌ Something went wrong. Check the logs.", show_alert=True)
+
+    if not users:
+        return await query.answer("ℹ️ No users are verified today.", show_alert=True)
+
+    total_pages = math.ceil(len(users) / LIST_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))  # clamp in case the list shrank
+    await query.answer()
+
+    text, total_pages = await _build_verified_page_text(client, users, page)
+    try:
+        await query.message.edit_text(
+            text,
+            disable_web_page_preview=True,
+            reply_markup=_list_pagination_keyboard("vlist", page, total_pages),
+        )
+    except Exception as e:
+        logger.error(f"vlist_page_cb: edit_text failed: {e}")
+
+
+@Client.on_message(filters.command('premium_list') & filters.user(ADMINS))
+async def premium_list_cmd(client, message):
+    """Owner-only: lists every user with currently-active premium — name,
+    id, and remaining time — soonest-expiring first. Paginated, 15 users
+    per page, with ⬅️/➡️ buttons once there's more than one page."""
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+
+    try:
+        users = await db.get_all_premium_users()
+    except Exception as e:
+        logger.error(f"premium_list: get_all_premium_users failed: {e}")
+        return await message.reply_text("<b>❌ Something went wrong fetching the premium list. Check the logs.</b>")
+
+    if not users:
+        return await message.reply_text("<b>ℹ️ No active premium users right now.</b>")
+
+    page = 0
+    text, total_pages = await _build_premium_page_text(client, users, page)
+    await message.reply_text(
+        text,
+        disable_web_page_preview=True,
+        reply_markup=_list_pagination_keyboard("plist", page, total_pages),
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^plist#\d+$") & filters.user(ADMINS))
+async def plist_page_cb(client, query: CallbackQuery):
+    """Handles ⬅️/➡️ presses on the /premium_list list."""
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return await query.answer()
+
+    try:
+        page = int(query.data.split("#", 1)[1])
+    except (IndexError, ValueError):
+        return await query.answer()
+
+    try:
+        users = await db.get_all_premium_users()
+    except Exception as e:
+        logger.error(f"plist_page_cb: get_all_premium_users failed: {e}")
+        return await query.answer("❌ Something went wrong. Check the logs.", show_alert=True)
+
+    if not users:
+        return await query.answer("ℹ️ No active premium users right now.", show_alert=True)
+
+    total_pages = math.ceil(len(users) / LIST_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))  # clamp in case the list shrank
+    await query.answer()
+
+    text, total_pages = await _build_premium_page_text(client, users, page)
+    try:
+        await query.message.edit_text(
+            text,
+            disable_web_page_preview=True,
+            reply_markup=_list_pagination_keyboard("plist", page, total_pages),
+        )
+    except Exception as e:
+        logger.error(f"plist_page_cb: edit_text failed: {e}")
 
 
 async def premium_expiry_notifier(client):
@@ -2028,7 +2145,15 @@ async def give_premium_cmd_handler(client, message):
         time = message.command[2]        
         seconds = await get_seconds(time)
         if seconds > 0:
-            expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+            # Extend on top of any time the user already has left, instead
+            # of overwriting it — same rule as the UPI and Stars flows: a
+            # user with 7 days left who is manually given 2 more days ends
+            # up with 7 + 2 = 9 days, not just 2.
+            now = datetime.datetime.now()
+            existing = await db.get_user(user_id)
+            current_expiry = existing.get("expiry_time") if existing else None
+            base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
+            expiry_time = base_time + datetime.timedelta(seconds=seconds)
             user_data = {"id": user_id, "expiry_time": expiry_time, "expiry_reminder_sent": False, "expired_notified": False} 
             await db.update_user(user_data)  # Use the update_user method to update or insert user data
             await message.reply_text("Premium access added to the user.")            
@@ -2084,7 +2209,7 @@ async def plans_cmd_handler(client, message):
         return 
     btn = [
         [InlineKeyboardButton("⭐ ᴘᴀʏ ɪɴsᴛᴀɴᴛʟʏ ᴡɪᴛʜ sᴛᴀʀs", callback_data="show_star_plans")],
-        [InlineKeyboardButton("ꜱᴇɴᴅ ᴘᴀʏᴍᴇɴᴛ ʀᴇᴄᴇɪᴘᴛ 🧾", url=OWNER_LNK)],
+        [InlineKeyboardButton("ᴘᴀɪᴅ ᴠɪᴀ ᴜᴘɪ? sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ 🧾", url=OWNER_LNK)],
         [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")]
     ]
     reply_markup = InlineKeyboardMarkup(btn)
@@ -2184,7 +2309,17 @@ async def star_payment_success_handler(client, message):
 
     user_id = message.from_user.id
     charge_id = message.successful_payment.telegram_payment_charge_id
-    expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+
+    # Extend on top of any time the user already has left, instead of
+    # overwriting it — same rule as the UPI and manual /add_premium
+    # flows: a user with 7 days left who buys a 2-day plan with Stars
+    # ends up with 7 + 2 = 9 days, not just 2.
+    now = datetime.datetime.now()
+    existing = await db.get_user(user_id)
+    current_expiry = existing.get("expiry_time") if existing else None
+    base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
+    expiry_time = base_time + datetime.timedelta(seconds=seconds)
+
     user_data = {
         "id": user_id,
         "expiry_time": expiry_time,
@@ -2348,250 +2483,3 @@ async def purge_requests(client, message):
             parse_mode=enums.ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#   GOFLIX GUARD — MODERATION COMMANDS (add to bottom of commands.py)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-from pyrogram.types import ChatPermissions
-from pyrogram.enums import ChatMemberStatus
-from database.guard_db import (
-    reset_warns  as guard_reset_warns,
-    remove_ban_log,
-    get_all_banned,
-    log_ban
-)
-
-async def _is_admin(client, chat_id, user_id):
-    try:
-        m = await client.get_chat_member(chat_id, user_id)
-        return m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
-    except:
-        return False
-
-async def _do_unmute(client, chat_id, user_id):
-    await client.restrict_chat_member(
-        chat_id, user_id,
-        ChatPermissions(
-            can_send_messages=True,
-            can_send_media_messages=True,
-            can_add_web_page_previews=True,
-        )
-    )
-
-# ── /mute ─────────────────────────────────────────────────────────────────────
-
-@Client.on_message(filters.command("mute") & filters.group, group=1)
-async def mute_cmd(client, message):
-    if not await _is_admin(client, message.chat.id, message.from_user.id):
-        return await message.reply("❌ Admins only!")
-
-    target  = None
-    minutes = None
-
-    if message.reply_to_message:
-        target = message.reply_to_message.from_user
-        if len(message.command) > 1:
-            try:
-                minutes = int(message.command[1])
-            except:
-                return await message.reply("❌ Usage: reply + `/mute <minutes>`")
-    elif len(message.command) > 1:
-        try:
-            target = await client.get_users(message.command[1].lstrip("@"))
-            if len(message.command) > 2:
-                minutes = int(message.command[2])
-        except:
-            return await message.reply("❌ User not found or invalid duration.")
-    else:
-        return await message.reply(
-            "❌ **Usage:**\n"
-            "• Reply + `/mute <minutes>`\n"
-            "• `/mute @user <minutes>`\n"
-            "• No minutes = permanent"
-        )
-
-    if not target:
-        return await message.reply("❌ User not found.")
-    if await _is_admin(client, message.chat.id, target.id):
-        return await message.reply("❌ Cannot mute an admin.")
-
-    chat_id = message.chat.id
-
-    if minutes:
-        from datetime import datetime, timedelta
-        until = datetime.utcnow() + timedelta(minutes=minutes)
-        await client.restrict_chat_member(chat_id, target.id, ChatPermissions(), until_date=until)
-        duration_text = f"`{minutes}` min — until `{until.strftime('%d.%m.%y %H:%M')} UTC`"
-    else:
-        await client.restrict_chat_member(chat_id, target.id, ChatPermissions())
-        duration_text = "Permanent"
-
-    await message.reply(
-        f"🔇 **Muted**\n\n"
-        f"👤 **User:** {target.mention}\n"
-        f"🆔 **ID:** `{target.id}`\n"
-        f"⏱ **Duration:** {duration_text}\n"
-        f"👮 **By:** {message.from_user.mention}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔓 Unmute", callback_data=f"cmd_unmute_{target.id}_{chat_id}")
-        ]])
-    )
-    message.stop_propagation()
-
-
-# ── /unmute ───────────────────────────────────────────────────────────────────
-
-@Client.on_message(filters.command("unmute") & filters.group, group=1)
-async def unmute_cmd(client, message):
-    if not await _is_admin(client, message.chat.id, message.from_user.id):
-        return await message.reply("❌ Admins only!")
-
-    target = None
-    if message.reply_to_message:
-        target = message.reply_to_message.from_user
-    elif len(message.command) > 1:
-        try:
-            target = await client.get_users(message.command[1].lstrip("@"))
-        except:
-            return await message.reply("❌ User not found.")
-    else:
-        return await message.reply("❌ Reply to user or `/unmute @user`")
-
-    await _do_unmute(client, message.chat.id, target.id)
-    await message.reply(
-        f"🔓 **Unmuted**\n\n"
-        f"👤 **User:** {target.mention}\n"
-        f"🆔 **ID:** `{target.id}`\n"
-        f"👮 **By:** {message.from_user.mention}"
-    )
-    message.stop_propagation()
-
-
-# ── /ban ──────────────────────────────────────────────────────────────────────
-
-@Client.on_message(filters.command("ban") & filters.group, group=1)
-async def ban_cmd(client, message):
-    if not await _is_admin(client, message.chat.id, message.from_user.id):
-        return await message.reply("❌ Admins only!")
-
-    target = None
-    reason = "No reason provided"
-    chat_id = message.chat.id
-
-    if message.reply_to_message:
-        target = message.reply_to_message.from_user
-        if len(message.command) > 1:
-            reason = " ".join(message.command[1:])
-    elif len(message.command) > 1:
-        try:
-            target = await client.get_users(message.command[1].lstrip("@"))
-            if len(message.command) > 2:
-                reason = " ".join(message.command[2:])
-        except:
-            return await message.reply("❌ User not found.")
-    else:
-        return await message.reply(
-            "❌ **Usage:**\n"
-            "• Reply + `/ban <reason>`\n"
-            "• `/ban @user <reason>`"
-        )
-
-    if not target:
-        return await message.reply("❌ User not found.")
-    if await _is_admin(client, chat_id, target.id):
-        return await message.reply("❌ Cannot ban an admin.")
-
-    await client.ban_chat_member(chat_id, target.id)
-    await log_ban(chat_id, target.id)
-
-    await message.reply(
-        f"🚫 **Banned**\n\n"
-        f"👤 **User:** {target.mention}\n"
-        f"🆔 **ID:** `{target.id}`\n"
-        f"📝 **Reason:** {reason}\n"
-        f"👮 **By:** {message.from_user.mention}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔓 Unban", callback_data=f"cmd_unban_{target.id}_{chat_id}")
-        ]])
-    )
-    message.stop_propagation()
-
-
-# ── /unban ────────────────────────────────────────────────────────────────────
-
-@Client.on_message(filters.command("unban") & filters.group, group=1)
-async def unban_cmd(client, message):
-    if not await _is_admin(client, message.chat.id, message.from_user.id):
-        return await message.reply("❌ Admins only!")
-
-    target = None
-    if message.reply_to_message:
-        target = message.reply_to_message.from_user
-    elif len(message.command) > 1:
-        try:
-            target = await client.get_users(message.command[1].lstrip("@"))
-        except:
-            return await message.reply("❌ User not found.")
-    else:
-        return await message.reply("❌ Reply to user or `/unban @user`")
-
-    await client.unban_chat_member(message.chat.id, target.id)
-    await guard_reset_warns(message.chat.id, target.id)
-    await remove_ban_log(message.chat.id, target.id)
-
-    await message.reply(
-        f"✅ **Unbanned**\n\n"
-        f"👤 **User:** {target.mention}\n"
-        f"🆔 **ID:** `{target.id}`\n"
-        f"👮 **By:** {message.from_user.mention}"
-    )
-    message.stop_propagation()
-
-
-# ── Callbacks: Unmute / Unban buttons ─────────────────────────────────────────
-# Handles both: cmd_unmute_USERID_CHATID and old cmd_unmute_USERID formats
-
-@Client.on_callback_query(filters.regex(r"^cmd_(unmute|unban)_(\d+)(?:_(-\d+))?$"))
-async def cmd_action_callback(client, callback):
-    action  = callback.matches[0].group(1)
-    user_id = int(callback.matches[0].group(2))
-    chat_id_str = callback.matches[0].group(3)
-
-    # Determine chat_id — from callback data or from message chat
-    if chat_id_str:
-        chat_id = int(chat_id_str)
-    else:
-        chat_id = callback.message.chat.id
-
-    if not await _is_admin(client, chat_id, callback.from_user.id):
-        return await callback.answer("❌ Admins only!", show_alert=True)
-
-    try:
-        user = await client.get_users(user_id)
-        name = user.mention
-    except:
-        name = f"`{user_id}`"
-
-    if action == "unmute":
-        await _do_unmute(client, chat_id, user_id)
-        try:
-            await callback.message.edit_text(
-                callback.message.text + f"\n\n✅ **Unmuted by Admin**"
-            )
-        except:
-            pass
-        await callback.answer("✅ User unmuted!")
-
-    else:  # unban
-        await client.unban_chat_member(chat_id, user_id)
-        await guard_reset_warns(chat_id, user_id)
-        await remove_ban_log(chat_id, user_id)
-        try:
-            await callback.message.edit_text(
-                callback.message.text + f"\n\n✅ **Unbanned by Admin**"
-            )
-        except:
-            pass
-        await callback.answer("✅ User unbanned!")

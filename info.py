@@ -11,6 +11,13 @@ API_HASH = environ.get('API_HASH', '')
 BOT_TOKEN = environ.get('BOT_TOKEN', "")
 plugins=dict(root="plugins")
 
+# This is the token for @Goflix_AdminBot — a SECOND bot, run from this
+# same repo/process, that handles payment screenshots and admin approve/
+# reject buttons (see bot.py + admin_plugins/payment_approval.py). Get it
+# from @BotFather like any other bot token. If left blank, the admin bot
+# simply doesn't start — the main bot keeps working normally either way.
+ADMIN_BOT_TOKEN = environ.get('ADMIN_BOT_TOKEN', "")
+
 
 
 # This Pictures Is For Start Message Picture, You Can Add Multiple By Giving One Space Between Each.
@@ -22,8 +29,29 @@ ADMINS = [int(admin) if id_pattern.search(admin) else admin for admin in environ
 auth_users = [int(user) if id_pattern.search(user) else user for user in environ.get('AUTH_USERS', '').split()]  # For Multiple Id Use One Space Between Each.
 AUTH_USERS = (auth_users + ADMINS) if auth_users else []
 
+# The single bot owner's Telegram user ID — used for commands (like /stats)
+# that should be visible to only one person, not the whole ADMINS list.
+# Falls back to the first ADMINS entry if OWNER_ID isn't set, so existing
+# deployments keep working without needing a new env var right away.
+OWNER_ID = int(environ.get('OWNER_ID', ADMINS[0] if ADMINS and isinstance(ADMINS[0], int) else 0))
+
 # This Channel Is For When User Start Your Bot Then Bot Send That User Name And Id In This Log Channel, Same For Group Also.
 LOG_CHANNEL = int(environ.get('LOG_CHANNEL', '-1003059886878'))
+
+# Optional: Google Cloud Vision API key, used by admin_plugins/payment_approval.py
+# as a fallback OCR engine ONLY for payment screenshots that Tesseract
+# couldn't read clearly on its own (see _vision_ocr_text there) — set this
+# in Koyeb's environment variables. Left blank, that fallback is simply
+# skipped and the bot behaves exactly as before (Tesseract-only).
+GOOGLE_VISION_API_KEY = environ.get('GOOGLE_VISION_API_KEY', '')
+
+# Optional alternative to GOOGLE_VISION_API_KEY above — OCR.space
+# (https://ocr.space/ocrapi/freekey) gives an instant free API key by
+# email with NO credit card and NO billing account required, unlike
+# Google Cloud Vision. If both are set, Google Vision is tried first
+# (generally more accurate on stylized/colorful app screenshots) and
+# this is the fallback; set only this one to skip Google Cloud entirely.
+OCR_SPACE_API_KEY = environ.get('OCR_SPACE_API_KEY', '')
 
 # This Is File Channel Where You Upload Your File Then Bot Automatically Save It In Database 
 CHANNELS = [int(ch) if id_pattern.search(ch) else ch for ch in environ.get('CHANNELS', '-1002954653440').split()]  # For Multiple Id Use One Space Between Each.

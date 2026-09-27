@@ -1,0 +1,2266 @@
+"""
+Goflix_AdminBot — UPI screenshot payment approval + user support relay.
+
+This is a SEPARATE bot from the main Goflix file-store bot (its own
+BOT_TOKEN, its own Client, started alongside the main bot in bot.py).
+Users are sent here (via the "Send screenshot" link under /plan on the
+main bot, which is just OWNER_LNK) to submit their UPI payment proof —
+and can also just message this bot directly with questions, which get
+relayed to the admins (see "Support Q&A relay" below).
+
+/plan and /myplan also work directly on this bot (not just the main
+bot) — same info, shown here.
+
+Payment flow:
+  1. User taps /start, OR sends the screenshot photo cold with no plan
+     picked yet (see unsolicited_screenshot_cb — the photo is stashed
+     and they're asked which plan it's for).
+  2. Bot shows a "Submit Payment Screenshot" button -> asks which plan.
+  3. Bot asks for the screenshot photo (unless one was already stashed
+     from step 1, in which case that's used instead).
+  4. OCR (pytesseract) pulls out an amount, a date/time, and whether the
+     payee name on the screenshot looks like ours (see PAYEE_NAME_HINT).
+     If Tesseract can't find an amount at all and this still looks like
+     a real payment (not some unrelated photo), and GOOGLE_VISION_API_KEY
+     is set, a single Google Cloud Vision API call is tried as a
+     fallback before giving up — see _vision_ocr_text. With no key set,
+     this step is skipped and nothing changes from Tesseract-only
+     behavior.
+  5a. Exact match — amount equals the claimed plan's rate, the payment
+      timestamp is within the last hour, and the payee name matches —
+      premium is granted immediately, no admin needed. A record-only
+      copy (no buttons) goes to LOG_CHANNEL so approvals stay auditable.
+  5b. Clear mismatch — an amount WAS read off the screenshot and it does
+      not equal the claimed plan's CURRENT rate (rates are always read
+      live from Mongo via load_plan_rates(), never cached, so this is
+      always checked against today's price — change /plan_rate any time
+      and the very next screenshot is checked against the new number) —
+      auto-rejected immediately with an Appeal-to-admin button, no admin
+      needed either (this is a wrong/mismatched payment, not an
+      ambiguous one).
+  5c. Anything else (amount not readable, date stale, payee not
+      detected, etc.) — sent to LOG_CHANNEL with the screenshot and
+      Approve/Reject buttons for an admin to decide, and PINNED there
+      (only case 5c pins — 5a/5b are record-only, nothing to action) so
+      it can't get buried and sit unanswered. Unpinned automatically
+      the moment an admin taps Approve/Reject.
+
+  Extending: if the user already has time remaining on an existing
+  plan, a new approval (auto or manual) is added on top of what's left
+  rather than overwriting it.
+
+Support Q&A relay:
+  Any other message a user sends (not /start, /plan, /myplan, or a
+  screenshot — including a bare "hi"/"hello") is forwarded to every
+  admin's PM with this bot. An admin replies by using Telegram's native
+  reply-to on that forwarded copy, and the reply is relayed straight
+  back to the user. /start also offers a dedicated "Talk to Admin"
+  button that just prompts the user to type their message, for
+  discoverability.
+
+Requires: pytesseract + tesseract-ocr/tesseract-ocr-eng system packages
+(see Dockerfile) and Pillow (already in requirements.txt).
+"""
+
+import io
+import re
+import base64
+import asyncio
+import datetime
+import logging
+
+import requests
+from pyrogram import Client, filters, enums
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from database.users_chats_db import db
+from info import (
+    ADMINS, LOG_CHANNEL, PREMIUM_AND_REFERAL_MODE, STAR_PLAN_LABELS,
+    STAR_PLAN_SECONDS, OWNER_LNK, BOT_TOKEN, PAYMENT_TEXT, PAYMENT_QR,
+    GOOGLE_VISION_API_KEY, OCR_SPACE_API_KEY,
+)
+from plugins.commands import (
+    load_plan_rates, format_plan_rates, format_remaining_time, format_expiry_time,
+)
+# The main Goflix bot's own Client instance, so the "premium unlocked"
+# message can be sent from THAT bot too (in addition to this AdminBot),
+# since that's the bot the user is actually using day-to-day.
+from TechVJ.bot import TechVJBot
+
+logger = logging.getLogger(__name__)
+
+try:
+    import pytesseract
+    from PIL import Image, ImageOps
+    # Importing the pytesseract *library* only proves the Python package
+    # is installed — it says nothing about whether the actual `tesseract`
+    # binary is on PATH inside the container (see Dockerfile). Those two
+    # failed independently before: pytesseract wasn't even in
+    # requirements.txt, then even once it is, a missing system binary
+    # would raise TesseractNotFoundError on every single screenshot and
+    # get silently swallowed by ocr_screenshot()'s broad except — so
+    # every screenshot would show OCR amount/date "not detected" with no
+    # obvious clue why. Checking the binary here, once, at import time,
+    # turns that into one clear log line instead of a mystery.
+    pytesseract.get_tesseract_version()
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+    logger.warning("pytesseract/Pillow not available — screenshot OCR is disabled, admins will see raw screenshots only.")
+except pytesseract.TesseractNotFoundError:
+    OCR_AVAILABLE = False
+    logger.warning(
+        "pytesseract is installed but the 'tesseract' binary isn't on PATH — "
+        "screenshot OCR is disabled, admins will see raw screenshots only. "
+        "Install the tesseract-ocr system package (see Dockerfile)."
+    )
+
+# Same plan keys/durations as the Stars flow on the main bot — a plan's
+# length doesn't depend on how it was paid for.
+PLAN_LABELS = STAR_PLAN_LABELS
+PLAN_SECONDS = STAR_PLAN_SECONDS
+
+# Plan rates are stored in MongoDB keyed by the OWNING bot's Telegram id
+# (so /plan_rate on the main bot writes under the main bot's id). This
+# bot is a different bot with a different id, so it must explicitly read
+# the main bot's rates rather than its own (which would just be empty
+# defaults). A bot's Telegram user id is the numeric part before the
+# ':' in its token — no extra config needed.
+MAIN_BOT_ID = int(BOT_TOKEN.split(":")[0]) if BOT_TOKEN and ":" in BOT_TOKEN else None
+
+# How old a screenshot's payment date/time is allowed to be before it no
+# longer counts as "exact" for auto-approval (someone reusing an old
+# screenshot, or a scheduled/pending payment). 2 hours — wide enough to
+# absorb a few minutes of clock drift/upload delay while still catching
+# genuinely stale/reused screenshots.
+MAX_SCREENSHOT_AGE_HOURS = 2
+
+# Every UPI app (GPay/PhonePe/Paytm) prints the payment date/time in the
+# phone's local timezone, which for our users is always India Standard
+# Time — there's no "change timezone" setting on a UPI receipt. The
+# bot's *server*, though, runs on whatever clock its host uses, and the
+# Dockerfile never sets TZ, so python:3.10-slim-bookworm defaults to
+# UTC. Comparing datetime.datetime.now() (UTC) directly against a
+# time parsed off a screenshot (IST) was silently off by 5:30 on every
+# single screenshot — a payment made 2 minutes ago in IST could compute
+# as ~5.5 hours in the "future" relative to the server's UTC clock,
+# which the age check treats exactly the same as a stale/reused
+# screenshot and auto-rejects. This was the actual cause of fresh,
+# genuine payments getting auto-rejected as "not recent (older than Nh
+# or in the future)". IST has no DST, so a fixed +5:30 offset is exact
+# and doesn't need the tzdata package (not installed on -slim images).
+IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
+
+def _now_ist_naive() -> datetime.datetime:
+    """"Now", shifted into IST to match the (naive, tz-less) datetimes
+    that _extract_datetime()/strptime produce from OCR'd receipt text —
+    so age comparisons are apples-to-apples regardless of what timezone
+    the server itself happens to be running in."""
+    return datetime.datetime.now(IST).replace(tzinfo=None)
+
+# Text that must appear (case-insensitively) in the OCR'd screenshot for
+# the payment to count as "paid to us" — i.e. the payee/receiver name
+# UPI apps print on a successful payment (matches the UPI ID's account
+# name, e.g. "harshithacharya632-3@oksbi"). Adjust this if the UPI
+# display name ever changes.
+PAYEE_NAME_HINT = "harshith"
+
+
+async def _delayed_delete(message, delay: int):
+    """Fire-and-forget helper: deletes a message after `delay` seconds
+    without blocking whatever handler scheduled it. Used for status/
+    confirmation messages that are only useful for a minute or two."""
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+# ── OCR extraction ──────────────────────────────────────────────────────
+
+# Third-party ad banners are common on the kind of "Split Expense" test
+# screenshots this bot has been getting, and confirmed to actively
+# contaminate extraction: a real ₹2 payment's screenshot had an ad
+# reading "Watch 2000+ Shows Daily... ₹1... Claim Now" directly beneath
+# the payment card, and the amount that reached this bot came back as
+# "330.4" — not present as literal text anywhere, so some combination of
+# the ad's own numbers got merged in by whichever OCR engine ran. These
+# phrases are deliberately specific to third-party app-install/streaming
+# ad templates, NOT to legitimate payment-app promotional text a real
+# receipt can contain (e.g. Navi's own "Get up to ₹1,000 on every
+# payment" cashback teaser, which is part of a genuine receipt and must
+# NOT be stripped) — only phrasing that a real UPI payment confirmation
+# would never itself contain.
+_AD_MARKER_PATTERN = re.compile(
+    r'\b(claim\s*now|shows?\s+daily|watch\s+\d+\+|download\s+(the\s+)?app|install\s+now|'
+    r'subscribe\s+now|unlock\s+now|grab\s+(this\s+)?(deal|offer)\s+now|recharge\s+now)\b',
+    re.IGNORECASE,
+)
+
+
+def _strip_ad_content(text: str) -> str:
+    """Truncates OCR'd text at the first ad-marker phrase (see
+    _AD_MARKER_PATTERN) — the payment card always renders ABOVE any ad
+    banner in every screenshot seen so far, so everything from the ad
+    onward is thrown away rather than being handed to the amount/date/
+    txn-id extractors, which have no way to tell a genuine transaction
+    number apart from an ad's own pricing text. Applied uniformly to
+    every OCR source (every Tesseract variant AND any cloud OCR result)
+    right where the raw text first comes back, so nothing downstream
+    ever sees ad content. A screenshot with no ad content at all is
+    returned completely unchanged."""
+    m = _AD_MARKER_PATTERN.search(text)
+    return text[:m.start()] if m else text
+
+
+_AMOUNT_PATTERNS = [
+    # Best case: OCR read the currency symbol/prefix correctly.
+    # (?<![A-Za-z]) stops "Rs" from matching as the tail of some other
+    # word — critically, our own status lines like "not detectedRs" —
+    # and the gap to the digits is spaces/tabs only, never \s, so it
+    # can never cross a newline and grab an unrelated number several
+    # lines further down the text.
+    re.compile(r'(?<![A-Za-z])(?:₹|Rs\.?|INR)[ \t]*([0-9][0-9,]*(?:\.\d{1,2})?)', re.IGNORECASE),
+    # Fallback: Tesseract very often drops or mangles the ₹ glyph
+    # entirely (confirmed against real screenshots — "₹15.00" OCRs as
+    # bare "15.00" once the image is upscaled, see ocr_screenshot()).
+    # A standalone amount-shaped number (exactly 2 decimals, its own
+    # line) is how GPay/PhonePe/Paytm always print the amount, so this
+    # is safe to use as a fallback without a currency symbol at all.
+    re.compile(r'^[ \t]*([0-9][0-9,]*\.\d{2})[ \t]*$', re.MULTILINE),
+    # Bank-statement / SMS-style receipts (BHIM, some netbanking
+    # confirmation screens) commonly write a whole-rupee amount as
+    # "500/-" instead of "₹500.00" — no currency symbol AND no decimal
+    # point for either pattern above to anchor on. The trailing "/-" is
+    # itself a strong, low-false-positive marker (nothing else on a
+    # payment receipt is written that way), so this is safe as its own
+    # standalone-line fallback rather than needing a nearby anchor word.
+    re.compile(r'^[ \t]*([0-9][0-9,]*)[ \t]*/-[ \t]*$', re.MULTILINE),
+]
+
+# Common UPI-app receipt date formats. Not exhaustive — different apps
+# (GPay/PhonePe/Paytm) format this differently, so this is intentionally
+# forgiving. If nothing matches, the screenshot is just treated as
+# low-confidence rather than failing.
+_DATE_PATTERNS = [
+    # "19 March 2026, 11:03 pm" (GPay) / "9 Mar 2026, 12:14 PM" (Navi)
+    re.compile(r'\b(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4},?\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b'),
+    re.compile(r'\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4},?\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b'),
+    # ISO-ish "2026-08-30 15:05" / "2026-08-30, 15:05" — seen on some
+    # bank-app and BHIM/Amazon Pay receipts that print a plain 24-hour
+    # clock with no AM/PM at all rather than the 12-hour GPay/PhonePe
+    # style above (which the pattern above can't match: it always
+    # requires day-first with a month name or slash/dash, never
+    # year-first).
+    re.compile(r'\b(\d{4}-\d{1,2}-\d{1,2},?\s+\d{1,2}:\d{2}(?::\d{2})?)\b'),
+]
+
+# Confirmed on a real, fresh Paytm receipt: Paytm prints "26 Sep, 09:09
+# PM" — no year at all — which none of the patterns above can match
+# (every one of them requires a 4-digit year right after the month).
+# That's a real gap, not an OCR failure: the date was clearly visible
+# and OCR read it fine, there was simply no pattern that could capture a
+# year-less date at all, so it silently fell through to "not detected."
+# date_part and time_part are captured separately (rather than as one
+# group like the patterns above) because the year has to be spliced in
+# between them before this can be handed to strptime — see
+# _extract_datetime, which assumes the CURRENT year since a payment
+# must be within its 2-hour freshness window anyway, making a
+# year-boundary mismatch essentially impossible to hit for real.
+_DATE_PATTERN_NO_YEAR = re.compile(
+    r'\b(\d{1,2}\s+[A-Za-z]{3,9}),?\s+(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b'
+)
+
+# PhonePe prints it the other way round — "10:19 pm on 22 Aug 2026" —
+# time first, then the date, joined by "on". Handled separately since
+# the two pieces need to be rejoined into "date, time" order before the
+# same strptime formats below can parse it.
+_TIME_ON_DATE_PATTERN = re.compile(
+    r'\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\s+on\s+(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b'
+)
+
+# Paytm ALSO prints time before date, like PhonePe, but joins them with
+# "Paid at <time>, <date>" (comma, no "on") — e.g. "Paid at 12:14 PM, 30
+# Aug 2026". None of the patterns above matched this at all, which is
+# why Paytm screenshots showed "OCR date: not detected" even when the
+# text was read fine. Handled the same way as the PhonePe case: pull
+# out the two pieces and rejoin them in "date, time" order.
+_TIME_COMMA_DATE_PATTERN = re.compile(
+    r'\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)),\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b'
+)
+
+# A different UI style prints date-then-time in the normal order (unlike
+# PhonePe/Paytm above) but joins them with the word "at" instead of a
+# comma — e.g. "30 August 2026 at 03:05 PM". None of the patterns above
+# require an "at" between year and time (only an optional comma), so
+# this read as "OCR date: not detected" despite the text being fully
+# legible. Date and time are already in the right order here, just
+# joined by "at" instead of ", " — rejoin with a comma so the same
+# strptime formats below can parse it.
+_DATE_AT_TIME_PATTERN = re.compile(
+    r'\b(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\s+at\s+(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\b'
+)
+
+_DATE_TRY_FORMATS = [
+    "%d %b %Y, %I:%M %p", "%d %B %Y, %I:%M %p",
+    "%d %b %Y %I:%M %p", "%d %B %Y %I:%M %p",
+    "%d/%m/%Y, %I:%M %p", "%d/%m/%Y %I:%M %p",
+    "%d-%m-%Y, %I:%M %p", "%d-%m-%Y %I:%M %p",
+    "%d/%m/%y, %I:%M %p", "%d/%m/%y %I:%M %p",
+    # Plain 24-hour clock, no AM/PM — some bank-app/BHIM/Amazon Pay
+    # receipts print it this way (see the extra _DATE_PATTERNS entries
+    # above). Tried after every 12-hour format so a real "3:05 PM" is
+    # never misread as 24-hour first.
+    "%d/%m/%Y, %H:%M", "%d/%m/%Y %H:%M",
+    "%d-%m-%Y, %H:%M", "%d-%m-%Y %H:%M",
+    "%Y-%m-%d, %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d, %H:%M", "%Y-%m-%d %H:%M",
+]
+
+
+# Words every UPI app prints immediately below/near the amount, on the
+# receipt itself — used to anchor the whole-rupee fallback below so it
+# can tell "this bare number is the amount" apart from every other bare
+# number that shows up in a real screenshot (chat subscriber counts,
+# transaction IDs, phone status bar digits, etc). Paytm doesn't print
+# "Completed"/"Paid to" near the amount at all — it prints "Rupees
+# <amount> Only" directly under it instead (e.g. "₹3" / "Rupees Three
+# Only"), which is why whole-rupee Paytm amounts (no decimal for the
+# other fallback to anchor on) were falling through as "not detected".
+_RECEIPT_STATUS_ANCHORS = (
+    "completed", "pending", "failed", "paid to", "rupees",
+    # Wording other apps (BHIM, Amazon Pay, Cred, WhatsApp Pay) use for
+    # the same "this went through" status line.
+    "successful", "success", "transferred", "credited", "money sent",
+)
+
+# Pulls a trailing amount off the END of a line that's already been
+# confirmed (by the caller) to mention the payee/"paid to" — used by the
+# same-line fallback in _extract_amount() below. The currency symbol
+# group is optional since OCR frequently drops or mangles it even when
+# the digits themselves read fine.
+_TRAILING_AMOUNT_RE = re.compile(r'([₹]|Rs\.?|INR)?[ \t]*([0-9][0-9,]*(?:\.\d{1,2})?)\s*$', re.IGNORECASE)
+
+
+def _extract_amount(text: str):
+    for pattern in _AMOUNT_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return m.group(1).replace(",", "")
+
+    # Same-line fallback: "Paid to Harshith  ₹15" — avatar, payee name,
+    # and amount are laid out in one horizontally-aligned row in the
+    # app's UI (GPay/PhonePe "Paid to <name>" cards all do this), and
+    # OCR frequently reads that whole row as ONE text line rather than
+    # separate lines. Every fallback below this point only matches a
+    # line that IS the amount and nothing else, so an amount fused onto
+    # the same line as the payee name/label never matched any of them —
+    # confirmed on a real screenshot: even with the ₹ glyph read
+    # perfectly fine, the amount still came back "not detected" because
+    # it shared a line with "Harshith ." Anchoring on the payee name
+    # (which every genuine payment screenshot must contain — see
+    # _payee_name_matches) or a "paid to"/"sent to" label makes this
+    # safe: it only pulls the trailing number off a line already proven
+    # to be about OUR payment, never a stray number elsewhere.
+    for line in (l.strip() for l in text.splitlines() if l.strip()):
+        low = line.lower()
+        if PAYEE_NAME_HINT in low or "paid to" in low or "sent to" in low:
+            m = _TRAILING_AMOUNT_RE.search(line)
+            if m:
+                return m.group(2).replace(",", "")
+
+    # Last-resort fallback: whole-rupee amounts with no paise at all
+    # (e.g. "₹3" or "₹1,100") have no decimal for the pattern above to
+    # anchor on, and confirmed against a real screenshot, OCR does NOT
+    # cleanly drop the ₹ glyph the way it does on decimal amounts —
+    # instead it renders as stray punctuation FUSED directly onto the
+    # digit (e.g. "₹3" next to Paytm's green checkmark badge OCRs as
+    # "~3@" or "<3]"), so requiring the line to be pure digits (as this
+    # used to) rejected every real amount line outright. This now
+    # allows up to 2 non-alphanumeric junk characters on each side of
+    # the digits — still anchored to a receipt status word nearby so
+    # this can't drift onto an unrelated stray number elsewhere in the
+    # screenshot (chat subscriber counts, transaction IDs, status bar).
+    #
+    # "Nearby" checks BOTH directions, not just forward: Paytm/older
+    # GPay print the status word BELOW the amount ("₹15" then
+    # "Completed" underneath), but a "Paid to <name>  ₹<amount>" layout
+    # (confirmed on a real GPay-via-PhonePe screenshot) prints "Paid to"
+    # as a label ABOVE the amount row instead. A forward-only window
+    # missed that case entirely — a real, correct ₹15 payment came back
+    # "OCR amount: not detected" purely because "Paid to" sat one line
+    # above the amount instead of below it, even though nothing was
+    # actually wrong with the payment.
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    # The junk placeholder for a mis-OCR'd ₹ is USUALLY punctuation
+    # ("<3]", "~3@"), but confirmed on a real screenshot it can also be
+    # a single stray LETTER fused directly onto the digits with nothing
+    # else on the line ("Z15" for a ₹15 payment, in sparse-text mode —
+    # see _ocr_variants). `[^\w]{0,2}` alone can't match that (a letter
+    # IS a word character), so the leading side also accepts exactly one
+    # bare letter as an alternative. Two-letter runs ("XX1901") still
+    # don't qualify — this only ever accepts exactly one.
+    junk_wrapped_amount = re.compile(r'^(?:[^\w]{0,2}|[A-Za-z])([0-9][0-9,]*(?:\.\d{1,2})?)[^\w]{0,2}$')
+    for i, line in enumerate(lines):
+        m = junk_wrapped_amount.match(line)
+        if not m:
+            continue
+        window = lines[max(0, i - 3):i] + lines[i + 1:i + 4]
+        if any(anchor in w.lower() for w in window for anchor in _RECEIPT_STATUS_ANCHORS):
+            return m.group(1).replace(",", "")
+
+    # PhonePe doesn't print any of the anchor words near its amount at
+    # all — confirmed against a real screenshot, its "₹3" mis-OCRs as a
+    # short standalone line like "z3" with no "Rupees"/"Completed"/
+    # "Paid to" anywhere nearby to anchor on, so the fallback above
+    # never fires for it. Anchor-free is riskier (nothing ties the
+    # number to "this is the amount"), so two things narrow it down:
+    #   - at least one junk character must actually be present (leading
+    #     or trailing) — a mis-OCR'd currency symbol always leaves SOME
+    #     stray glyph behind, so a plain bare digit with zero junk on
+    #     either side (a bullet/icon numeral elsewhere on the receipt,
+    #     confirmed to show up as an isolated "3" near the share icons)
+    #     is excluded rather than treated as a candidate;
+    #   - it must be the ONLY such candidate line in the whole
+    #     screenshot — multiple candidates with no anchor to
+    #     disambiguate between them is too risky to guess at. A fully
+    #     bare digit-only line (see bare_digit_only_line below) is
+    #     included in the same pool, length-capped so it can't be
+    #     confused with a transaction/UTR ID;
+    # Uppercase-letter junk stays excluded (blocks "XX1901", "UTR", a
+    # transaction ID's leading letter, etc. from ever qualifying) EXCEPT
+    # for a single fused letter with nothing else on the line at all
+    # ("Z15") — the same corrupted-₹ case as the anchor branch above,
+    # just with no nearby anchor word this time. Still gated by the same
+    # "must be the ONLY candidate in the whole screenshot" rule below, so
+    # a genuine two-letter code like "XX1901" (with a second digit run
+    # elsewhere) can't slip through: it simply isn't unique.
+    bare_amount_line = re.compile(r'^([^\dA-Z\n]{0,2})([0-9][0-9,]*(?:\.\d{1,2})?)([^\dA-Z\n]{0,2})$')
+    single_letter_line = re.compile(r'^[A-Za-z]([0-9]{1,6})$')
+    # A UI style confirmed on a real screenshot prints the amount as a
+    # totally clean standalone line — no currency symbol survives AT
+    # ALL, not even a stray junk character (unlike every case above).
+    # Length-capped at 6 digits (well beyond any plan price) specifically
+    # so this can't ever grab a bare multi-digit transaction/UTR ID that
+    # happens to land on its own line — those all run 9+ digits.
+    bare_digit_only_line = re.compile(r'^([0-9]{1,6}(?:\.\d{1,2})?)$')
+    candidates = []
+    for l in lines:
+        m = bare_amount_line.match(l)
+        if m and (m.group(1) or m.group(3)):
+            candidates.append(m.group(2))
+            continue
+        m = single_letter_line.match(l)
+        if m:
+            candidates.append(m.group(1))
+            continue
+        m = bare_digit_only_line.match(l)
+        if m:
+            candidates.append(m.group(1))
+    if len(candidates) == 1:
+        return candidates[0].replace(",", "")
+    return None
+
+
+def _extract_amount_strong(text: str):
+    """Same first branches _extract_amount() tries first (an explicit
+    ₹/Rs/INR-prefixed number, a bare two-decimal line, or a bare
+    "500/-" line) — but stops there and returns None rather than
+    falling through to the guessier heuristics further down that
+    function (same-line-anchored trailing amount, junk-wrapped digits,
+    a single fused letter, or a bare digit-only line). Those later
+    fallbacks exist specifically to guess an amount back out of OCR
+    corruption, and a "guess" is exactly the case where a Google Vision
+    cross-check (see _vision_ocr_text) should be allowed to override
+    Tesseract rather than being trusted outright — confirmed against a
+    real screenshot where the bare-digit-only-line fallback confidently
+    (and wrongly) returned "715" for what was actually a ₹15 payment,
+    because the ₹ glyph had fused into an extra leading digit rather
+    than vanishing cleanly the way that fallback's comment assumes."""
+    for pattern in _AMOUNT_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return m.group(1).replace(",", "")
+    return None
+
+
+def _amounts_equal(a, b) -> bool:
+    """Compares screenshot amounts numerically, not as strings — OCR
+    often reads '₹15.00' where the stored plan rate is just '15', and a
+    plain string compare would wrongly call that a mismatch."""
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def _rupee_fusion_corrected_amount(amount_read, claimed_amount):
+    """Checks for one specific, now repeatedly-confirmed OCR failure:
+    an extra stray digit getting fused onto the true amount — either
+    PREPENDED (the ₹ glyph misread as a leading digit) or APPENDED (an
+    extra trailing digit from some other artifact of the glyph/font).
+    Confirmed on the same real ₹15 payment across three engines/reads —
+    Tesseract returned "215" and "715" (leading-digit fusion),
+    OCR.space returned "315" (also leading) — and, separately, on a
+    real ₹20 payment, OCR.space this time returned "200" (a TRAILING
+    zero appended instead). Four different engines/reads, four
+    different extra digits, front or back, same two real amounts —
+    that pattern (an extra digit at one end, not the specific digit or
+    which end) is the signature of this bug, not of a genuinely
+    different, wrong amount.
+
+    Returns the corrected amount as a string if stripping exactly the
+    FIRST or LAST character of amount_read produces a number that
+    EXACTLY equals the plan's current, live price (from
+    load_plan_rates() — never a hardcoded guess), else None. Tries
+    stripping the front first (the more commonly observed case so far).
+
+    Deliberately conservative: this is used to move a would-be
+    auto-REJECT into manual admin review with a note, never straight
+    to auto-approve (see _handle_screenshot) — matching the claimed
+    price after stripping a digit is suggestive, not proof, since a
+    genuinely wrong amount could in principle collide with this same
+    pattern by coincidence. An admin still looks at the actual
+    screenshot before anything is approved."""
+    if not amount_read or claimed_amount is None:
+        return None
+    if len(amount_read) < 2:
+        return None
+    for candidate in (amount_read[1:], amount_read[:-1]):
+        if not re.match(r'^[0-9]+(\.[0-9]{1,2})?$', candidate):
+            continue
+        if _amounts_equal(candidate, claimed_amount):
+            return candidate
+    return None
+
+
+def _normalize_meridiem(raw: str) -> str:
+    """"11:06am" (no space before am/pm) is exactly how GPay prints it —
+    but every %I:%M %p format below requires a space there, so strptime
+    rejected it outright and the date silently fell back to "couldn't
+    be auto-confirmed" even though it parsed and extracted fine.
+    Inserting the missing space before matching fixes that without
+    doubling every format string in _DATE_TRY_FORMATS."""
+    return re.sub(r'(\d)\s*(am|pm)\b', r'\1 \2', raw, flags=re.IGNORECASE)
+
+
+def _normalize_month_abbrev(raw: str) -> str:
+    """"26 Sept 2026" is a real, common app rendering — but Python's
+    strptime is strict: %b only matches the exact 3-letter "Sep", %B
+    only the full "September", so the informal 4-letter "Sept" matches
+    NEITHER and parsing silently fails. Confirmed as a real bug: the
+    date was captured as text just fine (shown correctly in the log's
+    "OCR date" line) but never became a usable datetime, so the reject
+    message wrongly said "no date/time could be read at all" when it
+    plainly had been — this closes that specific gap. "Sept" is the
+    only month name in English with a commonly-used 4-letter informal
+    abbreviation that differs from strptime's expected 3-letter one
+    (compare "Sept" vs "Sep" — every other month's informal abbreviation
+    already matches its formal 3-letter one, e.g. nobody writes "Jant"
+    for January), so this is the one targeted substitution needed rather
+    than a general-purpose fuzzy month matcher."""
+    return re.sub(r'\bSept\b', 'Sep', raw, flags=re.IGNORECASE)
+
+
+def _extract_datetime(text: str):
+    """Returns (raw_string, parsed_datetime_or_None)."""
+    for pattern in _DATE_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            raw = m.group(1)
+            normalized = _normalize_month_abbrev(_normalize_meridiem(raw))
+            for fmt in _DATE_TRY_FORMATS:
+                try:
+                    return raw, datetime.datetime.strptime(normalized, fmt)
+                except ValueError:
+                    continue
+            return raw, None
+
+    for reversed_pattern in (_TIME_ON_DATE_PATTERN, _TIME_COMMA_DATE_PATTERN):
+        m = reversed_pattern.search(text)
+        if m:
+            time_part, date_part = m.group(1), m.group(2)
+            raw = f"{date_part}, {time_part}"
+            normalized = _normalize_month_abbrev(_normalize_meridiem(raw))
+            for fmt in _DATE_TRY_FORMATS:
+                try:
+                    return raw, datetime.datetime.strptime(normalized, fmt)
+                except ValueError:
+                    continue
+            return raw, None
+
+    # Date-then-time already in the right order, just joined with "at"
+    # instead of a comma (see _DATE_AT_TIME_PATTERN above).
+    m = _DATE_AT_TIME_PATTERN.search(text)
+    if m:
+        date_part, time_part = m.group(1), m.group(2)
+        raw = f"{date_part}, {time_part}"
+        normalized = _normalize_month_abbrev(_normalize_meridiem(raw))
+        for fmt in _DATE_TRY_FORMATS:
+            try:
+                return raw, datetime.datetime.strptime(normalized, fmt)
+            except ValueError:
+                continue
+        return raw, None
+
+    # Last resort: a year-less date (see _DATE_PATTERN_NO_YEAR — confirmed
+    # on a real Paytm receipt, "26 Sep, 09:09 PM"). Tried only after every
+    # year-containing pattern above has failed, so a screenshot that DOES
+    # print a year always matches one of those more specific patterns
+    # first rather than this one.
+    m = _DATE_PATTERN_NO_YEAR.search(text)
+    if m:
+        date_part, time_part = m.group(1), m.group(2)
+        raw = f"{date_part}, {time_part}"
+        current_year = _now_ist_naive().year
+        normalized = _normalize_month_abbrev(_normalize_meridiem(f"{date_part} {current_year}, {time_part}"))
+        for fmt in _DATE_TRY_FORMATS:
+            try:
+                return raw, datetime.datetime.strptime(normalized, fmt)
+            except ValueError:
+                continue
+        return raw, None
+
+    return None, None
+
+
+# Pulls the UPI/bank transaction reference out of the receipt text —
+# every app prints one of these somewhere ("UPI transaction ID",
+# "UPI Ref No", or GPay's separate "Google transaction ID"). Used to
+# catch someone submitting the SAME already-approved screenshot again
+# (see _handle_screenshot) — a transaction ID is unique per payment, so
+# it survives even when the amount/date happen to still fall inside the
+# recency window on a second submission.
+_TXN_ID_PATTERNS = [
+    re.compile(r'UPI\s+transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'UPI\s+Ref\.?\s*No\.?[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'Google\s+transaction\s+ID[:\s]*([A-Za-z0-9_]{6,})', re.IGNORECASE),
+    # PhonePe doesn't use either of the above labels — it prints its own
+    # "PhonePe Transaction ID" line, and separately a bank "UTR" number.
+    # Either one uniquely identifies the payment, so both count.
+    re.compile(r'PhonePe\s+Transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'UTR[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    # Other apps' own labels for the same idea (BHIM/Amazon Pay/Cred/
+    # generic bank apps) — checked last since they're generic enough
+    # that a more specific label above should win when both are present.
+    re.compile(r'Order\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'Transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+    re.compile(r'Ref(?:erence)?\.?\s*(?:No\.?|Number)[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
+]
+
+
+def _extract_txn_id(text: str):
+    for pattern in _TXN_ID_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _payee_name_matches(text: str) -> bool:
+    """True if the screenshot's OCR text mentions our UPI account name —
+    i.e. the payment actually went to us, not to someone else's ID (or
+    this isn't a payment screenshot at all)."""
+    return PAYEE_NAME_HINT.lower() in text.lower()
+
+
+# C2PA ("Coalition for Content Provenance and Authenticity") is the
+# industry-standard metadata format that OpenAI's image tools (DALL-E /
+# ChatGPT image generation AND editing) embed into every image they
+# generate or touch, by default, unless the person doing the editing
+# deliberately strips it — a signed manifest recording that the image
+# was AI-generated/edited. Confirmed on a real screenshot forwarded to
+# us as a suspected fake: it contained a JUMBF box with a "urn:c2pa:..."
+# manifest ID and a "c2pa.icon" assertion — while all 5 of our confirmed
+# GENUINE phone screenshots (PhonePe, GPay, Paytm, Navi, and a generic
+# UI) have absolutely none of these byte sequences anywhere in the file.
+# A real screenshot taken directly on a phone is never run through an
+# AI image pipeline, so this can never appear by accident.
+#
+# Deliberately a raw byte-signature scan across the WHOLE file rather
+# than parsing PNG chunks or JPEG APP11 segments specifically — C2PA's
+# JUMBF container format always spells out these exact ASCII box-type
+# strings ("jumb", "jumd", "c2pa") regardless of whether it's embedded
+# as a PNG "caBX" chunk, a JPEG APP11 marker, or something else
+# entirely, so this one check covers every container format without
+# needing separate parsers for each, and needs no image library at all.
+#
+# This is NOT bulletproof: someone could deliberately strip this
+# metadata (e.g. by re-saving through an editor that doesn't preserve
+# it, or by photographing/re-screenshotting the AI output on another
+# device) before sending it. It's a real, zero-cost, zero-false-positive
+# first line of defense against the straightforward case — someone
+# generating or editing a screenshot with an AI tool and sending the
+# direct output — not a complete anti-fraud solution on its own.
+_C2PA_SIGNATURES = (b"c2pa", b"C2PA", b"jumd", b"jumb")
+
+
+def _has_ai_provenance_metadata(file_bytes: bytes) -> bool:
+    return any(sig in file_bytes for sig in _C2PA_SIGNATURES)
+
+
+# A typical phone screenshot is ~576-720px wide. These targets are
+# chosen to land at the SAME effective resolution as the 3x/4x
+# multipliers that were validated against real screenshots from all
+# four apps (576*3=1728, 576*4=2304) — so a normal screenshot gets
+# almost exactly the same treatment as before, but a much
+# higher-resolution image (a full camera photo instead of a
+# screenshot) gets scaled DOWN to this same target rather than
+# multiplied up even further, which is pure wasted Tesseract time on
+# an image that's already more than sharp enough.
+_SPARSE_TARGET_WIDTH = 1728
+_BLOCK_TARGET_WIDTH = 2304
+
+
+def _scaled_to_width(image, target_width):
+    scale = target_width / image.width
+    return image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
+
+
+def _ocr_variants(image):
+    """Yields (image, tesseract_config) preprocessing variants to try
+    OCR on, in order — most broadly reliable first, based on testing
+    against real screenshots from all four apps (GPay, PhonePe, Paytm,
+    Navi).
+
+    The FIRST variant uses --psm 11 ("sparse text — find as much text
+    as possible, no particular order"), not the block-text mode used
+    everywhere else. This matters a lot: on every real screenshot
+    tested, the large, prominently-styled amount text (GPay's giant
+    centered "₹3", Navi's "₹20" next to a green checkmark) was DROPPED
+    ENTIRELY by block-text mode — not misread, just silently absent
+    from the output — because it sits alone in open space that a
+    layout-analysis pass doesn't recognize as a text block. Sparse mode
+    finds it as its own isolated text fragment instead. This one change
+    is what turns a "not detected" into a correctly-read amount for
+    GPay/Navi's large-centered-amount style, and it reads everything
+    else on the receipt (date, payee, transaction ID) at least as well
+    as block mode does, so nothing is traded away to get it.
+
+    Deliberately does NOT try the image at native resolution first: at
+    native size, and even at a plain 2x upscale, confirmed on a real
+    PhonePe screenshot that Tesseract fuses the ₹ glyph directly INTO
+    the digits themselves (e.g. "₹15" reads as "215", a corrupted but
+    still valid-looking number) rather than dropping it — which the
+    amount-without-a-currency-symbol fallback would otherwise wrongly
+    accept as genuine. A 4x+ upscale reliably avoids that fusion (₹
+    gets dropped/mangled into a harmless standalone stray character
+    instead, which the fallback patterns are built to see through), so
+    that's what's used for the block-mode passes below.
+
+    A single OCR pass can still fail on screenshots that have been
+    re-compressed (e.g. forwarded through Telegram, which re-encodes
+    every photo it stores) even when the same screenshot at slightly
+    different processing reads perfectly — so if sparse mode doesn't
+    find an amount, progressively different variants are tried.
+
+    Scaling targets a fixed output WIDTH rather than multiplying the
+    input by a fixed factor (see _scaled_to_width below). A first
+    attempt at simply lowering the multiplier to 1.5x for speed was
+    tested against 5 real screenshots and looked fine on the surface
+    (payee name still found on all of them) but actually silently
+    broke amount accuracy on 2 of them — the ₹-fusion-into-digits
+    problem above came back at that scale, and "₹15" was read as "215"
+    again. A width TARGET keeps every screenshot at the same effective
+    resolution that was actually validated to read correctly,
+    regardless of the phone's screenshot resolution — and, unlike a
+    fixed multiplier, it also means a much larger image (e.g. a full
+    camera photo someone sends instead of a screenshot) gets scaled
+    DOWN to that same target instead of being blown up even further,
+    which is what made an unrelated photo take 30 real seconds and 4
+    full OCR passes before this fix."""
+    sparse = _scaled_to_width(image, _SPARSE_TARGET_WIDTH)
+    yield sparse, "--psm 11"
+    # Block-text mode, upscaled enough to avoid the ₹-fusion-into-digits
+    # problem described above.
+    upscaled = _scaled_to_width(image, _BLOCK_TARGET_WIDTH)
+    yield upscaled, "--psm 6"
+    # Grayscale + autocontrast — helps on low-contrast / heavily
+    # compressed screenshots where a plain upscale isn't enough alone.
+    yield ImageOps.autocontrast(upscaled.convert("L")), "--psm 6"
+    # Dark-theme receipts (white text on black) often read better
+    # inverted — try that last since it's the most likely to mangle
+    # OTHER text (date/payee) even when it helps the amount.
+    yield ImageOps.invert(upscaled), "--psm 6"
+
+
+# --psm 6 ("assume a single uniform block of text") skips Tesseract's
+# orientation/script-detection and multi-column layout analysis, both
+# of which the default mode (psm 3) always runs and a tall single-column
+# receipt screenshot never needs — measurably faster per call on this
+# kind of image, and just as accurate since there's no real multi-column
+# layout here to mis-segment.
+_TESS_CONFIG = "--psm 6"
+
+
+def _ocr_top_band(image) -> str:
+    """OCRs just the top ~15% of the screenshot on its own, upscaled
+    3x. Confirmed on a real PhonePe screenshot: Tesseract silently
+    drops an entire colored status band (its white-on-green "Transaction
+    Successful / 01:08 PM on 30 Aug 2026" header) when OCR'ing the full
+    tall screenshot in one pass — a layout-segmentation quirk, not a
+    contrast problem, since the exact same crop reads perfectly on its
+    own. Every PSM mode tried on the full image had the same blind
+    spot, so this runs the top band as a second, separate OCR pass and
+    the caller merges its text in rather than trying to fix the
+    full-image pass itself. Harmless on screenshots that don't have a
+    colored header (Paytm/GPay) — it just re-reads the plain status bar
+    text that the main pass already captured fine, which the amount/
+    date extractors below simply ignore. Only called when the main pass
+    hasn't already found both an amount and a date (see ocr_screenshot)
+    — most screenshots don't need this extra pass at all."""
+    band_height = max(1, int(image.height * 0.15))
+    band = image.crop((0, 0, image.width, band_height))
+    band = band.resize((band.width * 3, band_height * 3), Image.LANCZOS)
+    try:
+        return pytesseract.image_to_string(band, config=_TESS_CONFIG)
+    except Exception:
+        return ""
+
+
+# Google Cloud Vision's REST endpoint for one-shot text detection — a
+# plain API-key call (no OAuth/service-account signing needed), which
+# is why the setup only asks for GOOGLE_VISION_API_KEY. See
+# https://cloud.google.com/vision/docs/ocr for the request shape.
+_VISION_API_URL = "https://vision.googleapis.com/v1/images:annotate"
+
+# Google Vision is a full ML-based OCR service — meaningfully better
+# than Tesseract at exactly the case Tesseract struggles with (small,
+# colored, low-contrast text on custom app UIs, confirmed against a
+# real screenshot where Tesseract fused a ₹ glyph straight into the
+# amount's digits). It's also a paid-beyond-free-tier network call, so
+# this is deliberately used as a FALLBACK only — see where it's called
+# in _run_ocr_sync — never as a replacement for the free, local,
+# already-fast Tesseract pass that handles the everyday GPay/PhonePe/
+# Paytm/Navi case just fine on its own.
+def _vision_ocr_text(photo_bytes: bytes) -> str:
+    """Sends the raw screenshot to Google Cloud Vision's TEXT_DETECTION
+    and returns whatever full-page text it found, or "" on ANY failure
+    (no key configured, network error, quota exceeded, bad response,
+    timeout) — this must never raise, since it's a best-effort fallback
+    on top of a Tesseract result that's already in hand either way."""
+    if not GOOGLE_VISION_API_KEY:
+        return ""
+    try:
+        body = {
+            "requests": [{
+                "image": {"content": base64.b64encode(photo_bytes).decode("ascii")},
+                "features": [{"type": "TEXT_DETECTION"}],
+            }]
+        }
+        resp = requests.post(
+            _VISION_API_URL,
+            params={"key": GOOGLE_VISION_API_KEY},
+            json=body,
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            # Google always sends a detailed JSON body on failure (e.g.
+            # {"error": {"code": 403, "message": "...", "status":
+            # "PERMISSION_DENIED"}}) — resp.raise_for_status() would
+            # discard all of that and leave only a generic "403 Client
+            # Error: Forbidden" in the log, which is exactly what
+            # happened in production and made this genuinely
+            # undiagnosable from the logs alone (billing not enabled?
+            # API not enabled? key restricted to the wrong thing?
+            # revoked? all four look identical as a bare "403"). Log
+            # Google's own message so the NEXT failure is actually
+            # diagnosable without more guessing.
+            try:
+                err_detail = resp.json().get("error", {}).get("message", resp.text[:300])
+            except Exception:
+                err_detail = resp.text[:300]
+            logger.warning(f"Vision API HTTP {resp.status_code}: {err_detail}")
+            return ""
+        data = resp.json()
+        vision_response = data.get("responses", [{}])[0]
+        if "error" in vision_response:
+            logger.warning(f"Vision API returned an error: {vision_response['error']}")
+            return ""
+        annotation = vision_response.get("fullTextAnnotation")
+        if annotation:
+            return annotation.get("text", "")
+        # Fallback shape Vision sometimes uses instead of
+        # fullTextAnnotation — textAnnotations[0] is the whole-image text.
+        text_annotations = vision_response.get("textAnnotations")
+        if text_annotations:
+            return text_annotations[0].get("description", "")
+        return ""
+    except Exception as e:
+        logger.warning(f"Vision API OCR call failed, continuing with Tesseract-only result: {e}")
+        return ""
+
+
+# OCR.space's free-tier endpoint. Unlike Google Cloud Vision, this needs
+# no billing account and no Cloud Console setup — get a key instantly
+# at https://ocr.space/ocrapi/freekey (just an email, no card). Trades
+# some accuracy on unusual/stylized screenshots for being trivial to
+# actually turn on, which is the point: see _cloud_ocr_text below for
+# how this and Vision are picked between.
+_OCR_SPACE_API_URL = "https://api.ocr.space/parse/image"
+
+
+def _ocrspace_ocr_text(photo_bytes: bytes) -> str:
+    """Sends the raw screenshot to OCR.space's OCREngine 2 (their more
+    accurate engine) and returns whatever text it found, or "" on ANY
+    failure (no key, network error, quota exceeded, bad response,
+    timeout) — same contract as _vision_ocr_text, so callers don't need
+    to care which cloud engine actually ran."""
+    if not OCR_SPACE_API_KEY:
+        return ""
+    try:
+        b64 = base64.b64encode(photo_bytes).decode("ascii")
+        resp = requests.post(
+            _OCR_SPACE_API_URL,
+            data={
+                "apikey": OCR_SPACE_API_KEY,
+                "base64Image": f"data:image/png;base64,{b64}",
+                "OCREngine": 2,
+                "scale": "true",
+                "language": "eng",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("IsErroredOnProcessing"):
+            logger.warning(f"OCR.space returned an error: {data.get('ErrorMessage')}")
+            return ""
+        results = data.get("ParsedResults") or []
+        if results:
+            return results[0].get("ParsedText", "")
+        return ""
+    except Exception as e:
+        logger.warning(f"OCR.space API call failed, continuing with Tesseract-only result: {e}")
+        return ""
+
+
+def _cloud_ocr_text(photo_bytes: bytes) -> str:
+    """Single entry point for "ask a cloud OCR engine instead of this
+    host's CPU" — tries Google Vision first (generally the more
+    accurate of the two on colorful/stylized custom app UIs), then
+    OCR.space, and returns "" if neither is configured or both fail.
+    Every call site in this file should go through this rather than
+    calling _vision_ocr_text/_ocrspace_ocr_text directly, so adding a
+    third engine later only means changing this one function."""
+    if GOOGLE_VISION_API_KEY:
+        text = _vision_ocr_text(photo_bytes)
+        if text:
+            logger.info("Cloud OCR: Google Vision succeeded.")
+            return text
+    if OCR_SPACE_API_KEY:
+        text = _ocrspace_ocr_text(photo_bytes)
+        if text:
+            logger.info("Cloud OCR: OCR.space succeeded.")
+            return text
+    if not GOOGLE_VISION_API_KEY and not OCR_SPACE_API_KEY:
+        logger.info("Cloud OCR: neither GOOGLE_VISION_API_KEY nor OCR_SPACE_API_KEY is set — Tesseract only.")
+    return ""
+
+
+def _run_ocr_sync(photo_bytes: bytes) -> dict:
+    """All the actual CPU-bound work (image decode/resize, every
+    Tesseract call) — deliberately a plain SYNCHRONOUS function, never
+    called directly. ocr_screenshot() below runs this in a background
+    thread via asyncio.to_thread so it can't block the bot's event loop.
+
+    Before this, pytesseract.image_to_string() and PIL's resize/convert
+    calls ran directly inside an `async def` on the bot's single event
+    loop thread — CPU-bound work like that does NOT yield control back
+    to asyncio while it runs. So for the full duration of every OCR
+    pass (each a real, multi-hundred-millisecond-to-multi-second
+    Tesseract call), the ENTIRE bot was frozen: not just the user who
+    sent the screenshot, but every other user's messages, every button
+    tap, everything — all queued up behind it. Running it in a thread
+    doesn't make Tesseract itself faster, but it means nothing else the
+    bot does has to wait for it.
+
+    IMPORTANT if this is deployed on a Koyeb Free Instance: that plan
+    is documented by Koyeb itself as 512MB RAM / 0.1 vCPU — a small
+    fraction of a real CPU core, explicitly called out as too little
+    for CPU-intensive workloads. Tesseract, especially the 1728-2304px
+    upscales this file uses for accuracy, is exactly that kind of
+    workload. On a host that constrained, the SAME Tesseract call that
+    takes ~1-2s on a normal machine can very plausibly take 10-30x
+    longer — which lines up with reports of screenshots taking 2-3+
+    minutes to verify. Running in a background thread (above) stops it
+    from freezing the whole bot, but it does NOT make the CPU any
+    faster. See where GOOGLE_VISION_API_KEY is checked just below for
+    the fix that actually addresses this: offloading the OCR work
+    itself onto Google's servers instead of this host's CPU."""
+    result = {
+        "amount": None, "raw_date": None, "parsed_date": None,
+        "confidence": "low", "ocr_text": "", "payee_ok": False,
+        "ocr_read_ok": False, "txn_id": None,
+    }
+    cloud_text = ""
+    try:
+        # Tried FIRST, before any Tesseract call, when a key is
+        # configured — not just as a fallback for hard cases anymore.
+        # Vision runs on Google's servers, so it's bounded mainly by
+        # network latency (typically 1-3s) no matter how weak this
+        # host's CPU is — it sidesteps the Koyeb 0.1-vCPU bottleneck
+        # entirely instead of just working around it. This is also
+        # simply a more accurate OCR engine than Tesseract on the kind
+        # of small, colorful, custom-app-UI screenshot this bot has
+        # struggled with (see _vision_ocr_text's docstring). If it
+        # finds a usable amount on its own, the entire CPU-heavy
+        # Tesseract pipeline below is skipped outright.
+        #
+        # Trade-off worth knowing: this means a Vision API call now
+        # happens on EVERY submitted screenshot (not just the ambiguous
+        # ones), which uses up Google's free quota faster. Google
+        # Vision's free tier covers the first 1,000 images/month; usage
+        # beyond that is billed per image. For a bot handling a modest
+        # number of payment screenshots a month this is likely still
+        # free or close to it — but if volume grows, worth keeping an
+        # eye on the Cloud Console's Vision API usage/billing page.
+        if GOOGLE_VISION_API_KEY or OCR_SPACE_API_KEY:
+            cloud_text = _cloud_ocr_text(photo_bytes)
+            cloud_text = _strip_ad_content(cloud_text)
+            cloud_amount = _extract_amount(cloud_text) if cloud_text else None
+            if cloud_amount:
+                result["ocr_text"] = cloud_text
+                result["ocr_read_ok"] = True
+                result["amount"] = cloud_amount
+                raw_date, parsed_date = _extract_datetime(cloud_text)
+                result["raw_date"] = raw_date
+                result["parsed_date"] = parsed_date
+                result["payee_ok"] = _payee_name_matches(cloud_text)
+                result["txn_id"] = _extract_txn_id(cloud_text)
+                if parsed_date:
+                    age = _now_ist_naive() - parsed_date
+                    if datetime.timedelta(0) <= age <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS):
+                        result["confidence"] = "high"
+                return result
+
+        # Neither cloud engine was configured, or both failed/found
+        # nothing usable — fall back to the original Tesseract pipeline
+        # exactly as before. cloud_text (if anything was already
+        # fetched above) is reused as an extra merge source further
+        # down instead of calling either API a second time.
+        image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
+
+        best_text = ""
+        found_payee_anywhere = False
+        likely_not_payment = False
+        for idx, (variant, config) in enumerate(_ocr_variants(image)):
+            variant_text = pytesseract.image_to_string(variant, config=config)
+            variant_text = _strip_ad_content(variant_text)
+            if len(variant_text.strip()) > len(best_text.strip()):
+                best_text = variant_text
+            if _extract_amount(variant_text):
+                # This variant found a usable amount — stop here. Further,
+                # more aggressive variants can sometimes read WORSE on the
+                # surrounding text (date/payee) once heavily processed.
+                best_text = variant_text
+                break
+            if _payee_name_matches(variant_text):
+                found_payee_anywhere = True
+            # Fast-fail for screenshots that plainly aren't a payment at
+            # all (a random photo, a chat screenshot, anything
+            # unrelated) — confirmed as a real, common case: someone
+            # sends a completely unrelated photo and the bot used to
+            # burn all 4 increasingly expensive OCR passes chasing an
+            # amount/payee that was never going to be there before
+            # finally forwarding it to admin. After the first two
+            # variants (sparse-text and block-mode — the two most
+            # different rendering approaches, so this isn't just one
+            # unlucky pass), if OCR clearly produced real, substantial
+            # text but NEITHER an amount NOR our payee name has shown up
+            # anywhere yet, this isn't a payment screenshot. The
+            # remaining variants (grayscale, inverted) exist purely to
+            # refine AMOUNT readability on a screenshot that already
+            # looks like a receipt — they don't conjure payee text that
+            # plain isn't in the image. Bail out now so an unrelated
+            # photo reaches "forward to admin" in 2 OCR calls instead
+            # of 4.
+            if idx >= 1 and len(best_text.strip()) >= 20 and not found_payee_anywhere:
+                likely_not_payment = True
+                break
+
+        # The top-band pass exists purely to rescue a header Tesseract
+        # blind-spots on the full image (see _ocr_top_band) — if the
+        # main pass above already found BOTH an amount and a date, that
+        # blind spot didn't bite this time, so skip the extra full
+        # Tesseract call entirely. Also skipped when the fast-fail above
+        # already concluded this isn't a payment screenshot at all —
+        # reading its header text has nothing left to offer either way.
+        # This is the single biggest lever on per-screenshot latency:
+        # most screenshots now finish in one OCR call instead of up to
+        # four.
+        _, quick_date = _extract_datetime(best_text)
+        if likely_not_payment or (_extract_amount(best_text) and quick_date):
+            text = best_text
+        else:
+            text = _ocr_top_band(image) + "\n" + best_text
+        text = _strip_ad_content(text)
+
+        result["ocr_text"] = text
+        result["ocr_read_ok"] = len(text.strip()) >= 20
+        result["amount"] = _extract_amount(text)
+        raw_date, parsed_date = _extract_datetime(text)
+        result["raw_date"] = raw_date
+        result["parsed_date"] = parsed_date
+        result["payee_ok"] = _payee_name_matches(text)
+        result["txn_id"] = _extract_txn_id(text)
+
+        # Tesseract found nothing, OR only found an amount via one of
+        # the weaker last-resort heuristics (see _extract_amount_strong
+        # — confirmed on a real screenshot to confidently return a
+        # WRONG amount when the ₹ glyph fuses into an extra digit
+        # instead of vanishing cleanly) — and this doesn't look like an
+        # unrelated photo. Both cases are worth a cloud OCR cross-check
+        # (see _cloud_ocr_text) — reusing cloud_text from above if it
+        # was already fetched, so this never calls either API twice for
+        # one screenshot. Skipped entirely (falls straight through to
+        # whatever Tesseract already found, unchanged) when neither
+        # GOOGLE_VISION_API_KEY nor OCR_SPACE_API_KEY is set, or both
+        # calls fail, so this can never make things worse than before.
+        if not likely_not_payment and _extract_amount_strong(text) is None:
+            if not cloud_text and (GOOGLE_VISION_API_KEY or OCR_SPACE_API_KEY):
+                cloud_text = _cloud_ocr_text(photo_bytes)
+                cloud_text = _strip_ad_content(cloud_text)
+            if cloud_text:
+                combined = text + "\n" + cloud_text
+                cloud_amount = _extract_amount(combined)
+                if cloud_amount:
+                    result["ocr_text"] = combined
+                    result["ocr_read_ok"] = True
+                    result["amount"] = cloud_amount
+                    raw_date, parsed_date = _extract_datetime(combined)
+                    result["raw_date"] = raw_date
+                    result["parsed_date"] = parsed_date
+                    result["payee_ok"] = _payee_name_matches(combined)
+                    result["txn_id"] = _extract_txn_id(combined)
+
+        if result["amount"] and parsed_date:
+            age = _now_ist_naive() - parsed_date
+            if datetime.timedelta(0) <= age <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS):
+                result["confidence"] = "high"
+    except Exception as e:
+        logger.warning(f"OCR failed on a payment screenshot: {e}")
+    return result
+
+
+async def ocr_screenshot(photo_bytes: bytes) -> dict:
+    """Runs OCR — trying a few preprocessing variants (see
+    _ocr_variants), stopping as soon as one successfully reads an amount
+    — and returns a dict with whatever was extracted, plus a
+    'confidence' verdict. Never raises — OCR failing just means low
+    confidence, not a crash.
+
+    The actual work happens in _run_ocr_sync(), off the event loop (see
+    its docstring) — this wrapper just bridges sync <-> async and
+    handles the case where OCR isn't installed at all."""
+    if not OCR_AVAILABLE:
+        return {
+            "amount": None, "raw_date": None, "parsed_date": None,
+            "confidence": "low", "ocr_text": "", "payee_ok": False,
+            "ocr_read_ok": False, "txn_id": None,
+        }
+    # Logged so a slow request (reported as "2+ minutes" on Koyeb) can
+    # actually be diagnosed instead of guessed at — this number tells
+    # you whether the delay is in here (Tesseract/Vision) or somewhere
+    # else entirely (Telegram download, event-loop congestion from other
+    # handlers, Koyeb cold start/CPU throttling on a free-tier instance).
+    _t0 = asyncio.get_event_loop().time()
+    result = await asyncio.to_thread(_run_ocr_sync, photo_bytes)
+    elapsed = asyncio.get_event_loop().time() - _t0
+    if elapsed > 5:
+        logger.warning(f"OCR took {elapsed:.1f}s (amount={result.get('amount')!r}) — investigate if this recurs.")
+    else:
+        logger.info(f"OCR took {elapsed:.1f}s (amount={result.get('amount')!r}).")
+    return result
+
+
+# ── Entry points: /start ──────────────────────────────────────────────
+
+def _welcome_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🧾 Submit Payment Screenshot", callback_data="submit_upi_screenshot")]])
+
+
+def _start_markup() -> InlineKeyboardMarkup:
+    # /start specifically shows BOTH entry points side by side — payment
+    # submission and a direct way to reach an admin — rather than just
+    # the single payment button _welcome_markup() above still uses for
+    # /plan and /myplan (those are already about payment, a second
+    # "talk to admin" button there would be redundant clutter).
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧾 Submit Payment Screenshot", callback_data="submit_upi_screenshot")],
+        [InlineKeyboardButton("💬 Talk to Admin", callback_data="talk_to_admin")],
+    ])
+
+
+@Client.on_message(filters.private & filters.command("start"))
+async def admin_bot_start(client, message):
+    await message.reply_text(
+        "<b>👋 Welcome to Goflix Payments</b>\n\n"
+        "Paid for premium via UPI? Tap below to submit your screenshot and an admin will verify it shortly.\n\n"
+        "Have a question instead? Tap Talk to Admin, or just type your message here any time.",
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=_start_markup()
+    )
+
+
+@Client.on_callback_query(filters.regex("^talk_to_admin$"))
+async def talk_to_admin_cb(client, query):
+    """Doesn't need to do anything beyond prompt them — whatever they
+    type next isn't claimed by any other handler, so it naturally falls
+    through to the support relay below and reaches an admin."""
+    await query.answer()
+    sent = await client.send_message(
+        chat_id=query.from_user.id,
+        text="💬 Go ahead and type your message — an admin will reply here shortly."
+    )
+    asyncio.create_task(_delayed_delete(sent, 60))
+
+
+# ── /plan and /myplan also work directly on this bot ────────────────────
+# Same info as the main bot's versions, just shown here too since users
+# often end up talking to this bot anyway.
+
+@Client.on_message(filters.private & filters.command("plan"))
+async def admin_bot_plan_cmd(client, message):
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+    rates = await load_plan_rates(MAIN_BOT_ID)
+    caption_text = PAYMENT_TEXT.format(plan_rates=format_plan_rates(rates["upi"]))
+    sent = await message.reply_photo(
+        photo=PAYMENT_QR,
+        caption=caption_text,
+        parse_mode=enums.ParseMode.HTML,
+        has_spoiler=True,
+        reply_markup=_welcome_markup(),
+    )
+    asyncio.create_task(_delayed_delete(sent, 180))
+
+
+@Client.on_message(filters.private & filters.command("myplan"))
+async def admin_bot_myplan_cmd(client, message):
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+    user_id = message.from_user.id
+    if await db.has_premium_access(user_id):
+        remaining_time = await db.check_remaining_uasge(user_id)
+        expiry_time = remaining_time + datetime.datetime.now()
+        sent = await message.reply_text(
+            "✨ <b>Your Plan Details</b> ✨\n\n"
+            f"⏳ <b>Remaining Time :</b> {format_remaining_time(remaining_time)}\n"
+            f"📅 <b>Expires On :</b> {format_expiry_time(expiry_time)}\n\n"
+            "🔄 Extend your plan : /plan\n\n"
+            "Have a great day! 😊",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        asyncio.create_task(_delayed_delete(sent, 180))
+    else:
+        await message.reply_text(
+            "😢 You don't have any premium subscription yet.\n\nCheck out our plans: /plan",
+            reply_markup=_welcome_markup()
+        )
+
+
+@Client.on_callback_query(filters.regex("^submit_upi_screenshot$"))
+async def start_screenshot_flow_cb(client, query):
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return await query.answer()
+    await query.answer()
+    if MAIN_BOT_ID is None:
+        return await client.send_message(query.from_user.id, "⚠️ Bot misconfigured (BOT_TOKEN missing) — contact an admin.")
+
+    rates = await load_plan_rates(MAIN_BOT_ID)
+    upi = rates["upi"]
+    btn = [
+        [InlineKeyboardButton(f"{PLAN_LABELS[p]} — {upi[p]}Rs", callback_data=f"claim_upi_plan_{p}")]
+        for p in ("week", "month", "3months", "6months")
+    ]
+    await client.send_message(
+        chat_id=query.from_user.id,
+        text="<b>Which plan did you pay for?</b>\n\nPick the one matching what you just paid.",
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(btn)
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^claim_upi_plan_(\w+)$"))
+async def claim_plan_then_ask_screenshot_cb(client, query):
+    plan = query.matches[0].group(1)
+    if plan not in PLAN_LABELS:
+        return await query.answer("Invalid plan.", show_alert=True)
+    await query.answer()
+
+    # The "which plan did you pay for?" picker message they just tapped
+    # is done its job the moment they tap it — its buttons are now
+    # stale (a second tap would just re-trigger this same handler with
+    # a plan that's already been acted on). Clean it up shortly after
+    # rather than leaving a dead button prompt sitting in the chat.
+    asyncio.create_task(_delayed_delete(query.message, 5))
+
+    # Did they already send a screenshot before picking a plan (caught by
+    # unsolicited_screenshot_cb below)? If so, use that instead of asking
+    # them to send it again — and reuse the OCR it already ran instead
+    # of paying for a second full read (Vision call included) of the
+    # exact same photo.
+    stashed_file_id, stashed_extracted = await db.pop_pending_screenshot(query.from_user.id)
+    if stashed_file_id:
+        await client.send_message(
+            chat_id=query.from_user.id,
+            text=f"<b>Got it — {PLAN_LABELS[plan]}.</b> Checking the screenshot you already sent…",
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await _handle_screenshot(
+            client, query.from_user, query.from_user.id, stashed_file_id, plan,
+            cached_extracted=stashed_extracted,
+        )
+
+    prompt = await client.send_message(
+        chat_id=query.from_user.id,
+        text=(
+            f"<b>Got it — {PLAN_LABELS[plan]}.</b>\n\n"
+            "Now send the payment screenshot as a photo (not a file/document).\n\n"
+            "Make sure the amount and date/time in the screenshot are clearly visible.\n\n"
+            "Send /cancel to abort."
+        ),
+        parse_mode=enums.ParseMode.HTML
+    )
+
+    try:
+        reply = await client.ask(
+            query.from_user.id, "Waiting for your screenshot…", timeout=600,
+            filters=filters.photo | (filters.text & filters.regex("^/cancel$"))
+        )
+    except TimeoutError:
+        return await prompt.reply_text("⌛ Timed out waiting for the screenshot. Tap /start again to retry.")
+
+    if reply.text and reply.text.strip() == "/cancel":
+        return await reply.reply_text("❌ Cancelled.")
+    if not reply.photo:
+        return await reply.reply_text("⚠️ That wasn't a photo. Tap /start again to retry.")
+
+    await _handle_screenshot(client, reply.from_user, reply.chat.id, reply.photo.file_id, plan)
+
+
+# ── Screenshot sent cold, with no plan picked yet ─────────────────────────
+
+@Client.on_message(filters.private & filters.photo & ~filters.user(ADMINS))
+async def unsolicited_screenshot_cb(client, message):
+    """Catches a screenshot sent straight into the chat with no /start
+    and no plan chosen (e.g. the user just pastes/forwards the photo).
+    If an active client.ask() is already waiting on a photo from this
+    user (the normal flow above), the ask_patch resolver (group=-1)
+    consumes it first and this handler never runs — so this only fires
+    for a genuinely cold screenshot.
+
+    Runs OCR first to check this actually looks like a payment
+    screenshot (an amount and/or our payee name shows up) before asking
+    which plan it's for — a random unrelated photo instead gets
+    forwarded to admins like any other message, not funneled into the
+    payment flow."""
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return
+
+    # OCR (up to 3 image-preprocessing passes, each a full Tesseract run)
+    # can take several seconds — worse on a constrained host. Without
+    # this, the user sees nothing at all until it finishes, which reads
+    # as the bot being stuck/delayed. Send the ack immediately, then
+    # edit it into the real prompt once OCR is done.
+    status_msg = await message.reply_text("🔍 Reading your screenshot…")
+
+    _dl_t0 = asyncio.get_event_loop().time()
+    photo_bytes = await client.download_media(message.photo.file_id, in_memory=True)
+    _dl_elapsed = asyncio.get_event_loop().time() - _dl_t0
+    if _dl_elapsed > 5:
+        logger.warning(f"Downloading the screenshot from Telegram took {_dl_elapsed:.1f}s.")
+    extracted = await ocr_screenshot(bytes(photo_bytes.getbuffer()))
+
+    if extracted["ocr_read_ok"] and extracted["amount"] is None and not extracted["payee_ok"]:
+        # OCR read the image fine but found nothing payment-shaped in it
+        # — genuinely not a payment screenshot. (If OCR failed outright,
+        # ocr_read_ok is False and we don't use that as a signal either
+        # way — better to assume it might be a payment and let the
+        # normal flow/admin review sort it out than to silently drop a
+        # real payment into the support inbox because OCR choked on it.)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        return await relay_user_question_to_admins_cb(client, message)
+
+    await db.set_pending_screenshot(message.from_user.id, message.photo.file_id, extracted)
+    rates = await load_plan_rates(MAIN_BOT_ID)
+    upi = rates["upi"]
+    btn = [
+        [InlineKeyboardButton(f"{PLAN_LABELS[p]} — {upi[p]}Rs", callback_data=f"claim_upi_plan_{p}")]
+        for p in ("week", "month", "3months", "6months")
+    ]
+    await status_msg.edit_text(
+        "<b>Got your screenshot — which plan did you pay for?</b>\n\nPick the one matching what you just paid.",
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(btn)
+    )
+
+
+async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, cached_extracted=None):
+    status_msg = await client.send_message(chat_id, "🔍 Reading your screenshot…")
+
+    _dl_t0 = asyncio.get_event_loop().time()
+    photo_bytes_io = await client.download_media(file_id, in_memory=True)
+    _dl_elapsed = asyncio.get_event_loop().time() - _dl_t0
+    if _dl_elapsed > 5:
+        logger.warning(f"Downloading the screenshot from Telegram took {_dl_elapsed:.1f}s.")
+    photo_bytes = bytes(photo_bytes_io.getbuffer())
+
+    # Checked FIRST, before any OCR at all — a simple byte scan, so this
+    # costs virtually nothing and a confirmed hit means there's nothing
+    # OCR could tell us that would change the outcome anyway (see
+    # _has_ai_provenance_metadata's docstring for what this catches and
+    # why it's trustworthy). This is also what makes a detected fake
+    # reject almost instantly instead of waiting through the OCR
+    # pipeline for something that was never going to pass anyway.
+    if _has_ai_provenance_metadata(photo_bytes):
+        request_id = await db.add_payment_request(
+            user_id=user.id, username=user.username or user.first_name,
+            screenshot_file_id=file_id, claimed_plan=claimed_plan,
+            extracted={
+                "amount": None, "raw_date": None, "parsed_date": None,
+                "confidence": "ai_generated", "ocr_text": "", "payee_ok": False,
+                "ocr_read_ok": False, "txn_id": None, "matched_plan": None,
+            },
+        )
+        appeal_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📮 Appeal to admin", callback_data=f"pay_appeal_{request_id}")]
+        ])
+        await status_msg.edit_text(
+            "❌ This image appears to have been generated or edited using an AI tool "
+            "(it contains embedded content-authenticity metadata) — rejected.\n\n"
+            "Please send the original, unedited screenshot of your actual payment. If you "
+            "believe this is a mistake, tap below to send it to an admin.",
+            reply_markup=appeal_btn,
+        )
+        await db.set_payment_request_status(request_id, "auto_rejected", None)
+        await _log_auto_rejection(
+            client, request_id, user, claimed_plan,
+            {"amount": None, "raw_date": None}, file_id, "ai_generated",
+        )
+        return
+
+    # Reuse the OCR result from unsolicited_screenshot_cb's first read
+    # when we have one (see pop_pending_screenshot) — same photo, so
+    # re-running Tesseract/Vision on it again would just be a second
+    # bill and a second wait for an answer we already have. Falls back
+    # to a fresh OCR run whenever there's nothing cached (the normal
+    # /start → pick plan → send screenshot order, or a stash saved
+    # before this field existed).
+    extracted = cached_extracted if cached_extracted is not None else await ocr_screenshot(photo_bytes)
+
+    rates = await load_plan_rates(MAIN_BOT_ID)
+    upi = rates["upi"]
+    claimed_amount = upi.get(claimed_plan)
+    amount_read = extracted["amount"]
+    amount_matches = _amounts_equal(amount_read, claimed_amount)
+    fusion_corrected_amount = None
+    if not amount_matches and amount_read:
+        # Would otherwise fall straight into the confirmed-wrong-amount
+        # auto-reject below — check for the ₹-fusion pattern first (see
+        # _rupee_fusion_corrected_amount's docstring). This can only
+        # ever soften a reject into a manual review, never create a new
+        # auto-approve, so it's a strict improvement for genuine
+        # customers being wrongly turned away — never a new risk.
+        fusion_corrected_amount = _rupee_fusion_corrected_amount(amount_read, claimed_amount)
+        if fusion_corrected_amount:
+            # Set here, unconditionally, rather than only inside whichever
+            # branch below ends up firing — confirmed necessary: a
+            # screenshot that's BOTH fusion-correctable AND rejected for
+            # an unrelated reason (e.g. a stale date, checked before the
+            # fusion branches below) used to show the raw misread amount
+            # with no indication the correction was ever found, making it
+            # look like amount detection had failed when it had actually
+            # succeeded. This is shown in every rejection's "OCR amount"
+            # line (see _log_auto_rejection) no matter which check ends
+            # up being the actual reason for the reject.
+            extracted["fusion_note"] = (
+                f"OCR read ₹{amount_read}, which doesn't match the {PLAN_LABELS[claimed_plan]} "
+                f"price (₹{claimed_amount}) — but ₹{fusion_corrected_amount} does, once what's "
+                f"likely a misread ₹ symbol is stripped off the front."
+            )
+            extracted["fusion_corrected_amount"] = fusion_corrected_amount
+    extracted["matched_plan"] = claimed_plan if amount_matches else None
+
+    # Five-way decision:
+    #   reject (duplicate)  -> this exact transaction (by OCR'd txn ID)
+    #             was already approved before -> someone resubmitting an
+    #             already-used screenshot -> auto-reject, no admin
+    #             needed, checked first so a reused-but-still-"recent"
+    #             screenshot can't slip through the exact-match branch.
+    #   exact  -> payee is ours AND the amount matches the claimed plan
+    #             AND the payment is within the last hour -> auto-approve,
+    #             no admin needed.
+    #   reject (payee)      -> OCR successfully read the screenshot but
+    #             the payee name it found is NOT ours -> a confirmed
+    #             wrong/fake screenshot -> auto-reject, no admin needed.
+    #   reject (stale date) -> OCR successfully READ a date off this
+    #             screenshot (so we're not guessing) and that date is
+    #             NOT recent (older than MAX_SCREENSHOT_AGE_HOURS, or in
+    #             the future) -> this is an old/reused screenshot, not
+    #             an ambiguous case -> auto-reject, no admin needed. A
+    #             stale date is only trusted as grounds for rejection
+    #             when OCR actually parsed a date; if OCR couldn't read
+    #             any date at all, that's ambiguous (below), not stale.
+    #   manual -> OCR simply couldn't read the screenshot clearly enough
+    #             to be sure either way (amount unreadable, or no date
+    #             found at all — dark-theme screenshots sometimes still
+    #             come out unreadable even after the invert retry) ->
+    #             could well be a genuine payment -> falls back to admin
+    #             review rather than being auto-rejected on an OCR
+    #             failure that isn't the user's fault.
+    date_recent = (
+        extracted["parsed_date"] is not None
+        and datetime.timedelta(0) <= (_now_ist_naive() - extracted["parsed_date"]) <= datetime.timedelta(hours=MAX_SCREENSHOT_AGE_HOURS)
+    )
+    date_known_stale = extracted["parsed_date"] is not None and not date_recent
+
+    # A screenshot whose transaction ID we've already approved before
+    # (auto or manual) is a reused screenshot — the amount/date can
+    # still look "recent" on a second submission (nothing in the image
+    # itself changes), so this has to be checked and short-circuit
+    # BEFORE the exact-match branch below, not fall through to it.
+    txn_id = extracted.get("txn_id")
+    duplicate_of = await db.find_approved_request_by_txn_id(txn_id) if txn_id else None
+
+    # A CONFIRMED wrong amount — OCR actually read a number off the
+    # screenshot and it does not equal the claimed plan's CURRENT rate
+    # (load_plan_rates() above always reads the live rate from Mongo, so
+    # this is always compared against today's price, never a stale one —
+    # if the owner just changed week from 3Rs to 15Rs, an old 3Rs
+    # screenshot submitted after the change reads 3 here and 15 as
+    # claimed_amount, so amount_matches is False and this branch fires).
+    # This must be checked before the amount/date rejects below: if the
+    # payee name isn't found anywhere on the screenshot at all, this
+    # was never a payment to us in the first place (confirmed on a real
+    # screenshot: "Paid to Arpit Patidar" — a real, successful payment,
+    # just to someone else entirely) — no amount or date reasoning is
+    # even relevant at that point. This is also a more reliable signal
+    # to lead with than the amount: a name either substantially appears
+    # in the OCR text or it doesn't, whereas the amount digits are the
+    # single most OCR-error-prone part of any of these screenshots (see
+    # _rupee_fusion_corrected_amount) — leading with the noisier signal
+    # produced misleading messages like "amount ₹0 doesn't match ₹200"
+    # for a screenshot whose real problem was never the amount at all.
+    payee_confirmed_wrong = extracted["ocr_read_ok"] and not extracted["payee_ok"]
+
+    # This must be checked before the date rejects below: a wrong
+    # amount is real (mismatched dollar value), whereas the stale-date
+    # reject should only apply to something claiming to be the right
+    # amount and only failing to prove it's fresh — this is never
+    # "manual/ambiguous", it is a definite reject with an appeal
+    # button, no admin action needed unless the user appeals.
+    amount_confirmed_wrong = amount_read is not None and not amount_matches and not fusion_corrected_amount
+
+    # "Confirmed enough to auto-approve" now covers more than an exact
+    # match: payee confirmed AND amount confirmed (either a literal OCR
+    # match, or the ₹-fusion correction above — which, by this point,
+    # has independently resolved to the correct amount on FOUR separate
+    # real screenshots across three different OCR engines, so it has
+    # earned enough trust to drive an auto-approve, not just a
+    # one-tap-for-an-admin manual review) AND the date is not KNOWN to
+    # be stale AND actually confirmed recent — a date OCR simply
+    # couldn't read is NOT good enough on its own (reverted per explicit
+    # follow-up request: a readable date is required, not just "not
+    # known to be stale"). A confirmed WRONG signal on any of these
+    # (wrong payee, wrong amount with no fusion explanation, or a
+    # definitely-stale date) still hard-rejects exactly as before; this
+    # only removes the requirement for a human tap on cases where
+    # nothing actually looks wrong AND every signal, including the
+    # date, was positively confirmed.
+    amount_confirmed = amount_matches or bool(fusion_corrected_amount)
+    auto_approvable = extracted["payee_ok"] and amount_confirmed and date_recent
+
+    reject_reason = None
+    if duplicate_of:
+        decision = "reject"
+        reject_reason = "duplicate"
+        extracted["confidence"] = "duplicate"
+    elif auto_approvable:
+        decision = "exact"
+        extracted["confidence"] = "high"
+        if fusion_corrected_amount:
+            # Store the corrected value, not the raw misread one, so
+            # the DB/duplicate-detection/audit trail all reflect the
+            # true amount rather than the OCR artifact.
+            extracted["amount"] = fusion_corrected_amount
+            extracted["fusion_note"] = (
+                f"Auto-approved: OCR read ₹{amount_read}, corrected to ₹{fusion_corrected_amount} "
+                f"(matches {PLAN_LABELS[claimed_plan]} price) after stripping a likely misread ₹ symbol."
+            )
+    elif payee_confirmed_wrong:
+        decision = "reject"
+        reject_reason = "payee"
+        extracted["confidence"] = "not_verified"
+    elif amount_confirmed_wrong:
+        decision = "reject"
+        reject_reason = "amount_mismatch"
+        extracted["confidence"] = "wrong_amount"
+    elif date_known_stale:
+        decision = "reject"
+        reject_reason = "stale_date"
+        extracted["confidence"] = "stale_date"
+    elif extracted["payee_ok"] and amount_confirmed:
+        # Payee confirmed AND amount confirmed (a literal match, or via
+        # the ₹-fusion correction) — but the date genuinely couldn't be
+        # read at all (not stale, just unreadable). Per explicit
+        # request, this no longer auto-approves: a readable, confirmed-
+        # recent date is required. Rejected with its own specific
+        # reason rather than lumped in as "unreadable" — the amount and
+        # payee were both fine here, only the date is the gap.
+        decision = "reject"
+        reject_reason = "date_unconfirmed"
+        extracted["confidence"] = "date_unconfirmed"
+        if fusion_corrected_amount:
+            extracted["amount"] = fusion_corrected_amount
+            extracted["fusion_note"] = (
+                f"OCR read ₹{amount_read}, corrected to ₹{fusion_corrected_amount} (matches "
+                f"{PLAN_LABELS[claimed_plan]} price) after stripping a likely misread ₹ symbol — "
+                f"but no date/time could be read at all, so this was rejected rather than "
+                f"auto-approved. Check the actual screenshot if the user appeals."
+            )
+    elif fusion_corrected_amount:
+        # Reachable when the fusion-corrected amount matches but payee
+        # wasn't confirmed either — two uncertain signals stacked
+        # together, so this rejects rather than auto-approving blind.
+        # Per policy: everything either clears automatically or is
+        # rejected automatically, with no standing manual queue — a
+        # genuine user who gets this wrong can still reach a human via
+        # the Appeal button on the reject message itself.
+        decision = "reject"
+        reject_reason = "fusion_suspect"
+        extracted["confidence"] = "fusion_suspect"
+        extracted["fusion_note"] = (
+            f"OCR read ₹{amount_read}, which doesn't match the {PLAN_LABELS[claimed_plan]} "
+            f"price (₹{claimed_amount}) — but ₹{fusion_corrected_amount} does, once what's "
+            f"likely a misread ₹ symbol is stripped off the front. Rejected anyway because "
+            f"the payee name couldn't be confirmed on this screenshot — check the actual "
+            f"screenshot if the user appeals."
+        )
+    else:
+        # Reachable when the amount itself couldn't be read at all
+        # (amount_read is None) — no amount signal at all to auto-
+        # approve on, so this rejects rather than sitting in a manual
+        # queue. The Appeal button on the reject message is the safety
+        # net for a genuine payment that OCR simply couldn't read.
+        decision = "reject"
+        reject_reason = "unreadable"
+        extracted["confidence"] = "low"
+
+    request_id = await db.add_payment_request(
+        user_id=user.id, username=user.username or user.first_name,
+        screenshot_file_id=file_id,
+        claimed_plan=claimed_plan, extracted=extracted,
+    )
+
+    if decision == "exact":
+        grant_result = await _grant_premium(client, request_id, user.id, claimed_plan, auto=True)
+        if grant_result["db_ok"]:
+            sent = await status_msg.edit_text("✅ All clear! Thank you for purchasing GoFlix Premium 🎉")
+            asyncio.create_task(_delayed_delete(sent, 60))
+        else:
+            # Don't tell the user everything's fine when the database
+            # write itself failed — that's exactly the silent-failure
+            # gap that made a real approval look successful in the log
+            # while the user never actually got premium.
+            await status_msg.edit_text(
+                "⚠️ Your payment was verified, but something went wrong granting premium. "
+                f"An admin has been notified — please wait a moment or contact {OWNER_LNK}."
+            )
+        await _log_auto_approval(client, request_id, user, claimed_plan, extracted, file_id, grant_result)
+        return
+
+    if decision == "reject":
+        appeal_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📮 Appeal to admin", callback_data=f"pay_appeal_{request_id}")]
+        ])
+        # One generic message for every reject reason — the specific
+        # cause (wrong amount, wrong payee, stale/reused screenshot,
+        # OCR couldn't read it, fusion-suspect, duplicate) is deliberately
+        # NOT shown to the user, only to admins via LOG_CHANNEL (see
+        # _log_auto_rejection). Built at the requester's explicit
+        # request: showing the exact detection reason to users risks
+        # teaching people how to word or format a screenshot to slip
+        # past the checks, and a plain "not approved, try again" is all
+        # a genuine user needs to act on anyway. The Appeal button still
+        # reaches a real admin for anyone who believes this is wrong.
+        reject_text = (
+            "❌ <b>Your payment is not approved.</b>\n\n"
+            "Please make sure you've paid the correct amount for your plan and send a fresh "
+            "screenshot of that payment as soon as possible.\n\n"
+            "If you believe this is a mistake, tap below to send it to an admin."
+        )
+        # Not auto-deleted like the other status messages — it carries
+        # the Appeal button, which needs to stay clickable whenever the
+        # user gets around to it, not just for the next minute.
+        await status_msg.edit_text(reject_text, reply_markup=appeal_btn)
+        await db.set_payment_request_status(request_id, "auto_rejected", None)
+        await _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id, reject_reason)
+        return
+
+    # Should no longer be reachable — every branch above now resolves to
+    # either "exact" or "reject" (see the requester's explicit "no
+    # standing manual queue" policy). Left in only as a defensive
+    # fallback in case a future code path forgets to set a decision
+    # explicitly, so that case still reaches a human instead of being
+    # silently dropped.
+    sent = await status_msg.edit_text(
+        "✅ Got it! Your screenshot is with the admins for a quick check — "
+        "you'll get a message the moment it's approved."
+    )
+    asyncio.create_task(_delayed_delete(sent, 60))
+    await _notify_admins(client, request_id, user, claimed_plan, extracted, file_id)
+
+
+async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, admin_id=None):
+    """Shared by the auto-approve path above and the manual Approve
+    button below — same premium-granting logic either way, only the
+    payment_request's recorded status differs.
+
+    Extends on top of any time the user already has left, instead of
+    overwriting it — a user with 6 days left on a 1-week plan who then
+    buys a 1-month plan ends up with 1 month + 6 days, not just 1 month.
+
+    Returns a status dict instead of nothing: {db_ok, verified,
+    admin_bot_dm_ok, main_bot_dm_ok, error}. Confirmed necessary — a
+    real case showed an admin's "Approved — granted" message with no
+    way to tell whether the grant actually took effect or whether the
+    user was ever told. db_ok is whether the database write itself
+    succeeded; verified is a re-read through db.has_premium_access —
+    the SAME check every other part of the bot uses to gate premium
+    features — so this is proof the grant took effect, not just proof
+    the code ran without throwing. The two dm_ok flags are whether the
+    "premium unlocked" message could actually be delivered (a user who
+    has never started the main bot, only the AdminBot, will silently
+    fail that DM — Telegram blocks bots from messaging users first).
+    Callers use this to surface a problem to the admin instead of
+    reporting bare success no matter what actually happened.
+    """
+    result = {
+        "db_ok": False, "verified": False,
+        "admin_bot_dm_ok": False, "main_bot_dm_ok": False, "error": None,
+    }
+    seconds = PLAN_SECONDS[plan]
+    now = datetime.datetime.now()
+    try:
+        existing = await db.get_user(user_id)
+        current_expiry = existing.get("expiry_time") if existing else None
+        base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
+        expiry_time = base_time + datetime.timedelta(seconds=seconds)
+
+        await db.update_user({
+            "id": user_id, "expiry_time": expiry_time,
+            "expiry_reminder_sent": False, "expired_notified": False,
+        })
+        await db.set_payment_request_status(request_id, "auto_approved" if auto else "approved", admin_id)
+        result["db_ok"] = True
+        result["verified"] = await db.has_premium_access(user_id)
+    except Exception as e:
+        logger.warning(f"CRITICAL: failed to grant premium for user {user_id}, request {request_id}: {e}")
+        result["error"] = str(e)
+        return result
+
+    unlock_text = (
+        "<b>👑 ᴄᴏɴɢʀᴀᴛꜱ 👑</b>\n\n"
+        f"💎 <b>ᴘʀᴇᴍɪᴜᴍ ᴜɴʟᴏᴄᴋᴇᴅ ꜰᴏʀ {PLAN_LABELS[plan]}</b>\n"
+        "🌟 ᴀʟʟ ᴘʀᴇᴍɪᴜᴍ ꜰᴇᴀᴛᴜʀᴇꜱ ᴀʀᴇ ɴᴏᴡ ᴀᴄᴄᴇꜱꜱɪʙʟᴇ\n\n"
+        "🚀 <b>ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴘʀᴇᴍɪᴜᴍ ɢᴏꜰʟɪx!</b>"
+    )
+    # Sent from BOTH bots — the AdminBot (where the screenshot was sent)
+    # and the main Goflix bot (where the user actually spends their
+    # time), so the unlock is visible wherever they check next.
+    try:
+        await client.send_message(chat_id=user_id, text=unlock_text, parse_mode=enums.ParseMode.HTML)
+        result["admin_bot_dm_ok"] = True
+    except Exception as e:
+        logger.warning(f"Couldn't DM user {user_id} after granting premium (AdminBot): {e}")
+    try:
+        await TechVJBot.send_message(chat_id=user_id, text=unlock_text, parse_mode=enums.ParseMode.HTML)
+        result["main_bot_dm_ok"] = True
+    except Exception as e:
+        logger.warning(f"Couldn't DM user {user_id} after granting premium (main bot): {e}")
+
+    return result
+
+
+async def _log_auto_approval(client, request_id, user, plan: str, extracted, file_id, grant_result):
+    """Posts a record-only copy to LOG_CHANNEL for auto-approved payments
+    — normally no buttons, nothing for an admin to action, just an audit
+    trail ('the premium list') of who got premium and why. If the grant
+    itself had a problem (grant_result — see _grant_premium), this stops
+    being record-only: it gets a clear warning line and, like a manual-
+    review post, gets PINNED, since "auto-approved" silently failing to
+    actually deliver premium is exactly the kind of thing that otherwise
+    goes unnoticed for a long time."""
+    needs_attention = not grant_result["db_ok"] or not grant_result["verified"] or (
+        not grant_result["admin_bot_dm_ok"] and not grant_result["main_bot_dm_ok"]
+    )
+    if not grant_result["db_ok"]:
+        status_line = f"🔴 <b>FAILED to grant premium in the database</b> ({grant_result['error']}) — needs manual action."
+    elif not grant_result["verified"]:
+        status_line = "⚠️ <b>Granted, but a re-check right after still shows no active premium</b> — please verify manually."
+    elif not grant_result["admin_bot_dm_ok"] and not grant_result["main_bot_dm_ok"]:
+        status_line = "⚠️ <b>Premium is active, but the user couldn't be notified</b> — they may not know yet."
+    else:
+        status_line = f"🟢 Payee matched + amount matched + within {MAX_SCREENSHOT_AGE_HOURS}h — granted automatically, no admin action needed."
+    # extracted["fusion_note"] is only set when this auto-approval used
+    # the ₹-fusion correction (see the auto_approvable branch above) —
+    # shown here so the audit trail is honest about it even though no
+    # admin had to act on it.
+    if extracted.get("fusion_note"):
+        status_line += f"\nℹ️ {extracted['fusion_note']}"
+
+    caption = (
+        f"<b>✅ All clear — thank you for purchasing GoFlix Premium!</b>\n\n"
+        f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
+        f"📦 Plan: <b>{PLAN_LABELS[plan]}</b>\n"
+        f"🔎 OCR amount: {extracted['amount']}Rs\n"
+        f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
+        f"{status_line}\n\n"
+        f"Request ID: <code>{request_id}</code>"
+    )
+    try:
+        if not LOG_CHANNEL:
+            raise ValueError("LOG_CHANNEL not set")
+        sent = await client.send_photo(chat_id=LOG_CHANNEL, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+        if needs_attention:
+            try:
+                await client.pin_chat_message(LOG_CHANNEL, sent.id, disable_notification=False)
+            except Exception as pin_err:
+                logger.warning(f"Posted a failed-auto-grant notice but couldn't pin it: {pin_err}")
+    except Exception as e:
+        logger.warning(f"Couldn't post auto-approval log to LOG_CHANNEL ({e}), DMing admins instead.")
+        for admin_id in ADMINS:
+            try:
+                await client.send_photo(chat_id=admin_id, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+            except Exception as e2:
+                logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
+
+
+async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted, file_id, reject_reason=None):
+    """Posts a record-only copy to LOG_CHANNEL for auto-rejected payments
+    — either the payee name didn't match ours (confirmed wrong/fake
+    screenshot) or a date WAS read and it's stale/reused — either way a
+    confirmed reason, not just an OCR failure — no buttons, just a
+    record of what happened in case of a dispute."""
+    if reject_reason == "duplicate":
+        reason_line = (
+            f"🔴 This transaction ID was already approved on a previous request. "
+            f"Looks like a reused screenshot. Rejected automatically, no admin action needed."
+        )
+    elif reject_reason == "stale_date":
+        reason_line = (
+            f"🔴 Date/time was read as {extracted['raw_date'] or '(unknown)'} — not recent "
+            f"(older than {MAX_SCREENSHOT_AGE_HOURS}h or in the future). Looks like an old/"
+            f"reused screenshot. Rejected automatically, no admin action needed."
+        )
+    elif reject_reason == "amount_mismatch":
+        reason_line = (
+            f"🔴 OCR amount ({extracted['amount']}Rs) does not match the current "
+            f"{PLAN_LABELS[claimed_plan]} rate. Confirmed wrong amount — rejected "
+            f"automatically, no admin action needed unless the user appeals."
+        )
+    elif reject_reason == "ai_generated":
+        # Deliberately a different caption/title from the ones below —
+        # this isn't an honest mismatch or an OCR ambiguity, it's
+        # detected content-authenticity metadata proving the image was
+        # AI-generated or AI-edited (see _has_ai_provenance_metadata).
+        # Worth admins seeing this flagged as a suspected deliberate
+        # fraud attempt rather than filed the same as an everyday
+        # auto-reject — built and sent separately, skipping the shared
+        # caption template below entirely.
+        caption = (
+            f"<b>⚠️ Suspected FAKE screenshot — AI-generated/edited</b>\n\n"
+            f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
+            f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
+            f"🔴 This image contains embedded C2PA content-authenticity metadata — "
+            f"proof it was generated or edited by an AI tool (e.g. ChatGPT's image "
+            f"tools). A real phone screenshot never has this. Rejected automatically; "
+            f"worth a look if the user appeals.\n\n"
+            f"Request ID: <code>{request_id}</code>"
+        )
+        try:
+            if not LOG_CHANNEL:
+                raise ValueError("LOG_CHANNEL not set")
+            await client.send_photo(chat_id=LOG_CHANNEL, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+        except Exception as e:
+            logger.warning(f"Couldn't post auto-rejection log to LOG_CHANNEL ({e}), DMing admins instead.")
+            for admin_id in ADMINS:
+                try:
+                    await client.send_photo(chat_id=admin_id, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+                except Exception as e2:
+                    logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
+        return
+    elif reject_reason == "payee":
+        reason_line = (
+            f"🔴 Screenshot was readable but the payee name didn't match ours — "
+            f"doesn't look like a real payment to us. Rejected automatically, "
+            f"no admin action needed."
+        )
+    elif reject_reason == "fusion_suspect":
+        # See _rupee_fusion_corrected_amount — a plausible ₹-fusion
+        # correction WAS found (extracted["fusion_note"] has the exact
+        # detail), but the payee ALSO couldn't be confirmed, so this
+        # stacks two uncertain signals and gets auto-rejected rather
+        # than auto-approved. Worth a closer look if the user appeals —
+        # this is one of the more likely "actually a real payment"
+        # auto-reject reasons.
+        reason_line = f"🟠 {extracted.get('fusion_note', 'Amount unclear after a possible ₹ symbol misread.')} Rejected automatically — worth a look if the user appeals."
+    elif reject_reason == "date_unconfirmed":
+        # Payee and amount both checked out (a literal match or via the
+        # ₹-fusion correction — extracted["fusion_note"] has the detail
+        # if so) but no date/time could be read at all. A readable,
+        # confirmed-recent date is required for auto-approval (reverted
+        # per explicit follow-up request — an unreadable date used to
+        # still auto-approve, now it doesn't). Also one of the more
+        # likely "actually a real payment" auto-reject reasons.
+        reason_line = (
+            f"🟠 Payee and amount both checked out"
+            f"{' (' + extracted['fusion_note'] + ')' if extracted.get('fusion_note') else ''}, "
+            f"but no date/time could be read on this screenshot at all. Rejected automatically "
+            f"— worth a look if the user appeals."
+        )
+    elif reject_reason == "unreadable":
+        reason_line = (
+            f"🔴 OCR couldn't find an amount anywhere on this screenshot at all. "
+            f"Rejected automatically — worth a look if the user appeals, since this "
+            f"can happen on a genuine payment OCR simply failed to read."
+        )
+    else:
+        reason_line = (
+            f"🔴 Screenshot was readable but the payee name didn't match ours — "
+            f"doesn't look like a real payment to us. Rejected automatically, "
+            f"no admin action needed."
+        )
+    amount_display = f"{extracted['amount']}Rs" if extracted['amount'] else 'not detected'
+    # Shown regardless of WHICH check ended up being the actual reject
+    # reason — confirmed necessary: a screenshot that's both fusion-
+    # correctable AND rejected for something else entirely (most often
+    # a stale date, which is checked before the fusion-specific branches
+    # above) used to display only the raw misread number with no
+    # indication a correction was ever found, making it look like
+    # amount detection had failed when it had actually succeeded fine.
+    if extracted.get("fusion_corrected_amount") and reject_reason not in ("fusion_suspect", "date_unconfirmed"):
+        amount_display += f" (likely ₹{extracted['fusion_corrected_amount']} once a misread ₹ symbol is corrected for)"
+    caption = (
+        f"<b>❌ Auto-rejected — not verified</b>\n\n"
+        f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
+        f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
+        f"🔎 OCR amount: {amount_display}\n"
+        f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
+        f"{reason_line}\n\n"
+        f"Request ID: <code>{request_id}</code>"
+    )
+    try:
+        if not LOG_CHANNEL:
+            raise ValueError("LOG_CHANNEL not set")
+        await client.send_photo(chat_id=LOG_CHANNEL, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        logger.warning(f"Couldn't post auto-rejection log to LOG_CHANNEL ({e}), DMing admins instead.")
+        for admin_id in ADMINS:
+            try:
+                await client.send_photo(chat_id=admin_id, photo=file_id, caption=caption, parse_mode=enums.ParseMode.HTML)
+            except Exception as e2:
+                logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
+
+
+async def _notify_admins(client, request_id, user, claimed_plan, extracted, file_id):
+    date_line = extracted["raw_date"] or "not detected"
+    amount_line = f"{extracted['amount']}Rs" if extracted["amount"] else "not detected"
+    if extracted["confidence"] == "high":
+        confidence_line = "🟢 Amount matched — just tap Approve (date/payee couldn't be auto-confirmed)"
+    elif extracted["confidence"] == "fusion_suspect":
+        # See _rupee_fusion_corrected_amount — OCR's reading doesn't
+        # match the claimed plan, but very likely only because a
+        # misread ₹ symbol fused an extra digit onto the front of it.
+        confidence_line = f"🟠 {extracted['fusion_note']}"
+    elif not extracted["ocr_read_ok"]:
+        confidence_line = "⚪ OCR couldn't read this screenshot clearly — please check it manually"
+    else:
+        confidence_line = "🟡 Amount unclear — pick the correct plan below"
+
+    caption = (
+        f"<b>💳 New UPI payment claim</b>\n\n"
+        f"👤 User: {user.mention} (<code>{user.id}</code>)\n"
+        f"📦 Claims: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
+        f"🔎 OCR amount: {amount_line}\n"
+        f"🕐 OCR date: {date_line}\n"
+        f"{confidence_line}\n\n"
+        f"Request ID: <code>{request_id}</code>"
+    )
+
+    btn_rows = []
+    if extracted["confidence"] in ("high", "fusion_suspect"):
+        # Either a clean match, or a single, well-justified candidate
+        # plan (fusion_suspect) — one confident button rather than
+        # making the admin pick from the full per-plan list.
+        btn_rows.append([InlineKeyboardButton(f"✅ Approve — {PLAN_LABELS[claimed_plan]}", callback_data=f"pay_approve_{request_id}_{claimed_plan}")])
+    else:
+        # Ambiguous: let the admin pick the correct plan explicitly.
+        btn_rows.append([
+            InlineKeyboardButton(f"✅ {PLAN_LABELS[p]}", callback_data=f"pay_approve_{request_id}_{p}")
+            for p in ("week", "month")
+        ])
+        btn_rows.append([
+            InlineKeyboardButton(f"✅ {PLAN_LABELS[p]}", callback_data=f"pay_approve_{request_id}_{p}")
+            for p in ("3months", "6months")
+        ])
+    btn_rows.append([InlineKeyboardButton("❌ Reject", callback_data=f"pay_reject_{request_id}")])
+
+    # This bot must be an admin in LOG_CHANNEL to post here. If that
+    # fails for any reason, fall back to DMing every admin individually
+    # so a request never silently disappears.
+    try:
+        if not LOG_CHANNEL:
+            raise ValueError("LOG_CHANNEL not set")
+        sent = await client.send_photo(
+            chat_id=LOG_CHANNEL, photo=file_id, caption=caption,
+            parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn_rows)
+        )
+        # This is the ONE case (a request that genuinely needs an admin
+        # to tap Approve/Reject) that gets pinned — auto-approved/
+        # auto-rejected posts are record-only and never pin. Pinning is
+        # what stops a manual-review request from getting buried under
+        # newer log channel traffic and sitting unanswered for hours —
+        # every admin in the channel gets Telegram's native pin
+        # notification the instant this lands, instead of relying on
+        # someone scrolling past it. Remembered on the request so it can
+        # be unpinned the moment it's resolved (see approve/reject
+        # callbacks below) — otherwise the channel's pin would just get
+        # silently replaced by the next pending request instead of
+        # clearing when THIS one is actually done.
+        try:
+            await client.pin_chat_message(LOG_CHANNEL, sent.id, disable_notification=False)
+            await db.set_payment_request_log_message(request_id, sent.id)
+        except Exception as pin_err:
+            logger.warning(
+                f"Posted payment request {request_id} to LOG_CHANNEL but couldn't pin it "
+                f"({pin_err}) — make sure this bot is an admin with 'Pin Messages' rights "
+                f"in LOG_CHANNEL. Falling back to unpinned (still reviewable, just less visible)."
+            )
+    except Exception as e:
+        logger.warning(f"Couldn't post payment request to LOG_CHANNEL ({e}), DMing admins instead.")
+        for admin_id in ADMINS:
+            try:
+                await client.send_photo(
+                    chat_id=admin_id, photo=file_id, caption=caption,
+                    parse_mode=enums.ParseMode.HTML, reply_markup=InlineKeyboardMarkup(btn_rows)
+                )
+            except Exception as e2:
+                logger.warning(f"Couldn't DM admin {admin_id} either: {e2}")
+
+
+async def _unpin_log_message(client, req):
+    """Unpins the LOG_CHANNEL post for a request the moment it's
+    resolved (see _notify_admins, which is the only place that pins
+    one in the first place). Without this, a channel's limited pinned
+    slots fill up with already-handled requests, which is exactly the
+    kind of clutter that makes admins start ignoring the pin — so the
+    pin only ever means "this one still needs you"."""
+    msg_id = req.get("log_message_id")
+    if not msg_id or not LOG_CHANNEL:
+        return
+    try:
+        await client.unpin_chat_message(LOG_CHANNEL, msg_id)
+    except Exception as e:
+        logger.warning(f"Couldn't unpin resolved request {req['_id']}'s LOG_CHANNEL message: {e}")
+
+
+# ── Admin taps Approve / Reject ──────────────────────────────────────────
+
+@Client.on_callback_query(filters.regex(r"^pay_approve_([0-9a-fA-F]{24})_(\w+)$"))
+async def approve_payment_cb(client, query):
+    if query.from_user.id not in ADMINS:
+        return await query.answer("Admins only.", show_alert=True)
+
+    request_id, plan = query.matches[0].group(1), query.matches[0].group(2)
+    req = await db.get_payment_request(request_id)
+    if not req:
+        return await query.answer("Request not found (maybe already handled).", show_alert=True)
+    if req["status"] != "pending":
+        return await query.answer(f"Already handled ({req['status']}).", show_alert=True)
+
+    if plan not in PLAN_SECONDS:
+        return await query.answer("Invalid plan.", show_alert=True)
+
+    user_id = req["user_id"]
+    grant_result = await _grant_premium(client, request_id, user_id, plan, auto=False, admin_id=query.from_user.id)
+
+    if not grant_result["db_ok"]:
+        # Never report success when the database write itself failed —
+        # this is exactly the silent-failure case that made a real
+        # "Approved — granted" message misleading. Left "pending" (not
+        # marked approved) so the admin can just tap Approve again once
+        # whatever DB issue this was clears up.
+        await query.answer("⚠️ FAILED to grant premium — DB error, see logs. Not marked approved.", show_alert=True)
+        await query.message.edit_caption(
+            query.message.caption + f"\n\n🔴 <b>FAILED to grant premium</b> ({grant_result['error']}). "
+            f"Still pending — try Approve again once this is fixed.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    status_note = ""
+    if not grant_result["verified"]:
+        status_note = (
+            "\n\n⚠️ <b>Granted in the database, but a re-check right after still shows no active "
+            "premium for this user</b> — please verify manually before assuming this worked."
+        )
+    elif not grant_result["admin_bot_dm_ok"] and not grant_result["main_bot_dm_ok"]:
+        status_note = (
+            "\n\n⚠️ <b>Premium is active, but the user couldn't be notified</b> (they may have never "
+            "started the main bot or this one) — they may not know it's unlocked yet."
+        )
+
+    await query.answer("Approved — premium granted.")
+    await query.message.edit_caption(
+        query.message.caption + f"\n\n✅ <b>Approved by {query.from_user.mention} — {PLAN_LABELS[plan]} granted.</b>{status_note}",
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=None
+    )
+    await _unpin_log_message(client, req)
+
+
+@Client.on_callback_query(filters.regex(r"^pay_reject_([0-9a-fA-F]{24})$"))
+async def reject_payment_cb(client, query):
+    if query.from_user.id not in ADMINS:
+        return await query.answer("Admins only.", show_alert=True)
+
+    request_id = query.matches[0].group(1)
+    req = await db.get_payment_request(request_id)
+    if not req:
+        return await query.answer("Request not found.", show_alert=True)
+    if req["status"] != "pending":
+        return await query.answer(f"Already handled ({req['status']}).", show_alert=True)
+
+    await db.set_payment_request_status(request_id, "rejected", query.from_user.id)
+    await query.answer("Rejected.")
+    await query.message.edit_caption(
+        query.message.caption + f"\n\n❌ <b>Rejected by {query.from_user.mention}.</b>",
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=None
+    )
+    try:
+        await client.send_message(
+            chat_id=req["user_id"],
+            text=(
+                "<b>⚠️ Your payment screenshot couldn't be verified.</b>\n\n"
+                f"Please double-check your payment and try again, or contact an admin: {OWNER_LNK}"
+            ),
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception as e:
+        logger.warning(f"Couldn't DM user {req['user_id']} after rejection: {e}")
+    await _unpin_log_message(client, req)
+
+
+# ── User appeals an auto-rejection ───────────────────────────────────────
+
+@Client.on_callback_query(filters.regex(r"^pay_appeal_([0-9a-fA-F]{24})$"))
+async def appeal_rejected_payment_cb(client, query):
+    request_id = query.matches[0].group(1)
+    req = await db.get_payment_request(request_id)
+    if not req:
+        return await query.answer("Request not found.", show_alert=True)
+    if req["user_id"] != query.from_user.id:
+        return await query.answer("This isn't your request.", show_alert=True)
+    if req["status"] != "auto_rejected":
+        return await query.answer(f"Already handled ({req['status']}).", show_alert=True)
+
+    # Send it back into the normal manual-review queue — same
+    # LOG_CHANNEL post with Approve/Reject buttons an admin decides on,
+    # same as any other case OCR couldn't be fully sure about.
+    await db.set_payment_request_status(request_id, "pending", None)
+    await _notify_admins(
+        client, request_id, query.from_user, req["claimed_plan"], req["extracted"], req["screenshot_file_id"]
+    )
+
+    await query.answer()
+    await query.message.edit_text(
+        "📨 I will send it to the admin — please wait, the admin will be checking soon.",
+        reply_markup=None
+    )
+
+
+# ── Admin: see the backlog of unreviewed screenshots ────────────────────
+
+@Client.on_message(filters.command("pending_payments") & filters.user(ADMINS))
+async def pending_payments_cmd(client, message):
+    pending = await db.get_pending_payment_requests()
+    if not pending:
+        return await message.reply_text("✅ No pending payment screenshots.")
+
+    lines = [f"<b>💳 {len(pending)} pending payment request(s)</b>\n"]
+    for req in pending:
+        age = datetime.datetime.now() - req["submitted_at"]
+        lines.append(
+            f"• <code>{req['_id']}</code> — @{req.get('username') or req['user_id']} — "
+            f"claims {PLAN_LABELS.get(req['claimed_plan'], req['claimed_plan'])} — "
+            f"{int(age.total_seconds() // 60)} min ago"
+        )
+    await message.reply_text("\n".join(lines), parse_mode=enums.ParseMode.HTML)
+
+
+# ── Support Q&A relay ─────────────────────────────────────────────────────
+# Lets this same bot double as a help desk: any user message that isn't
+# /start, a payment screenshot, or an admin command falls through every
+# handler above (photos are consumed by ask()/the unsolicited_screenshot_cb
+# handler; /start is consumed at its own command filter) and lands here
+# at group=5 — the lowest priority, so it only ever sees what nothing
+# else claimed. This now includes a bare "hi"/"hello" too — those go
+# straight to an admin like any other message, rather than being
+# special-cased with a canned reply.
+
+@Client.on_message(filters.private & filters.incoming & ~filters.user(ADMINS) & ~filters.command(["start", "plan", "myplan"]), group=5)
+async def relay_user_question_to_admins_cb(client, message):
+    if not ADMINS:
+        return await message.reply_text("⚠️ No admin is configured to receive messages right now.")
+
+    delivered = False
+    for admin_id in ADMINS:
+        try:
+            fwd = await client.forward_messages(admin_id, message.chat.id, message.id)
+            note = await client.send_message(
+                chat_id=admin_id,
+                text=(
+                    f"👆 Message from {message.from_user.mention} (<code>{message.from_user.id}</code>).\n"
+                    f"Reply to THIS message to answer them."
+                ),
+                parse_mode=enums.ParseMode.HTML,
+                reply_to_message_id=fwd.id,
+            )
+            await db.add_support_link(admin_id, note.id, message.from_user.id)
+            delivered = True
+        except Exception as e:
+            logger.warning(f"Couldn't relay question to admin {admin_id}: {e}")
+
+    if delivered:
+        sent = await message.reply_text("📨 Got your message — an admin will reply here shortly.")
+        asyncio.create_task(_delayed_delete(sent, 60))
+    else:
+        await message.reply_text("⚠️ Couldn't reach an admin right now — please try again later.")
+
+
+@Client.on_message(filters.private & filters.user(ADMINS) & filters.reply, group=-1)
+async def admin_reply_to_user_cb(client, message):
+    """An admin replying (Telegram's reply-swipe) to one of the forwarded
+    copies above gets that reply relayed straight back to the user. If
+    the reply isn't to a relayed message, this quietly does nothing and
+    lets the message fall through to any other admin-side handler."""
+    if not message.reply_to_message:
+        return
+    target_user_id = await db.get_support_link(message.from_user.id, message.reply_to_message.id)
+    if not target_user_id:
+        return
+
+    try:
+        await client.copy_message(target_user_id, message.chat.id, message.id)
+        await message.reply_text("✅ Sent to the user.")
+    except Exception as e:
+        await message.reply_text(f"⚠️ Couldn't deliver your reply: {e}")

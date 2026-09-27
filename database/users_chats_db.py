@@ -86,6 +86,9 @@ class Database:
         self.grp = self.db.groups
         self.users = self.db.uersz
         self.bot = self.db.clone_bots
+        self.payment_requests = self.db.payment_requests
+        self.pending_screenshots = self.db.pending_screenshots
+        self.support_links = self.db.support_links
 
     async def _safe_find_one(self, collection, filter_query, projection=None):
         """find_one wrapped so a transient replica-set election (no primary
@@ -453,6 +456,124 @@ class Database:
 
     async def update_movie_update_status(self, bot_id, enable):
         await self.update_bot_setting(bot_id, 'MOVIE_UPDATE_NOTIFICATION', enable)
+
+    # ── UPI screenshot payment-approval queue ──────────────────────────
+    # Used by plugins/goflix_admin/payment_approval.py. A "request" is
+    # created the moment a user submits a screenshot, and stays "pending"
+    # until an admin taps Approve/Reject (or, in future, an automated
+    # check marks it "auto_approved").
+    async def add_payment_request(self, user_id, username, screenshot_file_id, claimed_plan, extracted):
+        """extracted: dict, e.g. {"amount": "110", "raw_date": "29 Aug 2026, 6:41 PM",
+        "matched_plan": "3months" or None, "confidence": "high"/"low"}"""
+        doc = {
+            "user_id": int(user_id),
+            "username": username,
+            "screenshot_file_id": screenshot_file_id,
+            "claimed_plan": claimed_plan,
+            "extracted": extracted,
+            "status": "pending",
+            "submitted_at": datetime.datetime.now(),
+            "handled_by": None,
+            "handled_at": None,
+        }
+        result = await self.payment_requests.insert_one(doc)
+        return result.inserted_id
+
+    async def get_payment_request(self, request_id):
+        from bson import ObjectId
+        return await self.payment_requests.find_one({"_id": ObjectId(request_id)})
+
+    async def set_payment_request_status(self, request_id, status, admin_id):
+        from bson import ObjectId
+        await self.payment_requests.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {"status": status, "handled_by": admin_id, "handled_at": datetime.datetime.now()}}
+        )
+
+    async def set_payment_request_log_message(self, request_id, message_id):
+        """Remembers which LOG_CHANNEL message (the one with the pinned
+        Approve/Reject buttons) belongs to this request, so it can be
+        unpinned again the moment an admin resolves it (see
+        approve_payment_cb/reject_payment_cb in payment_approval.py) —
+        without this, a resolved request's pin would sit there forever,
+        and the channel's single pinned-message slot would jam up after
+        the very next pending request."""
+        from bson import ObjectId
+        await self.payment_requests.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {"log_message_id": message_id}}
+        )
+
+    async def find_approved_request_by_txn_id(self, txn_id):
+        """Looks for an earlier request with this same OCR'd UPI/bank
+        transaction ID that was already approved (auto or manual) —
+        used to catch someone submitting an already-used screenshot a
+        second time (see _handle_screenshot in payment_approval.py). A
+        transaction ID is unique per real payment, so a repeat hit here
+        means this exact payment already got credited once."""
+        return await self.payment_requests.find_one({
+            "extracted.txn_id": txn_id,
+            "status": {"$in": ["approved", "auto_approved"]},
+        })
+
+    async def get_pending_payment_requests(self):
+        """Oldest-first, used by /pending_payments so admins can see the
+        backlog (the 'premium list' of unreviewed screenshots)."""
+        cursor = self.payment_requests.find({"status": "pending"}).sort("submitted_at", 1)
+        return [r async for r in cursor]
+
+    # ── Screenshot sent before a plan was picked ────────────────────────
+    # A user can send the payment screenshot straight into the AdminBot
+    # chat with no /start and no plan chosen yet. We stash the file_id
+    # here (keyed by user, upserted so a second stray screenshot just
+    # replaces the first) and pop it once they tap a plan button, instead
+    # of asking them to resend the photo.
+    #
+    # extracted is the OCR result computed on the FIRST read (see
+    # unsolicited_screenshot_cb in payment_approval.py). Stashing it here
+    # and handing it back on pop_pending_screenshot means the SECOND
+    # read (once they pick a plan, see _handle_screenshot) can reuse it
+    # instead of re-running OCR on the same photo from scratch — that
+    # used to mean two full OCR passes (and, once Vision is configured,
+    # two billed Vision API calls) per screenshot in this flow, for no
+    # reason: the image never changes between "got a screenshot" and
+    # "which plan is this for".
+    async def set_pending_screenshot(self, user_id, file_id, extracted=None):
+        await self.pending_screenshots.update_one(
+            {"user_id": int(user_id)},
+            {"$set": {
+                "user_id": int(user_id), "file_id": file_id,
+                "extracted": extracted, "created_at": datetime.datetime.now(),
+            }},
+            upsert=True
+        )
+
+    async def pop_pending_screenshot(self, user_id):
+        """Fetches and deletes in one step so the same stashed screenshot
+        can never be claimed twice. Returns (file_id, extracted) — extracted
+        is None for anything stashed before this field existed, so the
+        caller can safely re-run OCR in that case."""
+        doc = await self.pending_screenshots.find_one_and_delete({"user_id": int(user_id)})
+        if not doc:
+            return None, None
+        return doc["file_id"], doc.get("extracted")
+
+    # ── Support Q&A relay (AdminBot doubles as a help desk) ─────────────
+    # Any message a user sends that isn't part of the screenshot flow
+    # gets forwarded to each admin's PM. We record (admin_id, message_id)
+    # -> user_id so that when an admin replies (Telegram's native
+    # reply-to) to that forwarded copy, the bot knows who to relay the
+    # answer back to.
+    async def add_support_link(self, admin_id, message_id, user_id):
+        await self.support_links.update_one(
+            {"admin_id": int(admin_id), "message_id": message_id},
+            {"$set": {"user_id": int(user_id), "created_at": datetime.datetime.now()}},
+            upsert=True
+        )
+
+    async def get_support_link(self, admin_id, message_id):
+        doc = await self.support_links.find_one({"admin_id": int(admin_id), "message_id": message_id})
+        return doc["user_id"] if doc else None
 
 
 db = Database(USER_DB_URI, DATABASE_NAME)

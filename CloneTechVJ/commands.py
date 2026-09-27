@@ -1,8 +1,4 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
 
-# Clone Code Credit : YT - @Tech_VJ / TG - @VJ_Bots / GitHub - @VJBots
 
 import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64
 from Script import script
@@ -235,6 +231,9 @@ async def reset_settings(client, message):
 @Client.on_message(filters.command("stats") & filters.private)
 async def stats(client, message):
     me = await client.get_me()
+    owner = await db.get_bot(me.id)
+    if owner["user_id"] != message.from_user.id:
+        return
     total_users = await clonedb.total_users_count(me.id)
     filesp = col.count_documents({})
     totalsec = sec_col.count_documents({})
