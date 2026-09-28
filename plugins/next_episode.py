@@ -16,8 +16,13 @@
 #  - Remembers each user's last watched episode (stored on the user doc)
 #  - /last shows only the last watched name (with a Next button)
 #  - Same premium / verification rules as every other file delivery
+#  - FREE users: 3 Next Episode uses in a row. After that they must search
+#    again in the group (any new file delivery resets the counter).
+#    PREMIUM users: unlimited.
 # ---------------------------------------------------------------------
+import os
 import re
+import time
 import asyncio
 import logging
 
@@ -40,6 +45,7 @@ logger = logging.getLogger(__name__)
 # ------------------------- CONFIG -------------------------
 MAX_CANDIDATES = 400        # max DB rows examined per lookup
 CARD_DELAY = 2              # seconds to wait so the card lands AFTER the file message
+FREE_NEXT_LIMIT = int(os.environ.get("FREE_NEXT_LIMIT", 3))   # free users: Next Episodes per search
 # ----------------------------------------------------------
 
 # Same naming styles as the bot's own season/episode navigation:
@@ -119,15 +125,45 @@ def fmt_size(size):
 
 
 # ========================== BUTTON ==========================
-def _button(file_id):
-    text = "⏭ ɴᴇxᴛ ᴇᴘɪsᴏᴅᴇ"
+def _button(file_id, left=None):
+    """left: None = premium/unknown, int = free uses remaining."""
     data = f"nxt#{file_id}"
+    locked = left is not None and left <= 0
+    if locked:
+        text, style = "🔒 ɴᴇxᴛ ᴇᴘɪsᴏᴅᴇ", "DANGER"
+    elif left is not None:
+        text, style = f"⏭ ɴᴇxᴛ ᴇᴘɪsᴏᴅᴇ ({left} ʟᴇꜰᴛ)", "SUCCESS"
+    else:
+        text, style = "⏭ ɴᴇxᴛ ᴇᴘɪsᴏᴅᴇ", "SUCCESS"
     if ButtonStyle is not None:
         try:
-            return InlineKeyboardButton(text, callback_data=data, style=ButtonStyle.SUCCESS)
+            return InlineKeyboardButton(text, callback_data=data, style=getattr(ButtonStyle, style))
         except Exception:
             pass
     return InlineKeyboardButton(text, callback_data=data)
+
+
+# ============ FREE-USER LIMIT (premium = unlimited) ============
+_via_next = {}       # (user_id, file_id) -> time; marks deliveries started by the Next button
+
+
+async def _next_status(user_id):
+    """(is_premium, uses_left). uses_left is None for premium users."""
+    try:
+        if await db.has_premium_access(user_id):
+            return True, None
+        u = await db.col.find_one({"id": int(user_id)}, {"next_uses": 1})
+        used = int((u or {}).get("next_uses", 0))
+        return False, max(0, FREE_NEXT_LIMIT - used)
+    except Exception:
+        return False, None
+
+
+async def _reset_next_uses(user_id):
+    try:
+        await db.col.update_one({"id": int(user_id)}, {"$set": {"next_uses": 0}})
+    except Exception as ex:
+        logger.warning(f"[next_episode] reset counter failed: {ex}")
 
 
 _locks = {}          # per-user lock so batch deliveries don't race
@@ -150,6 +186,12 @@ async def prepare_episode_button(user_id, file_id):
     Never raises.
     """
     try:
+        # A file delivered because the user searched again in the group gives
+        # them a fresh set of free Next Episodes. Deliveries started by the
+        # Next button itself must NOT reset the counter.
+        t = _via_next.pop((user_id, file_id), None)
+        if not (t and time.time() - t < 180):
+            await _reset_next_uses(user_id)
         f = await get_file_details(file_id)
         if not f:
             return None
@@ -211,9 +253,17 @@ async def _send_card(bot, user_id, stem, s, e, size, file_id, delay=0):
             note = _notes.pop((user_id, file_id), None)
             if note:
                 text += f"\n{note}"
+            premium, left = await _next_status(user_id)
+            if premium:
+                text += "\n💎 <i>Premium: unlimited next episodes</i>"
+            elif left is not None and left > 0:
+                text += f"\n🎟 <i>Free next episodes left: {left}/{FREE_NEXT_LIMIT}</i>"
+            elif left is not None:
+                text += ("\n🔒 <i>Free limit reached. Search again in the group to continue, "
+                         "or get Premium for unlimited next episodes.</i>")
             msg = await bot.send_message(
                 user_id, text,
-                reply_markup=InlineKeyboardMarkup([[_button(file_id)]]))
+                reply_markup=InlineKeyboardMarkup([[_button(file_id, left)]]))
             await db.col.update_one({"id": int(user_id)},
                                     {"$set": {"last_watched.card": msg.id}})
         except Exception as ex:
@@ -359,6 +409,13 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
         return await say("Could not detect the season/episode of this file.", True)
     cur_se = fmt_se(cp[1], cp[2])
 
+    # ---- free users: limited Next Episodes per search; premium unlimited ----
+    premium, left = await _next_status(user.id)
+    if not premium and left is not None and left <= 0:
+        msg = (f"Free limit reached ({FREE_NEXT_LIMIT}/{FREE_NEXT_LIMIT} next episodes used).\n"
+               f"Search again in the group to continue, or get Premium for unlimited.")
+        return await say(msg, True)
+
     res = await find_next(cur)
     if not res:
         return await say(f"Last watched: {cur_se}\nNext episode is not uploaded yet.", True)
@@ -368,7 +425,7 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
     next_se = fmt_se(np_[1], np_[2])
 
     # ---- same rules as the rest of the bot: premium OR verified today ----
-    if not await db.has_premium_access(user.id):
+    if not premium:
         if not await check_verification(client, user.id) and VERIFY == True:
             btn = [
                 [InlineKeyboardButton(
@@ -388,6 +445,22 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
             await client.send_message(chat_id, text, protect_content=True,
                                       reply_markup=InlineKeyboardMarkup(btn))
             return
+
+    # gating passed -> this Next Episode counts for free users
+    if not premium:
+        try:
+            # atomic: only counts while still under the limit (safe against double taps)
+            r = await db.col.update_one(
+                {"id": int(user.id),
+                 "$or": [{"next_uses": {"$lt": FREE_NEXT_LIMIT}}, {"next_uses": {"$exists": False}}]},
+                {"$inc": {"next_uses": 1}})
+            if r.matched_count == 0:
+                return await say(
+                    f"Free limit reached ({FREE_NEXT_LIMIT}/{FREE_NEXT_LIMIT} next episodes used).\n"
+                    f"Search again in the group to continue, or get Premium for unlimited.", True)
+        except Exception as ex:
+            logger.warning(f"[next_episode] counter update failed: {ex}")
+    _via_next[(user.id, nid)] = time.time()
 
     if answer:
         await answer(f"Last watched: {cur_se}")
