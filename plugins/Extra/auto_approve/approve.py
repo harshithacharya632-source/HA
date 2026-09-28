@@ -11,6 +11,7 @@ from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
+from plugins.next_episode import prepare_episode_button
 logger = logging.getLogger(__name__)
 
 BATCH_FILES = {}
@@ -19,12 +20,13 @@ join_db = JoinReqs
 
 async def build_stream_reply_markup(user_id, file_id):
     """Same premium-gated stream button used in plugins/commands.py."""
-    if not STREAM_MODE:
-        return None
-    if not await is_premium_user(user_id):
-        return None
-    button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id}')]]
-    return InlineKeyboardMarkup(button)
+    button = []
+    if STREAM_MODE and await is_premium_user(user_id):
+        button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id}')]]
+    next_row = await prepare_episode_button(user_id, file_id)
+    if next_row:
+        button.append(next_row)
+    return InlineKeyboardMarkup(button) if button else None
 
 @Client.on_chat_join_request((filters.group | filters.channel))
 async def auto_approve(client, message: ChatJoinRequest):
