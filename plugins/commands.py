@@ -18,6 +18,7 @@ from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results
 from plugins.pm_filter import auto_filter
+from plugins.next_episode import prepare_episode_button
 logger = logging.getLogger(__name__)
 
 # ── Language detection for the "🗣️ ʟᴀɴɢ :" caption line ────────────────
@@ -265,19 +266,24 @@ async def build_stream_reply_markup(user_id, file_id):
     generate_stream_link (plugins/pm_filter.py) and extract_data
     (plugins/extract.py) callback handlers, which alert non-premium users
     that it's a premium-only feature."""
-    if not STREAM_MODE:
-        return None
-    button = [
-        [InlineKeyboardButton(
-            'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-            callback_data=f'generate_stream_link:{file_id}'
-        )],
-        [InlineKeyboardButton(
-            'ℹ️ AUDIO & SUBS INFO',
-            callback_data=f'extract_data:{file_id}'
-        )]
-    ]
-    return InlineKeyboardMarkup(button)
+    button = []
+    if STREAM_MODE:
+        button = [
+            [InlineKeyboardButton(
+                'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                callback_data=f'generate_stream_link:{file_id}'
+            )],
+            [InlineKeyboardButton(
+                'ℹ️ AUDIO & SUBS INFO',
+                callback_data=f'extract_data:{file_id}'
+            )]
+        ]
+    # Series episodes get a "Next Episode" button and are saved as the user's
+    # last watched episode (movies: returns None, nothing changes).
+    next_row = await prepare_episode_button(user_id, file_id)
+    if next_row:
+        button.append(next_row)
+    return InlineKeyboardMarkup(button) if button else None
 
 @Client.on_chat_member_updated(filters.group)
 async def bot_added_to_group_log(client, chat_member_updated):
