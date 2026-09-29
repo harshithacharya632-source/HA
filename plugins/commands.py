@@ -200,7 +200,7 @@ def format_expiry_time(dt: datetime.datetime) -> str:
     ampm = dt.strftime("%p")
     return f"{date_part} {hour}:{minute} {ampm}"
 
-async def deliver_resolved_file(client, chat_id, pre, file_id):
+async def deliver_resolved_file(client, chat_id, pre, file_id, from_next=False):
     """Directly deliver an already-resolved (pre, file_id) to chat_id, with
     no further deep-link round trip. Used to auto-resume a file right after
     verification succeeds — this is what used to be a 'Get Your File' button
@@ -235,7 +235,7 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
     if f_caption is None:
         f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files['file_name'].split()))}"
 
-    reply_markup = await build_stream_reply_markup(chat_id, file_id)
+    reply_markup = await build_stream_reply_markup(chat_id, file_id, from_next=from_next)
     try:
         msg = await client.send_cached_media(
             chat_id=chat_id,
@@ -259,7 +259,7 @@ BATCH_FILES = {}
 join_db = JoinReqs
 
 
-async def build_stream_reply_markup(user_id, file_id):
+async def build_stream_reply_markup(user_id, file_id, from_next=False):
     """Stream/Watch button + Audio & Subs Info button.
     The buttons are always shown to everyone (as long as STREAM_MODE is on) —
     the premium check happens when the button is actually TAPPED, inside the
@@ -280,7 +280,7 @@ async def build_stream_reply_markup(user_id, file_id):
         ]
     # Series episodes get a "Next Episode" button and are saved as the user's
     # last watched episode (movies: returns None, nothing changes).
-    next_row = await prepare_episode_button(user_id, file_id)
+    next_row = await prepare_episode_button(user_id, file_id, from_next=from_next)
     if next_row:
         button.append(next_row)
     return InlineKeyboardMarkup(button) if button else None
