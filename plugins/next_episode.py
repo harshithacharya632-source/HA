@@ -16,8 +16,11 @@
 #  - Remembers each user's last watched episode (stored on the user doc)
 #  - /last shows only the last watched name (with a Next button)
 #  - Same premium / verification rules as every other file delivery
-#  - FREE users: 3 Next Episode uses in a row. After that they must search
-#    again in the group (any new file delivery resets the counter).
+#  - FREE users: FREE_NEXT_LIMIT Next Episode uses in a row (default 2, set
+#    via Koyeb env var). Searching a fresh file in the group resets it.
+#    Delivering the NEXT episode is explicitly flagged as "from_next" by the
+#    caller (see deliver_resolved_file/build_stream_reply_markup in
+#    commands.py) so the reset logic never has to guess from timing.
 #    PREMIUM users: unlimited.
 # ---------------------------------------------------------------------
 import os
@@ -144,8 +147,6 @@ def _button(file_id, left=None):
 
 
 # ============ FREE-USER LIMIT (premium = unlimited) ============
-_via_next = {}       # (user_id, file_id) -> time; marks deliveries started by the Next button
-_via_next_user = {}  # user_id -> time; backup marker (a Next delivery is in progress)
 
 
 async def _next_status(user_id):
@@ -177,30 +178,28 @@ def _lock(user_id):
     return _locks[user_id]
 
 
-async def prepare_episode_button(user_id, file_id):
+async def prepare_episode_button(user_id, file_id, from_next=False):
     """
     Called every time a file is delivered (from build_stream_reply_markup).
       - if the file is a series episode: saves it as the user's last watched and
         schedules the persistent "Last watched + Next Episode" message
       - always returns None: the Next button is NOT put on the file message,
         because that message is auto-deleted after 1 minute.
+    `from_next=True` is passed explicitly by _send_next() below (via
+    deliver_resolved_file) when this delivery IS the next episode the user
+    just requested; any other delivery (a normal search) resets the free-use
+    counter to a fresh FREE_NEXT_LIMIT. This is a direct flag, not a guess
+    from timing, so it can't misfire.
     Never raises.
     """
     try:
-        # A file delivered because the user searched again in the group gives
-        # them a fresh set of free Next Episodes. Deliveries started by the
-        # Next button itself must NOT reset the counter.
-        now = time.time()
-        t = _via_next.pop((user_id, file_id), None)     # both markers are single-use:
-        tu = _via_next_user.pop(user_id, None)          # only the Next delivery consumes them
-        from_next = bool(t and now - t < 180) or bool(tu and now - tu < 10)
         if not from_next:
             await _reset_next_uses(user_id)
             logger.info(f"[next_episode] counter RESET user={user_id} file={file_id} "
-                        f"(tuple_marker={bool(t)} user_marker={bool(tu)}) -> treated as a fresh search")
+                        f"-> treated as a fresh search")
         else:
             logger.info(f"[next_episode] counter kept user={user_id} file={file_id} "
-                        f"(this delivery came from the Next button)")
+                        f"(delivered as the Next episode)")
         f = await get_file_details(file_id)
         if not f:
             return None
@@ -481,9 +480,6 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
                     f"Search again in the group to continue, or get Premium for unlimited.", True)
         except Exception as ex:
             logger.warning(f"[next_episode] counter update failed: {ex}")
-    _via_next[(user.id, nid)] = time.time()
-    _via_next_user[user.id] = time.time()
-
     if answer:
         await answer(f"Last watched: {cur_se}")
 
@@ -503,7 +499,7 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
     # The delivery also saves this episode as the new "last watched" and posts
     # a fresh persistent "Last watched + Next Episode" message.
     from plugins.commands import deliver_resolved_file  # lazy: avoids circular import
-    asyncio.create_task(deliver_resolved_file(client, chat_id, "file", nid))
+    asyncio.create_task(deliver_resolved_file(client, chat_id, "file", nid, from_next=True))
 
 
 @Client.on_callback_query(filters.regex(r"^nxt#"), group=-1)
