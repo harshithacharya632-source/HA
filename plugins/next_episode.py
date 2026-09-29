@@ -285,6 +285,26 @@ def _se_regex(season, episode):
             rf"|(?<![a-z0-9])0*{season}x0*{episode}(?![0-9]))")
 
 
+def _season_regex(season):
+    """Matches ANY episode of one season (episode number left open)."""
+    return (rf"(?:(?:season\s*|s)0*{season}[\s._-]*(?:episode|ep|e)[\s._-]*\d{{1,3}}(?![0-9])"
+            rf"|(?<![a-z0-9])0*{season}x\d{{2,3}}(?![0-9]))")
+
+
+def _season_episodes_sync(stem, season):
+    """Blocking: every episode number of `stem` found for `season`. Run via asyncio.to_thread."""
+    toks = _tokens(stem) or stem.split()
+    stem_pat = r"[\s._-]+".join(re.escape(w) for w in toks)
+    pre = rf"(?:^|[^a-z0-9]){stem_pat}(?:[\s._-]+(?:19|20)[0-9]{{2}})?[\s._-]+"
+    docs = _run({"file_name": {"$regex": pre + _season_regex(season), "$options": "i"}})
+    eps = set()
+    for d in docs:
+        dp = parse_name(d.get("file_name"))
+        if dp and _same_show(dp[0], stem) and dp[1] == season:
+            eps.add(dp[2])
+    return eps
+
+
 def _tokens(stem):
     return [w for w in stem.split() if not YEAR_RE.match(w)]
 
@@ -386,6 +406,12 @@ async def find_next(cur_doc):
             return {"doc": hit[0], "parsed": hit[1], "same_quality": hit[2], "new_season": True}
         return None
 
+    async def add_season_total(res):
+        if res and res["new_season"]:
+            eps = await asyncio.to_thread(_season_episodes_sync, stem, res["parsed"][1])
+            res["season_total"] = len(eps)
+        return res
+
     # 1) fast indexed search
     docs1 = await asyncio.to_thread(_search_text_sync, stem, s, e)
     res = choose(_candidates(docs1, stem))
@@ -395,11 +421,13 @@ async def find_next(cur_doc):
         res = choose(_candidates(docs2, stem))
     else:
         docs2 = []
+    res = await add_season_total(res)
     if res:
         logger.info(
             f"[next_episode] found: stem={stem!r} S{s}E{e} -> "
             f"{res['parsed'][0]!r} S{res['parsed'][1]}E{res['parsed'][2]} "
-            f"new_season={res['new_season']} same_quality={res['same_quality']} "
+            f"new_season={res['new_season']} season_total={res.get('season_total')} "
+            f"same_quality={res['same_quality']} "
             f"file={res['doc'].get('file_name')!r}")
     else:
         logger.warning(
@@ -486,8 +514,13 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
     # extra info shown on the (persistent) card that is posted after the file
     extra = []
     if res["new_season"]:
-        extra.append(f"🏁 <i>Season {cp[1]} finished</i>")
-        extra.append(f"🆕 <i>Season {np_[1]} started</i>")
+        total = res.get("season_total")
+        extra.append(f"🏁 <i>This was the last episode of Season {cp[1]}</i>")
+        if total:
+            extra.append(f"🆕 <i>Season {np_[1]} started · {total} episodes available · "
+                         f"starting with Episode 1</i>")
+        else:
+            extra.append(f"🆕 <i>Season {np_[1]} started</i>")
     if not res["same_quality"]:
         extra.append(f"⚠️ <i>Same quality not available, sent the closest one "
                      f"({fmt_size(nd.get('file_size'))})</i>")
