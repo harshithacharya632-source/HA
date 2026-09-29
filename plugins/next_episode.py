@@ -408,8 +408,14 @@ async def find_next(cur_doc):
 
     async def add_season_total(res):
         if res and res["new_season"]:
-            eps = await asyncio.to_thread(_season_episodes_sync, stem, res["parsed"][1])
-            res["season_total"] = len(eps)
+            # count the NEW season and the season that was just finished
+            new_eps, old_eps = await asyncio.gather(
+                asyncio.to_thread(_season_episodes_sync, stem, res["parsed"][1]),
+                asyncio.to_thread(_season_episodes_sync, stem, s))
+            res["season_total"] = len(new_eps)
+            # the episode just watched was the last one, so its number is the
+            # minimum the season can have (covers gaps in the DB)
+            res["prev_total"] = max(len(old_eps), e)
         return res
 
     # 1) fast indexed search
@@ -515,7 +521,10 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
     extra = []
     if res["new_season"]:
         total = res.get("season_total")
+        prev = res.get("prev_total")
         extra.append(f"🏁 <i>This was the last episode of Season {cp[1]}</i>")
+        if prev:
+            extra.append(f"<i>{prev} episode{'s' if prev != 1 else ''} finished</i>")
         if total:
             extra.append(f"🆕 <i>Season {np_[1]} started · {total} episodes available · "
                          f"starting with Episode 1</i>")
