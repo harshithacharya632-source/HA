@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # ------------------------- CONFIG -------------------------
 MAX_CANDIDATES = 400        # max DB rows examined per lookup
 CARD_DELAY = 2              # seconds to wait so the card lands AFTER the file message
-FREE_NEXT_LIMIT = int(os.environ.get("FREE_NEXT_LIMIT", 3))   # free users: Next Episodes per search
+FREE_NEXT_LIMIT = int(os.environ.get("FREE_NEXT_LIMIT", 2))   # free users: Next Episodes per search
 # ----------------------------------------------------------
 
 # Same naming styles as the bot's own season/episode navigation:
@@ -145,6 +145,7 @@ def _button(file_id, left=None):
 
 # ============ FREE-USER LIMIT (premium = unlimited) ============
 _via_next = {}       # (user_id, file_id) -> time; marks deliveries started by the Next button
+_via_next_user = {}  # user_id -> time; backup marker (a Next delivery is in progress)
 
 
 async def _next_status(user_id):
@@ -189,9 +190,13 @@ async def prepare_episode_button(user_id, file_id):
         # A file delivered because the user searched again in the group gives
         # them a fresh set of free Next Episodes. Deliveries started by the
         # Next button itself must NOT reset the counter.
-        t = _via_next.pop((user_id, file_id), None)
-        if not (t and time.time() - t < 180):
+        now = time.time()
+        t = _via_next.pop((user_id, file_id), None)     # both markers are single-use:
+        tu = _via_next_user.pop(user_id, None)          # only the Next delivery consumes them
+        from_next = bool(t and now - t < 180) or bool(tu and now - tu < 10)
+        if not from_next:
             await _reset_next_uses(user_id)
+            logger.info(f"[next_episode] new search delivery -> counter reset for {user_id}")
         f = await get_file_details(file_id)
         if not f:
             return None
@@ -418,7 +423,10 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
 
     res = await find_next(cur)
     if not res:
-        return await say(f"Last watched: {cur_se}\nNext episode is not uploaded yet.", True)
+        return await say(
+            f"Last watched: {cur_se}\n"
+            f"🏁 This is the last episode uploaded so far (Season {cp[1]}).\n"
+            f"The next one isn't uploaded yet.", True)
 
     nd, np_ = res["doc"], res["parsed"]
     nid = nd["file_id"]
@@ -454,13 +462,14 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
                 {"id": int(user.id),
                  "$or": [{"next_uses": {"$lt": FREE_NEXT_LIMIT}}, {"next_uses": {"$exists": False}}]},
                 {"$inc": {"next_uses": 1}})
-            if r.matched_count == 0:
+            if r.matched_count == 0 and await db.col.find_one({"id": int(user.id)}, {"_id": 1}) is not None:
                 return await say(
                     f"Free limit reached ({FREE_NEXT_LIMIT}/{FREE_NEXT_LIMIT} next episodes used).\n"
                     f"Search again in the group to continue, or get Premium for unlimited.", True)
         except Exception as ex:
             logger.warning(f"[next_episode] counter update failed: {ex}")
     _via_next[(user.id, nid)] = time.time()
+    _via_next_user[user.id] = time.time()
 
     if answer:
         await answer(f"Last watched: {cur_se}")
@@ -468,7 +477,8 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
     # extra info shown on the (persistent) card that is posted after the file
     extra = []
     if res["new_season"]:
-        extra.append("🆕 <i>Next season started</i>")
+        extra.append(f"🏁 <i>Season {cp[1]} finished</i>")
+        extra.append(f"🆕 <i>Season {np_[1]} started</i>")
     if not res["same_quality"]:
         extra.append(f"⚠️ <i>Same quality not available, sent the closest one "
                      f"({fmt_size(nd.get('file_size'))})</i>")
@@ -537,3 +547,17 @@ async def next_debug_cmd(client, message):
         f"<b>Fast search:</b> {len(d1)} found, {len(c1)} matched show\n"
         f"<b>Fallback search:</b> {len(d2)} found, {len(c2)} matched show\n\n"
         f"<b>Matches:</b>\n{sample}")
+
+
+@Client.on_message(filters.command("nextstatus") & filters.private)
+async def next_status_cmd(client, message):
+    """Shows the user's Next Episode allowance (handy to check the limit is working)."""
+    premium, left = await _next_status(message.from_user.id)
+    if premium:
+        text = "💎 <b>Premium:</b> unlimited next episodes."
+    elif left is None:
+        text = "Could not read your next-episode status. Try again."
+    else:
+        text = (f"🎟 <b>Free next episodes left:</b> {left}/{FREE_NEXT_LIMIT}\n"
+                f"<i>Search again in the group to get a fresh {FREE_NEXT_LIMIT}.</i>")
+    await message.reply_text(text)
