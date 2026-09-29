@@ -196,7 +196,11 @@ async def prepare_episode_button(user_id, file_id):
         from_next = bool(t and now - t < 180) or bool(tu and now - tu < 10)
         if not from_next:
             await _reset_next_uses(user_id)
-            logger.info(f"[next_episode] new search delivery -> counter reset for {user_id}")
+            logger.info(f"[next_episode] counter RESET user={user_id} file={file_id} "
+                        f"(tuple_marker={bool(t)} user_marker={bool(tu)}) -> treated as a fresh search")
+        else:
+            logger.info(f"[next_episode] counter kept user={user_id} file={file_id} "
+                        f"(this delivery came from the Next button)")
         f = await get_file_details(file_id)
         if not f:
             return None
@@ -386,16 +390,23 @@ async def find_next(cur_doc):
     # 1) fast indexed search
     docs1 = await asyncio.to_thread(_search_text_sync, stem, s, e)
     res = choose(_candidates(docs1, stem))
-    if res:
-        return res
-    # 2) fallback regex scan (also runs when step 1 found files but none matched)
-    docs2 = await asyncio.to_thread(_search_regex_sync, stem, s, e)
-    res = choose(_candidates(docs2, stem))
     if not res:
+        # 2) fallback regex scan (also runs when step 1 found files but none matched)
+        docs2 = await asyncio.to_thread(_search_regex_sync, stem, s, e)
+        res = choose(_candidates(docs2, stem))
+    else:
+        docs2 = []
+    if res:
+        logger.info(
+            f"[next_episode] found: stem={stem!r} S{s}E{e} -> "
+            f"{res['parsed'][0]!r} S{res['parsed'][1]}E{res['parsed'][2]} "
+            f"new_season={res['new_season']} same_quality={res['same_quality']} "
+            f"file={res['doc'].get('file_name')!r}")
+    else:
         logger.warning(
             f"[next_episode] no next episode: stem={stem!r} S{s} E{e} "
             f"text_docs={len(docs1)} regex_docs={len(docs2)} "
-            f"sample={[d.get('file_name') for d in (docs1 + docs2)[:3]]}")
+            f"sample={[d.get('file_name') for d in (docs1 + docs2)[:5]]}")
     return res
 
 
@@ -462,6 +473,8 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
                 {"id": int(user.id),
                  "$or": [{"next_uses": {"$lt": FREE_NEXT_LIMIT}}, {"next_uses": {"$exists": False}}]},
                 {"$inc": {"next_uses": 1}})
+            logger.info(f"[next_episode] counter inc user={user.id} matched={r.matched_count} "
+                        f"limit={FREE_NEXT_LIMIT}")
             if r.matched_count == 0 and await db.col.find_one({"id": int(user.id)}, {"_id": 1}) is not None:
                 return await say(
                     f"Free limit reached ({FREE_NEXT_LIMIT}/{FREE_NEXT_LIMIT} next episodes used).\n"
@@ -536,17 +549,23 @@ async def next_debug_cmd(client, message):
     if not p:
         return await message.reply_text(f"<b>Not detected as an episode:</b>\n<code>{name}</code>")
     stem, s, e, langs = p
+    fake_doc = {"file_name": name, "file_size": message.reply_to_message.media and
+                getattr(message.reply_to_message, message.reply_to_message.media.value).file_size}
+    res = await find_next(fake_doc)
     d1 = await asyncio.to_thread(_search_text_sync, stem, s, e)
     d2 = await asyncio.to_thread(_search_regex_sync, stem, s, e)
     c1, c2 = _candidates(d1, stem), _candidates(d2, stem)
     sample = "\n".join(f"• <code>{d.get('file_name')}</code> ({fmt_size(d.get('file_size'))})"
                        for d, _ in (c1 + c2)[:6]) or "none"
+    picked = (f"<code>{res['doc'].get('file_name')}</code>\n"
+              f"new_season={res['new_season']} same_quality={res['same_quality']}") if res else "NONE FOUND"
     await message.reply_text(
         f"<b>Parsed:</b> stem=<code>{stem}</code> S{s:02d}E{e:02d} langs={sorted(langs)}\n"
         f"<b>Looking for:</b> S{s:02d}E{e + 1:02d} or S{s + 1:02d}E01\n"
         f"<b>Fast search:</b> {len(d1)} found, {len(c1)} matched show\n"
         f"<b>Fallback search:</b> {len(d2)} found, {len(c2)} matched show\n\n"
-        f"<b>Matches:</b>\n{sample}")
+        f"<b>Matches:</b>\n{sample}\n\n"
+        f"<b>find_next() would pick:</b>\n{picked}")
 
 
 @Client.on_message(filters.command("nextstatus") & filters.private)
