@@ -292,16 +292,16 @@ def _season_regex(season):
 
 
 def _season_episodes_sync(stem, season):
-    """Blocking: every episode number of `stem` found for `season`. Run via asyncio.to_thread."""
+    """Blocking: {episode: [file names]} of `stem` found for `season`. Run via asyncio.to_thread."""
     toks = _tokens(stem) or stem.split()
     stem_pat = r"[\s._-]+".join(re.escape(w) for w in toks)
     pre = rf"(?:^|[^a-z0-9]){stem_pat}(?:[\s._-]+(?:19|20)[0-9]{{2}})?[\s._-]+"
     docs = _run({"file_name": {"$regex": pre + _season_regex(season), "$options": "i"}})
-    eps = set()
+    eps = {}    # episode number -> [file names]  (len(eps) = number of episodes)
     for d in docs:
         dp = parse_name(d.get("file_name"))
-        if dp and _same_show(dp[0], stem) and dp[1] == season:
-            eps.add(dp[2])
+        if dp and _same_show(dp[0], stem) and dp[1] == season and dp[2] > 0:   # E00 = extras/specials
+            eps.setdefault(dp[2], []).append(d.get("file_name"))
     return eps
 
 
@@ -587,14 +587,24 @@ async def next_debug_cmd(client, message):
     if not p:
         return await message.reply_text(f"<b>Not detected as an episode:</b>\n<code>{name}</code>")
     stem, s, e, langs = p
-    fake_doc = {"file_name": name, "file_size": message.reply_to_message.media and
-                getattr(message.reply_to_message, message.reply_to_message.media.value).file_size}
+    fsize = None
+    if r and r.media:
+        fsize = getattr(getattr(r, r.media.value, None), "file_size", None)
+    fake_doc = {"file_name": name, "file_size": fsize}
     res = await find_next(fake_doc)
     d1 = await asyncio.to_thread(_search_text_sync, stem, s, e)
     d2 = await asyncio.to_thread(_search_regex_sync, stem, s, e)
     c1, c2 = _candidates(d1, stem), _candidates(d2, stem)
     sample = "\n".join(f"• <code>{d.get('file_name')}</code> ({fmt_size(d.get('file_size'))})"
                        for d, _ in (c1 + c2)[:6]) or "none"
+    cur_eps = await asyncio.to_thread(_season_episodes_sync, stem, s)
+    nxt_eps = await asyncio.to_thread(_season_episodes_sync, stem, s + 1)
+    season_info = (f"<b>Season {s} episodes in DB ({len(cur_eps)}):</b> {sorted(cur_eps)}\n"
+                   f"<b>Season {s + 1} episodes in DB ({len(nxt_eps)}):</b> {sorted(nxt_eps)}\n")
+    if nxt_eps:
+        top = max(nxt_eps)
+        season_info += (f"<b>Highest S{s + 1:02d} = E{top:02d}:</b>\n"
+                        + "\n".join(f"• <code>{n}</code>" for n in nxt_eps[top][:3]) + "\n")
     picked = (f"<code>{res['doc'].get('file_name')}</code>\n"
               f"new_season={res['new_season']} same_quality={res['same_quality']}") if res else "NONE FOUND"
     await message.reply_text(
@@ -602,6 +612,7 @@ async def next_debug_cmd(client, message):
         f"<b>Looking for:</b> S{s:02d}E{e + 1:02d} or S{s + 1:02d}E01\n"
         f"<b>Fast search:</b> {len(d1)} found, {len(c1)} matched show\n"
         f"<b>Fallback search:</b> {len(d2)} found, {len(c2)} matched show\n\n"
+        f"{season_info}\n"
         f"<b>Matches:</b>\n{sample}\n\n"
         f"<b>find_next() would pick:</b>\n{picked}")
 
