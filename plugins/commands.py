@@ -18,6 +18,7 @@ from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results
 from plugins.pm_filter import auto_filter
+from plugins.next_episode import prepare_episode_button
 logger = logging.getLogger(__name__)
 
 # ── Language detection for the "🗣️ ʟᴀɴɢ :" caption line ────────────────
@@ -199,7 +200,7 @@ def format_expiry_time(dt: datetime.datetime) -> str:
     ampm = dt.strftime("%p")
     return f"{date_part} {hour}:{minute} {ampm}"
 
-async def deliver_resolved_file(client, chat_id, pre, file_id):
+async def deliver_resolved_file(client, chat_id, pre, file_id, from_next=False):
     """Directly deliver an already-resolved (pre, file_id) to chat_id, with
     no further deep-link round trip. Used to auto-resume a file right after
     verification succeeds — this is what used to be a 'Get Your File' button
@@ -234,7 +235,7 @@ async def deliver_resolved_file(client, chat_id, pre, file_id):
     if f_caption is None:
         f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files['file_name'].split()))}"
 
-    reply_markup = await build_stream_reply_markup(chat_id, file_id)
+    reply_markup = await build_stream_reply_markup(chat_id, file_id, from_next=from_next)
     try:
         msg = await client.send_cached_media(
             chat_id=chat_id,
@@ -258,26 +259,31 @@ BATCH_FILES = {}
 join_db = JoinReqs
 
 
-async def build_stream_reply_markup(user_id, file_id):
+async def build_stream_reply_markup(user_id, file_id, from_next=False):
     """Stream/Watch button + Audio & Subs Info button.
     The buttons are always shown to everyone (as long as STREAM_MODE is on) —
     the premium check happens when the button is actually TAPPED, inside the
     generate_stream_link (plugins/pm_filter.py) and extract_data
     (plugins/extract.py) callback handlers, which alert non-premium users
     that it's a premium-only feature."""
-    if not STREAM_MODE:
-        return None
-    button = [
-        [InlineKeyboardButton(
-            'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-            callback_data=f'generate_stream_link:{file_id}'
-        )],
-        [InlineKeyboardButton(
-            'ℹ️ AUDIO & SUBS INFO',
-            callback_data=f'extract_data:{file_id}'
-        )]
-    ]
-    return InlineKeyboardMarkup(button)
+    button = []
+    if STREAM_MODE:
+        button = [
+            [InlineKeyboardButton(
+                'sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                callback_data=f'generate_stream_link:{file_id}'
+            )],
+            [InlineKeyboardButton(
+                'ℹ️ AUDIO & SUBS INFO',
+                callback_data=f'extract_data:{file_id}'
+            )]
+        ]
+    # Series episodes get a "Next Episode" button and are saved as the user's
+    # last watched episode (movies: returns None, nothing changes).
+    next_row = await prepare_episode_button(user_id, file_id, from_next=from_next)
+    if next_row:
+        button.append(next_row)
+    return InlineKeyboardMarkup(button) if button else None
 
 @Client.on_chat_member_updated(filters.group)
 async def bot_added_to_group_log(client, chat_member_updated):
