@@ -1,9 +1,17 @@
 import re, base64, json, asyncio
+from concurrent.futures import ThreadPoolExecutor
 from struct import pack
 from pyrogram.file_id import FileId
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
 from info import FILE_DB_URI, SEC_FILE_DB_URI, DATABASE_NAME, COLLECTION_NAME, MULTIPLE_DATABASE, USE_CAPTION_FILTER, MAX_B_TN
+
+# Dedicated thread pool for Mongo calls. asyncio.to_thread() uses the loop's
+# DEFAULT executor, which is tiny on small hosts (min(32, cpu+4) -> ~5 threads
+# on a 1 vCPU Koyeb box). A few 50,000-file pool fetches (season/quality
+# buttons) would fill it, and then EVERY light call queued behind them
+# (get_settings on each button click, etc.) -> all buttons "hang" 5-10s.
+DB_EXECUTOR = ThreadPoolExecutor(max_workers=32, thread_name_prefix="mongo")
 
 # First Database For File Saving 
 client = MongoClient(FILE_DB_URI)
@@ -98,7 +106,7 @@ def is_file_already_saved(file_id, file_name):
             
     return False
 
-async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False, need_count=True):
+async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False, need_count=True, projection=None):
     """For given query return (results, next_offset, total_results).
 
     need_count=False skips the count_documents() call entirely when the
@@ -132,7 +140,7 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
         text_filter = {'$text': {'$search': f'"{q}"'}}
 
         def _run(collection, mongo_filter):
-            cur = collection.find(mongo_filter).sort('$natural', -1).skip(offset).limit(max_results)
+            cur = collection.find(mongo_filter, projection).sort('$natural', -1).skip(offset).limit(max_results)
             found = list(cur)
             count = collection.count_documents(mongo_filter) if need_count else len(found)
             return found, count
@@ -162,7 +170,7 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
         # other users' searches AND the file-send callbacks all queued up behind
         # it. That's what was causing the multi-second lag on both search and
         # file delivery, not the DB query itself being slow.
-        return await asyncio.to_thread(_run_all_blocking)
+        return await asyncio.get_running_loop().run_in_executor(DB_EXECUTOR, _run_all_blocking)
 
     files, total_results = await _search(query)
 
@@ -221,7 +229,7 @@ async def get_bad_files(query, file_type=None, use_filter=False):
 async def get_file_details(query):
     def _lookup():
         return col.find_one({'file_id': query}) or sec_col.find_one({'file_id': query})
-    return await asyncio.to_thread(_lookup)
+    return await asyncio.get_running_loop().run_in_executor(DB_EXECUTOR, _lookup)
 
 def encode_file_id(s: bytes) -> str:
     r = b""
