@@ -994,33 +994,57 @@ def filter_and_rank(files: list, search: str) -> list:
 # + filter ONCE per search key and reuse the cached, already-filtered
 # list for all subsequent season/episode/combined clicks.
 SEASON_CACHE = {}          # key -> {"files": [...], "ts": epoch_seconds}
-SEASON_CACHE_TTL = 900     # 15 minutes
+SEASON_CACHE_TTL = 3600    # 60 minutes (was 15) - a click after the TTL pays a full re-fetch
+CACHE_MAX_KEYS = 150       # hard cap per cache dict so memory can't grow forever
+_SEASON_INFLIGHT = {}      # key -> asyncio.Task; ONE fetch per key, shared by everyone
+# The pool only ever reads these four fields, so don't pull whole documents.
+POOL_PROJECTION = {"file_id": 1, "file_name": 1, "file_size": 1, "caption": 1}
+
+
+def _prune_cache(cache, ttl):
+    """Drop expired entries, then the oldest ones beyond CACHE_MAX_KEYS."""
+    now = datetime.now().timestamp()
+    for k in [k for k, v in cache.items() if now - v["ts"] >= ttl]:
+        cache.pop(k, None)
+    if len(cache) > CACHE_MAX_KEYS:
+        for k in sorted(cache, key=lambda x: cache[x]["ts"])[:len(cache) - CACHE_MAX_KEYS]:
+            cache.pop(k, None)
+
+
+async def _load_season_files(chat_id, key, search):
+    try:
+        files, _, _ = await asyncio.wait_for(
+            get_search_results(
+                chat_id, search, max_results=50000, need_count=False,
+                projection=POOL_PROJECTION,
+            ),
+            timeout=20,
+        )
+    except Exception as e:
+        logger.exception(f"get_cached_season_files timed out/failed for '{search}': {e}")
+        return []
+    # filter_and_rank() runs a regex over every one of up to 50,000 names.
+    # That is pure CPU; running it inline froze the WHOLE event loop (every
+    # user's buttons) for seconds. Run it in a worker thread instead.
+    files = await asyncio.to_thread(filter_and_rank, files, search)
+    SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
+    _prune_cache(SEASON_CACHE, SEASON_CACHE_TTL)
+    return files
 
 
 async def get_cached_season_files(chat_id, key, search):
     entry = SEASON_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
         return entry["files"]
-    # ✅ STUCK-SEARCH FIX: this used to await get_search_results() with no
-    # timeout at all. Since this call is fired via asyncio.create_task()
-    # (see auto_filter), a slow/hung Mongo query here doesn't just delay
-    # this one background task quietly — it holds onto a DB connection
-    # from the pool indefinitely. Under load, enough of these piling up
-    # exhausts the connection pool, and THAT is what made totally
-    # unrelated, later searches from other users in other groups also
-    # go silent for a while until a connection finally freed up again.
-    # Bounded the same way get_poster() already is elsewhere in this file.
-    try:
-        files, _, _ = await asyncio.wait_for(
-            get_search_results(chat_id, search, max_results=50000, need_count=False),
-            timeout=20,
-        )
-    except Exception as e:
-        logger.exception(f"get_cached_season_files timed out/failed for '{search}': {e}")
-        return []
-    files = filter_and_rank(files, search)
-    SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
-    return files
+    # De-duplicate: the background warm-up started by auto_filter() and a
+    # button click used to BOTH run the full 50k fetch at the same time.
+    # Now the click just waits for the fetch that is already running.
+    task = _SEASON_INFLIGHT.get(key)
+    if task is None:
+        task = asyncio.create_task(_load_season_files(chat_id, key, search))
+        _SEASON_INFLIGHT[key] = task
+        task.add_done_callback(lambda _t, k=key: _SEASON_INFLIGHT.pop(k, None))
+    return await asyncio.shield(task)
 
 
 # ===============================
@@ -1063,6 +1087,7 @@ async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_
     )
     files = filter_and_rank(files, search)
     DISPLAY_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
+    _prune_cache(DISPLAY_CACHE, DISPLAY_CACHE_TTL)
     return files
 
 
