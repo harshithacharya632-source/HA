@@ -238,6 +238,30 @@ async def _get_last_watched(user_id):
         return None
 
 
+async def _season_end_note(stem, s, e):
+    """
+    Message for the card of the LAST episode of a season (any length: 6, 7, 10, 13...).
+    Returns None unless (s, e) is the highest episode of season s in the DB AND
+    season s+1 (starting at episode 1) exists. All numbers come from the DB.
+    """
+    try:
+        cur_eps, nxt_eps = await asyncio.gather(
+            asyncio.to_thread(_season_episodes_sync, stem, s),
+            asyncio.to_thread(_season_episodes_sync, stem, s + 1))
+        if not nxt_eps or 1 not in nxt_eps:
+            return None                       # no next season -> nothing to announce
+        if cur_eps and e < max(cur_eps):
+            return None                       # not the last episode of this season
+        done = max(len(cur_eps), e)
+        return (f"🏁 <i>This was the last episode of Season {s}</i>\n"
+                f"<i>{done} episode{'s' if done != 1 else ''} finished</i>\n"
+                f"🆕 <i>Season {s + 1} started · {len(nxt_eps)} episode"
+                f"{'s' if len(nxt_eps) != 1 else ''} available · starting with Episode 1</i>")
+    except Exception as ex:
+        logger.warning(f"[next_episode] season end note failed: {ex}")
+        return None
+
+
 async def _send_card(bot, user_id, stem, s, e, size, file_id, delay=0):
     """
     Posts the persistent message: last watched name + Next Episode button.
@@ -261,6 +285,9 @@ async def _send_card(bot, user_id, stem, s, e, size, file_id, delay=0):
             note = _notes.pop((user_id, file_id), None)
             if note:
                 text += f"\n{note}"
+            end_note = await _season_end_note(stem, s, e)
+            if end_note:
+                text += f"\n{end_note}"
             premium, left = await _next_status(user_id)
             if premium:
                 text += "\n💎 <i>Premium: unlimited next episodes</i>"
@@ -406,18 +433,6 @@ async def find_next(cur_doc):
             return {"doc": hit[0], "parsed": hit[1], "same_quality": hit[2], "new_season": True}
         return None
 
-    async def add_season_total(res):
-        if res and res["new_season"]:
-            # count the NEW season and the season that was just finished
-            new_eps, old_eps = await asyncio.gather(
-                asyncio.to_thread(_season_episodes_sync, stem, res["parsed"][1]),
-                asyncio.to_thread(_season_episodes_sync, stem, s))
-            res["season_total"] = len(new_eps)
-            # the episode just watched was the last one, so its number is the
-            # minimum the season can have (covers gaps in the DB)
-            res["prev_total"] = max(len(old_eps), e)
-        return res
-
     # 1) fast indexed search
     docs1 = await asyncio.to_thread(_search_text_sync, stem, s, e)
     res = choose(_candidates(docs1, stem))
@@ -427,7 +442,6 @@ async def find_next(cur_doc):
         res = choose(_candidates(docs2, stem))
     else:
         docs2 = []
-    res = await add_season_total(res)
     if res:
         logger.info(
             f"[next_episode] found: stem={stem!r} S{s}E{e} -> "
@@ -519,17 +533,6 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
 
     # extra info shown on the (persistent) card that is posted after the file
     extra = []
-    if res["new_season"]:
-        total = res.get("season_total")
-        prev = res.get("prev_total")
-        extra.append(f"🏁 <i>This was the last episode of Season {cp[1]}</i>")
-        if prev:
-            extra.append(f"<i>{prev} episode{'s' if prev != 1 else ''} finished</i>")
-        if total:
-            extra.append(f"🆕 <i>Season {np_[1]} started · {total} episodes available · "
-                         f"starting with Episode 1</i>")
-        else:
-            extra.append(f"🆕 <i>Season {np_[1]} started</i>")
     if not res["same_quality"]:
         extra.append(f"⚠️ <i>Same quality not available, sent the closest one "
                      f"({fmt_size(nd.get('file_size'))})</i>")
