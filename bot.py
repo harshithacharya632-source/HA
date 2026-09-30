@@ -1,10 +1,15 @@
 import sys, glob, importlib, logging, logging.config, pytz, asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # Get logging configurations
 logging.config.fileConfig('logging.conf')
 logging.getLogger().setLevel(logging.INFO)
 logging.getLogger("pyrogram").setLevel(logging.ERROR)
+# Show FloodWait sleeps ("Waiting for N seconds before continuing ...") and
+# retries in the logs. They are logged at WARNING by this one module, and the
+# line above was hiding them, so flood waits were invisible.
+logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
 logging.getLogger("cinemagoer").setLevel(logging.ERROR)
 
 from pyrogram import Client, idle
@@ -54,6 +59,8 @@ TechVJBot.start()
 if AdminBot:
     AdminBot.start()
 loop = asyncio.get_event_loop()
+# Bigger default executor for every asyncio.to_thread() call (settings, users...).
+loop.set_default_executor(ThreadPoolExecutor(max_workers=64))
 
 
 async def start():

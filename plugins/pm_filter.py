@@ -994,33 +994,62 @@ def filter_and_rank(files: list, search: str) -> list:
 # + filter ONCE per search key and reuse the cached, already-filtered
 # list for all subsequent season/episode/combined clicks.
 SEASON_CACHE = {}          # key -> {"files": [...], "ts": epoch_seconds}
-SEASON_CACHE_TTL = 900     # 15 minutes
+SEASON_CACHE_TTL = 3600    # 60 minutes (was 15) - a click after the TTL pays a full re-fetch
+CACHE_MAX_KEYS = 150       # hard cap per cache dict so memory can't grow forever
+_SEASON_INFLIGHT = {}      # key -> asyncio.Task; ONE fetch per key, shared by everyone
+# The pool only ever reads these four fields, so don't pull whole documents.
+POOL_PROJECTION = {"file_id": 1, "file_name": 1, "file_size": 1, "caption": 1}
+
+
+def _prune_cache(cache, ttl):
+    """Drop expired entries, then the oldest ones beyond CACHE_MAX_KEYS."""
+    now = datetime.now().timestamp()
+    for k in [k for k, v in cache.items() if now - v["ts"] >= ttl]:
+        cache.pop(k, None)
+    if len(cache) > CACHE_MAX_KEYS:
+        for k in sorted(cache, key=lambda x: cache[x]["ts"])[:len(cache) - CACHE_MAX_KEYS]:
+            cache.pop(k, None)
+
+
+async def _load_season_files(chat_id, key, search):
+    try:
+        files, _, _ = await asyncio.wait_for(
+            get_search_results(
+                chat_id, search, max_results=50000, need_count=False,
+                projection=POOL_PROJECTION,
+            ),
+            timeout=20,
+        )
+    except Exception as e:
+        logger.exception(f"get_cached_season_files timed out/failed for '{search}': {e}")
+        return []
+    # filter_and_rank() runs a regex over every one of up to 50,000 names.
+    # That is pure CPU; running it inline froze the WHOLE event loop (every
+    # user's buttons) for seconds. Run it in a worker thread instead.
+    files = await asyncio.to_thread(filter_and_rank, files, search)
+    SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
+    _prune_cache(SEASON_CACHE, SEASON_CACHE_TTL)
+    return files
+
+
+def _season_task(chat_id, key, search):
+    """The ONE shared full-pool fetch for this key (started if not running)."""
+    task = _SEASON_INFLIGHT.get(key)
+    if task is None:
+        task = asyncio.create_task(_load_season_files(chat_id, key, search))
+        _SEASON_INFLIGHT[key] = task
+        task.add_done_callback(lambda _t, k=key: _SEASON_INFLIGHT.pop(k, None))
+    return task
 
 
 async def get_cached_season_files(chat_id, key, search):
     entry = SEASON_CACHE.get(key)
     if entry and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
         return entry["files"]
-    # ✅ STUCK-SEARCH FIX: this used to await get_search_results() with no
-    # timeout at all. Since this call is fired via asyncio.create_task()
-    # (see auto_filter), a slow/hung Mongo query here doesn't just delay
-    # this one background task quietly — it holds onto a DB connection
-    # from the pool indefinitely. Under load, enough of these piling up
-    # exhausts the connection pool, and THAT is what made totally
-    # unrelated, later searches from other users in other groups also
-    # go silent for a while until a connection finally freed up again.
-    # Bounded the same way get_poster() already is elsewhere in this file.
-    try:
-        files, _, _ = await asyncio.wait_for(
-            get_search_results(chat_id, search, max_results=50000, need_count=False),
-            timeout=20,
-        )
-    except Exception as e:
-        logger.exception(f"get_cached_season_files timed out/failed for '{search}': {e}")
-        return []
-    files = filter_and_rank(files, search)
-    SEASON_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
-    return files
+    # De-duplicate: the background warm-up started by auto_filter() and a
+    # button click used to BOTH run the full 50k fetch at the same time.
+    # Now the click just waits for the fetch that is already running.
+    return await asyncio.shield(_season_task(chat_id, key, search))
 
 
 # ===============================
@@ -1039,30 +1068,68 @@ DISPLAY_CACHE_TTL = 900     # 15 minutes
 DISPLAY_POOL_SIZE = 500     # fetch/rank cap for the main results list
 
 
-async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_SIZE):
-    entry = DISPLAY_CACHE.get(key)
-    if entry and (datetime.now().timestamp() - entry["ts"] < DISPLAY_CACHE_TTL):
-        return entry["files"]
-    # ✅ STUCK-SEARCH FIX: this is the call every single group text search
-    # goes through (give_filter -> auto_filter -> get_ranked_page -> here),
-    # and it used to await get_search_results() with NO timeout at all —
-    # the only unbounded call left in the whole search path, while every
-    # other slow call in this file (get_poster, etc.) was already wrapped
-    # in asyncio.wait_for(). give_filter() has a try/except around
-    # auto_filter() meant to catch exactly this ("Search took too long or
-    # failed") and show a friendly error, but that safety net only fires
-    # on a raised exception — a genuinely hung Mongo call (slow query,
-    # dropped connection, momentarily exhausted pool) never raised
-    # anything, it just sat there, so "Searching..." stayed on screen with
-    # no response until Mongo unstuck itself on its own — exactly the
-    # "takes the name and gets stuck, works again after a while" symptom.
-    # Now it fails fast and lets the existing fallback message do its job.
+# PAGE-COUNT FIX: the quick pool above only looks at the newest 500 matches
+# in Mongo, THEN keeps the ones that start with the search text. So "1/63"
+# only meant "500 files = the cap", not the real total, and a search where
+# just ~55 of those 500 start with the text showed "1/7" although the
+# library has far more. The page list now uses the FULL pool (up to 50,000
+# files - the same list the Series/quality buttons use) whenever it is
+# ready, and waits for it up to this many seconds. If it is not ready in
+# time the quick 500-file list is shown instead (the old behaviour), so a
+# search never hangs. Set FULL_POOL_WAIT = 0 for the old speed-only
+# behaviour; raise it to get an accurate page count more often.
+FULL_POOL_WAIT = 2.0        # first page of a new search
+FULL_POOL_WAIT_NEXT = 6.0   # NEXT / BACK taps
+
+
+async def _fetch_display_pool(chat_id, search, pool_size):
+    # ✅ STUCK-SEARCH FIX (kept): bounded by a timeout, so a hung Mongo call
+    # RAISES and give_filter()'s "Search took too long" fallback can fire
+    # instead of "Searching..." sitting on screen until Mongo unsticks.
     files, _, _ = await asyncio.wait_for(
         get_search_results(chat_id, search, max_results=pool_size, need_count=False),
         timeout=15,
     )
-    files = filter_and_rank(files, search)
+    return await asyncio.to_thread(filter_and_rank, files, search)
+
+
+def _fresh_full_pool(key):
+    entry = SEASON_CACHE.get(key)
+    if entry and entry["files"] and (datetime.now().timestamp() - entry["ts"] < SEASON_CACHE_TTL):
+        return entry["files"]
+    return None
+
+
+async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_SIZE, wait=FULL_POOL_WAIT):
+    # 1) full pool already cached -> real total, instant
+    files = _fresh_full_pool(key)
+    if files:
+        return files
+    # 2) quick pool already cached for this key (first page was already shown)
+    entry = DISPLAY_CACHE.get(key)
+    if entry and (datetime.now().timestamp() - entry["ts"] < DISPLAY_CACHE_TTL):
+        running = _SEASON_INFLIGHT.get(key)
+        if running is not None and wait:
+            # the full fetch is still running - give it a moment to finish
+            await asyncio.wait({running}, timeout=wait)
+            files = _fresh_full_pool(key)
+            if files:
+                return files
+        return entry["files"]
+    # 3) cold: run the quick pool AND the full pool together; use the full
+    #    one if it lands inside the time box, otherwise the quick one.
+    full_task = _season_task(chat_id, key, search)
+    quick_task = asyncio.ensure_future(_fetch_display_pool(chat_id, search, pool_size))
+    quick_task.add_done_callback(lambda t: t.cancelled() or t.exception())  # no "never retrieved" warning
+    if wait:
+        await asyncio.wait({full_task}, timeout=wait)
+        files = _fresh_full_pool(key)
+        if files:
+            quick_task.cancel()
+            return files
+    files = await quick_task
     DISPLAY_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
+    _prune_cache(DISPLAY_CACHE, DISPLAY_CACHE_TTL)
     return files
 
 
@@ -1078,7 +1145,10 @@ async def get_ranked_page(chat_id, key, search, offset=0, max_results=8):
     full 50k season/quality pool, so prefix matches sort to the front
     without paying the full pool's fetch cost.
     """
-    all_files = await get_display_ranked_files(chat_id, key, search)
+    all_files = await get_display_ranked_files(
+        chat_id, key, search,
+        wait=FULL_POOL_WAIT if not offset else FULL_POOL_WAIT_NEXT,
+    )
     total = len(all_files)
     files = all_files[offset:offset + max_results]
     next_offset = offset + max_results if (offset + max_results) < total else ""
