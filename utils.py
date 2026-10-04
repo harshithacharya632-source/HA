@@ -519,6 +519,8 @@ async def get_verify_shorted_link(link, url, api):
         api_url = "https://indiaearnx.com/api"
     elif "linkskito.com" in URL:
         api_url = "https://linkskito.com/api"
+    elif "shortwala.com" in URL:
+        api_url = "https://shortwala.com/api"
     else:
         return link
 
