@@ -164,7 +164,7 @@ VERIFY = bool(environ.get('VERIFY', True))
 
 # ============ VERIFY SHORTENER PROVIDERS ============
 # Which one is currently active: "linkskito" or "shortwala"
-VERIFY_SHORTENER_PROVIDER = environ.get('VERIFY_SHORTENER_PROVIDER', 'shortwala')
+VERIFY_SHORTENER_PROVIDER = environ.get('VERIFY_SHORTENER_PROVIDER', 'linkskito')
 
 # IndiaEarnX credentials (kept here, out of rotation — not part of the current toggle)
 INDIAEARNX_URL = environ.get('INDIAEARNX_URL', 'indiaearnx.com')
