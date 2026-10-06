@@ -106,8 +106,11 @@ def is_file_already_saved(file_id, file_name):
             
     return False
 
-async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False, need_count=True, projection=None):
+async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False, need_count=True, projection=None, article_fallback=True):
     """For given query return (results, next_offset, total_results).
+
+    article_fallback=False skips the "The/A/An" retry on an empty result (used by
+    quick existence probes that only want to know if THIS spelling has files).
 
     need_count=False skips the count_documents() call entirely when the
     caller is never going to use the exact total anyway (e.g. the display
@@ -126,51 +129,67 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
         if not q:
             raw_pattern = '.'
         elif ' ' not in q:
-            raw_pattern = r'(\b|[\.\+\-_])' + q + r'(\b|[\.\+\-_])'
+            # re.escape: a title with ( ) ? * + [ etc. used to break/alter the
+            # pattern (and a failed compile fell back to an exact-match string
+            # that never matches anything).
+            raw_pattern = r'(\b|[\.\+\-_])' + re.escape(q) + r'(\b|[\.\+\-_])'
         else:
-            raw_pattern = q.replace(' ', r'.*[\s\.\+\-_]')
+            raw_pattern = r'.*[\s\.\+\-_]'.join(re.escape(w) for w in q.split())
         try:
             regex = re.compile(raw_pattern, flags=re.IGNORECASE)
-        except:
-            regex = q
+        except re.error:
+            regex = re.compile(re.escape(q), flags=re.IGNORECASE)
         regex_filter = {'file_name': regex}
         # Phrase search on the text index (fast + gives an exact, indexed count).
         # Quoting the whole query makes Mongo require the words as a phrase,
-        # matching the old regex's "words in order" behaviour.
-        text_filter = {'$text': {'$search': f'"{q}"'}}
+        # matching the old regex's "words in order" behaviour. A stray " or \
+        # inside the text would break out of the phrase, so drop them.
+        q_text = q.replace('"', ' ').replace('\\', ' ').strip()
+        text_filter = {'$text': {'$search': f'"{q_text}"'}}
 
         def _run(collection, mongo_filter):
             cur = collection.find(mongo_filter, projection).sort('$natural', -1).skip(offset).limit(max_results)
             found = list(cur)
-            count = collection.count_documents(mongo_filter) if need_count else len(found)
+            # A short first page already IS the whole result set (and an empty
+            # one is a definite miss) - a second count_documents() round trip
+            # to Mongo would only repeat the answer we already have.
+            if not need_count or (offset == 0 and len(found) < max_results):
+                count = len(found)
+            else:
+                count = collection.count_documents(mongo_filter)
             return found, count
 
-        def _run_all_blocking():
+        def _run_one_blocking(collection):
             # All the actual pymongo work (synchronous/blocking network calls)
-            # happens here, inside one function, so it can be handed to a worker
+            # for ONE collection happens here, so it can be handed to a worker
             # thread as a single unit below.
-            files_ = []
-            total_ = 0
-            for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
-                try:
-                    # Requires a text index on file_name - see create_search_index()
-                    # below / the one-time setup note. Falls back to the regex scan
-                    # automatically if that index doesn't exist yet, so search never
-                    # breaks - it's just slower until the index is created.
-                    found, count = _run(collection, text_filter)
-                except Exception:
-                    found, count = _run(collection, regex_filter)
-                files_.extend(found)
-                total_ += count
-            return files_, total_
+            try:
+                # Requires a text index on file_name - see create_search_index()
+                # below / the one-time setup note. Falls back to the regex scan
+                # automatically if that index doesn't exist yet, so search never
+                # breaks - it's just slower until the index is created.
+                return _run(collection, text_filter)
+            except Exception:
+                return _run(collection, regex_filter)
 
-        # Run all the blocking pymongo calls in a worker thread instead of
-        # directly in this async function. Without this, every search froze the
-        # ENTIRE bot's event loop for the duration of the DB round trip - meaning
+        # Run the blocking pymongo calls in worker threads instead of directly
+        # in this async function. Without this, every search froze the ENTIRE
+        # bot's event loop for the duration of the DB round trip - meaning
         # other users' searches AND the file-send callbacks all queued up behind
-        # it. That's what was causing the multi-second lag on both search and
-        # file delivery, not the DB query itself being slow.
-        return await asyncio.get_running_loop().run_in_executor(DB_EXECUTOR, _run_all_blocking)
+        # it. Both collections are queried at the same time (they used to be
+        # queried one after the other, doubling the wait when
+        # MULTIPLE_DATABASE is on). gather() keeps the original order.
+        loop = asyncio.get_running_loop()
+        collections = [col, sec_col] if MULTIPLE_DATABASE else [col]
+        results = await asyncio.gather(*[
+            loop.run_in_executor(DB_EXECUTOR, _run_one_blocking, c) for c in collections
+        ])
+        files_ = []
+        total_ = 0
+        for found, count in results:
+            files_.extend(found)
+            total_ += count
+        return files_, total_
 
     files, total_results = await _search(query)
 
@@ -181,11 +200,14 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
     # Only runs on the initial search (offset 0) and only when the query
     # doesn't already start with one of these words, so it never fires on
     # pagination ("next page") calls or double-prefixes a query.
-    if total_results == 0 and offset == 0:
+    if article_fallback and total_results == 0 and offset == 0:
         first_word = query.split()[0].lower() if query.split() else ""
         if first_word not in ("the", "a", "an"):
-            for prefix in ("The", "A", "An"):
-                prefixed_files, prefixed_total = await _search(f"{prefix} {query}")
+            # Was 3 sequential round trips on EVERY miss - the main reason a
+            # "not found" took so long to appear. Now all three run at once;
+            # the first prefix in this order that has results still wins.
+            tries = await asyncio.gather(*[_search(f"{prefix} {query}") for prefix in ("The", "A", "An")])
+            for prefixed_files, prefixed_total in tries:
                 if prefixed_total > 0:
                     files, total_results = prefixed_files, prefixed_total
                     break

@@ -163,10 +163,10 @@ USE_CAPTION_FILTER = bool(environ.get('USE_CAPTION_FILTER', True))
 VERIFY = bool(environ.get('VERIFY', True))
 
 # ============ VERIFY SHORTENER PROVIDERS ============
-# Which one is currently active: "indiaearnx" or "linkskito"
-VERIFY_SHORTENER_PROVIDER = environ.get('VERIFY_SHORTENER_PROVIDER', 'linkskito')
+# Which one is currently active: "linkskito" or "shortwala"
+VERIFY_SHORTENER_PROVIDER = environ.get('VERIFY_SHORTENER_PROVIDER', 'shortwala')
 
-# IndiaEarnX credentials (kept here even when turned off, so you can switch back anytime)
+# IndiaEarnX credentials (kept here, out of rotation — not part of the current toggle)
 INDIAEARNX_URL = environ.get('INDIAEARNX_URL', 'indiaearnx.com')
 INDIAEARNX_API = environ.get('INDIAEARNX_API', 'dbf3de7f651ff9c6df2484b353772918a4277635')
 
@@ -174,14 +174,18 @@ INDIAEARNX_API = environ.get('INDIAEARNX_API', 'dbf3de7f651ff9c6df2484b353772918
 LINKSKITO_URL = environ.get('LINKSKITO_URL', 'linkskito.com')
 LINKSKITO_API = environ.get('LINKSKITO_API', '40dd4a4cfbb04cd6cbf66c3d928084375a60e781')
 
+# Shortwala credentials
+SHORTWALA_URL = environ.get('SHORTWALA_URL', 'shortwala.com')
+SHORTWALA_API = environ.get('SHORTWALA_API', '37b48c29b7a3d4ea1653fc1792e4e7c52c93895e')
+
 # Resolves the active provider into the two vars the rest of the bot actually uses.
-# To switch shorteners later, just change VERIFY_SHORTENER_PROVIDER above.
-if VERIFY_SHORTENER_PROVIDER == 'linkskito':
+# To switch, just change VERIFY_SHORTENER_PROVIDER above to 'linkskito' or 'shortwala'.
+if VERIFY_SHORTENER_PROVIDER == 'shortwala':
+    VERIFY_SHORTLINK_URL = SHORTWALA_URL
+    VERIFY_SHORTLINK_API = SHORTWALA_API
+else:
     VERIFY_SHORTLINK_URL = LINKSKITO_URL
     VERIFY_SHORTLINK_API = LINKSKITO_API
-else:
-    VERIFY_SHORTLINK_URL = INDIAEARNX_URL
-    VERIFY_SHORTLINK_API = INDIAEARNX_API
 
 VERIFY_TUTORIAL = environ.get('VERIFY_TUTORIAL', 'https://t.me/Godlixhowtoverify')
 
@@ -232,7 +236,7 @@ if 'DYNO' in environ:
     ON_HEROKU = True
 else:
     ON_HEROKU = False
-URL = environ.get("URL", "https://injured-tiff-goflix-310fbd68.koyeb.app")
+URL = environ.get("URL", "https://powerful-jacklin-goflixstream-source-83f43a0d.koyeb.app")
 
 
 # Rename Info : If True Then Bot Rename File Else Not

@@ -1,4 +1,4 @@
-import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram, functools, difflib
+import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram, functools, difflib, unicodedata
 from datetime import datetime, timedelta, date, time
 from Script import script
 from info import *
@@ -922,7 +922,7 @@ async def get_similar_titles(query, limit=5):
         print("[spell-fuzzy] no known titles available — can't suggest anything")
         return []
 
-    matches = _score(titles)
+    matches = await asyncio.to_thread(_score, titles)
     if not matches:
         # Nothing in the (possibly stale, up to an hour old) cached pool —
         # before giving up, force one fresh reload straight from the DB.
@@ -931,7 +931,7 @@ async def get_similar_titles(query, limit=5):
         # cache refresh to happen to pick it up.
         fresh_titles = await _get_known_titles(force_refresh=True)
         if fresh_titles is not titles:
-            matches = _score(fresh_titles)
+            matches = await asyncio.to_thread(_score, fresh_titles)
             titles = fresh_titles
 
     print(f"[spell-fuzzy] query='{query}' cleaned='{q}' pool_size={len(titles)} matches={matches}")
@@ -939,6 +939,7 @@ async def get_similar_titles(query, limit=5):
 
 
 _LEADING_ARTICLE_RE = re.compile(r'^(the|a|an)\s+', re.IGNORECASE)
+_CMP_SYM_RE = re.compile(r'[\W_]+')
 
 
 def filter_and_rank(files: list, search: str) -> list:
@@ -956,6 +957,10 @@ def filter_and_rank(files: list, search: str) -> list:
     search_clean = STRIP_RE.sub(' ', search.lower().strip())
     search_clean = re.sub(r'\s+', ' ', search_clean).strip()
     search_lower = search.lower().strip()
+    # Same comparison with symbols ignored, so "ocean's eleven" / "spider-man"
+    # / "s.w.a.t" in a stored name still match what the user typed.
+    search_spaced = _CMP_SYM_RE.sub(' ', search_clean).strip()
+    search_glued = _CMP_SYM_RE.sub('', search_clean)
 
     scored = []
     for f in files:
@@ -966,7 +971,16 @@ def filter_and_rank(files: list, search: str) -> list:
         # ✅ PREFIX MATCH ONLY — must start with search name, either as-is
         # or with the file's own leading article ignored
         if not (cleaned.startswith(search_clean) or cleaned_no_article.startswith(search_clean)):
-            continue
+            # slow path only for files that failed the exact check above
+            c_sp = _CMP_SYM_RE.sub(' ', cleaned).strip()
+            c_na_sp = _CMP_SYM_RE.sub(' ', cleaned_no_article).strip()
+            c_gl = _CMP_SYM_RE.sub('', cleaned)
+            c_na_gl = _CMP_SYM_RE.sub('', cleaned_no_article)
+            if not (
+                (search_spaced and (c_sp.startswith(search_spaced) or c_na_sp.startswith(search_spaced)))
+                or (search_glued and (c_gl.startswith(search_glued) or c_na_gl.startswith(search_glued)))
+            ):
+                continue
 
         # Rank: exact prefix > contains (article-stripped exact prefix
         # still ranks as an exact match, just below a true zero-article one)
@@ -1082,6 +1096,11 @@ FULL_POOL_WAIT = 2.0        # first page of a new search
 FULL_POOL_WAIT_NEXT = 6.0   # NEXT / BACK taps
 
 
+class _RawEmpty(list):
+    """Marker for 'the database itself returned nothing' - a definite miss, as
+    opposed to 'files matched but none passed the prefix filter'."""
+
+
 async def _fetch_display_pool(chat_id, search, pool_size):
     # ✅ STUCK-SEARCH FIX (kept): bounded by a timeout, so a hung Mongo call
     # RAISES and give_filter()'s "Search took too long" fallback can fire
@@ -1090,6 +1109,8 @@ async def _fetch_display_pool(chat_id, search, pool_size):
         get_search_results(chat_id, search, max_results=pool_size, need_count=False),
         timeout=15,
     )
+    if not files:
+        return _RawEmpty()
     return await asyncio.to_thread(filter_and_rank, files, search)
 
 
@@ -1122,7 +1143,20 @@ async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_
     quick_task = asyncio.ensure_future(_fetch_display_pool(chat_id, search, pool_size))
     quick_task.add_done_callback(lambda t: t.cancelled() or t.exception())  # no "never retrieved" warning
     if wait:
-        await asyncio.wait({full_task}, timeout=wait)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await asyncio.wait({full_task, quick_task}, timeout=wait, return_when=asyncio.FIRST_COMPLETED)
+        # ⚡ Definite miss (the DB has nothing for this search): answer NOW
+        # instead of also waiting on the 50k-file pool, which cannot find more.
+        if (quick_task.done() and not quick_task.cancelled()
+                and quick_task.exception() is None
+                and isinstance(quick_task.result(), _RawEmpty)):
+            DISPLAY_CACHE[key] = {"files": [], "ts": datetime.now().timestamp()}
+            _prune_cache(DISPLAY_CACHE, DISPLAY_CACHE_TTL)
+            return []
+        remaining = wait - (loop.time() - started)
+        if remaining > 0 and not full_task.done():
+            await asyncio.wait({full_task}, timeout=remaining)
         files = _fresh_full_pool(key)
         if files:
             quick_task.cancel()
@@ -4046,6 +4080,133 @@ async def cb_handler(client: Client, query: CallbackQuery):
     except QueryIdInvalid:
         pass
 
+# ===============================
+# SEARCH-TEXT CLEANING (symbols / filler words)
+# ===============================
+# "Spider-Man: Brand New Day" (copied from Google) used to find nothing while
+# "Spider-Man: Brand New" worked: "new" sat in the filler-word list, so the
+# title was cut to "spider man brand day". The filler words below no longer
+# include "new" (it is a real title word: Brand New Day, New York, New Girl)
+# and now only match WHOLE words (the old pattern also bit into real titles:
+# "Finding Nemo" -> "ing nemo", "Newton" -> "ton", "Brother" -> "ther").
+_FILLER_RE = re.compile(
+    r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?)\b",
+    flags=re.IGNORECASE,
+)
+# "new" at the very start/end only ("new kantara", "spider man brand new") - never mid-title
+_NEW_EDGE_RE = re.compile(r"^new\s+|\s+new$", re.IGNORECASE)
+
+
+def _is_symbol(ch: str) -> bool:
+    return ch == "_" or unicodedata.category(ch)[0] in "PS"
+
+
+def _sym_to_space(s: str) -> str:
+    """Every symbol / punctuation mark becomes a space: 'spider-man: x' -> 'spider man x'."""
+    s = unicodedata.normalize("NFKC", s)
+    s = "".join(" " if (_is_symbol(c) or unicodedata.category(c)[0] in "ZC") else c for c in s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _sym_remove(s: str) -> str:
+    """Every symbol / punctuation mark is deleted: "ocean's" -> "oceans", "s.w.a.t" -> "swat"."""
+    s = unicodedata.normalize("NFKC", s)
+    s = "".join("" if _is_symbol(c) else (" " if unicodedata.category(c)[0] in "ZC" else c) for c in s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _db_style(s: str) -> str:
+    """Spell it the way database/ia_filterdb.clean_file_name() stores names:
+    _ - . + become spaces, brackets vanish, other punctuation stays as typed."""
+    s = unicodedata.normalize("NFKC", s).replace("\u2019", "'").replace("\u2018", "'")
+    s = re.sub(r"[_\-\.\+\u2013\u2014]", " ", s)
+    s = re.sub(r"[\[\](){}]", "", s)
+    s = s.replace('"', "").replace("\\", " ")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def build_search_variants(search: str, max_variants: int = 4) -> list:
+    """Ordered, de-duplicated spellings of one search, most likely first.
+    A plain title gives exactly one variant, so ordinary searches cost nothing extra."""
+    base = [_sym_to_space(search), _db_style(search), _sym_remove(search)]
+    out = []
+
+    def add(v):
+        v = re.sub(r"\s+", " ", v).strip()
+        if v and v != "new" and v not in out:
+            out.append(v)
+
+    for v in base:
+        add(v)
+    # A leading/trailing "new" is only dropped as a LAST resort
+    # ("new kantara movie" -> "kantara"), after every spelling that keeps it
+    # has missed. A "new" in the middle of a title is never touched.
+    for v in base:
+        if _NEW_EDGE_RE.search(v):
+            add(_NEW_EDGE_RE.sub("", v))
+    return out[:max_variants]
+
+
+async def _pick_search_variant(chat_id, variants: list) -> str:
+    """First variant that actually has files in the DB (priority order kept).
+    Probes run together, so this costs one round trip - and only when a search
+    HAS more than one spelling. Falls back to the first variant."""
+    if len(variants) <= 1:
+        return variants[0]
+
+    async def _probe(v):
+        try:
+            _, _, total = await asyncio.wait_for(
+                get_search_results(chat_id, v, max_results=1, need_count=False, article_fallback=False), timeout=8
+            )
+            return total
+        except Exception:
+            return 0
+
+    totals = await asyncio.gather(*[_probe(v) for v in variants])
+    for v, t in zip(variants, totals):
+        if t:
+            return v
+    return variants[0]
+
+
+def _normalize_season_episode(search: str) -> str:
+    """Season/episode spelling normalisation (S4E1 / season 4 ep 1 / S04EO1 -> S04E01).
+    Moved out of auto_filter() unchanged so it can run on every search variant."""
+    # ✅ Common typo: letter "O" instead of digit "0" right after
+    # S/E, e.g. "S04EO1" meant as "S04E01" (easy to type/copy-paste
+    # wrong since O and 0 look near-identical). Normalize BEFORE
+    # the season+episode regex below, since that regex requires
+    # real digits and would otherwise just leave "EO1" untouched
+    # (it doesn't match \d+), causing a silent search miss even
+    # though the intended episode is obvious to a human.
+    # Two separate patterns since "E" in "S04EO1" is preceded by a
+    # digit (no word boundary there), while "S" in "SO4E01" is at
+    # the start of a token (word boundary applies normally).
+    search = re.sub(r'(\d)[eE][oO](\d{1,2})\b', r'\g<1>E0\2', search)
+    search = re.sub(r'\b([sS])[oO](\d{1,2})', r'\g<1>0\2', search)
+
+    # ✅ Season + Episode
+    search = re.sub(
+        r'(?:season|seas?|s)[.\s_-]*(\d+)[.\s_-]*(?:episode|ep?|e)[.\s_-]*(\d+)',
+        lambda m: f"S{int(m.group(1)):02d}E{int(m.group(2)):02d}",
+        search, flags=re.IGNORECASE
+    )
+    # ✅ Season only
+    search = re.sub(
+        r'(?:season|seas?)\s*(\d+)',
+        lambda m: f"S{int(m.group(1)):02d}",
+        search, flags=re.IGNORECASE
+    )
+    # ✅ Episode only (E3 → E03)
+    search = re.sub(
+        r'\bE(\d{1,2})\b',
+        lambda m: f"E{int(m.group(1)):02d}",
+        search, flags=re.IGNORECASE
+    )
+    return search
+
+
 async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from_deeplink=False):
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     # ✅ Fixed page size used everywhere below (both the normal search
@@ -4078,47 +4239,28 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False, from
                     continue
                 else:
                     search = search + x + " "
-            search = re.sub(r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?)", "", search, flags=re.IGNORECASE)
+            search = _FILLER_RE.sub("", search)
             search = re.sub(r"\s+", " ", search).strip()
-            search = search.replace("-", " ")
-            search = search.replace(":", "")
-            search = search.replace(".", "")
 
-            # ✅ Common typo: letter "O" instead of digit "0" right after
-            # S/E, e.g. "S04EO1" meant as "S04E01" (easy to type/copy-paste
-            # wrong since O and 0 look near-identical). Normalize BEFORE
-            # the season+episode regex below, since that regex requires
-            # real digits and would otherwise just leave "EO1" untouched
-            # (it doesn't match \d+), causing a silent search miss even
-            # though the intended episode is obvious to a human.
-            # Two separate patterns since "E" in "S04EO1" is preceded by a
-            # digit (no word boundary there), while "S" in "SO4E01" is at
-            # the start of a token (word boundary applies normally).
-            search = re.sub(r'(\d)[eE][oO](\d{1,2})\b', r'\g<1>E0\2', search)
-            search = re.sub(r'\b([sS])[oO](\d{1,2})', r'\g<1>0\2', search)
-
-            # ✅ Season + Episode
-            search = re.sub(
-                r'(?:season|seas?|s)[.\s_-]*(\d+)[.\s_-]*(?:episode|ep?|e)[.\s_-]*(\d+)',
-                lambda m: f"S{int(m.group(1)):02d}E{int(m.group(2)):02d}",
-                search, flags=re.IGNORECASE
-            )
-            # ✅ Season only
-            search = re.sub(
-                r'(?:season|seas?)\s*(\d+)',
-                lambda m: f"S{int(m.group(1)):02d}",
-                search, flags=re.IGNORECASE
-            )
-            # ✅ Episode only (E3 → E03)
-            search = re.sub(
-                r'\bE(\d{1,2})\b',
-                lambda m: f"E{int(m.group(1)):02d}",
-                search, flags=re.IGNORECASE
-            )
+            # ✅ Symbols (Spider-Man: Brand New Day, Ocean's Eleven, S.W.A.T., ...):
+            # build the possible spellings - symbols as spaces, symbols kept the
+            # way stored file names keep them, symbols removed - normalise each
+            # one, and use the first spelling that really exists in the DB.
+            search_variants = []
+            for _v in build_search_variants(search):
+                _v = _normalize_season_episode(_v)
+                if _v and _v not in search_variants:
+                    search_variants.append(_v)
+            search = await _pick_search_variant(message.chat.id, search_variants or [""])
 
             key = f"{message.chat.id}-{message.id}"
-            settings = await get_settings(message.chat.id)
-            files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=page_size)
+            settings_task = asyncio.ensure_future(get_settings(message.chat.id))
+            try:
+                files, offset, total_results = await get_ranked_page(message.chat.id, key, search, offset=0, max_results=page_size)
+            except BaseException:
+                settings_task.cancel()
+                raise
+            settings = await settings_task
             if not files:
                 if settings["spell_check"]:
                     return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
@@ -4332,19 +4474,32 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     else:
         reqstr_id = 0
         reqstr_mention = "Anonymous"
-    settings = await get_settings(msg.chat.id)
-    query = re.sub(
-        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*w?|kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|with\ssubtitle(s)?)",
-        "", msg.text, flags=re.IGNORECASE)  # plis contribute some common words
-    query = query.strip() + " movie"
+
+    reqst_gle = urllib.parse.quote_plus(mv_rqst)
+    google_button = InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
+
+    # ⚡ INSTANT answer. The "not found" message used to appear only AFTER the
+    # fuzzy title match, the IMDb name lookups (up to 6s each) and the
+    # external poster search (up to 15s) had all finished. Show it right away;
+    # if a "did you mean" list turns up in the next few seconds, it replaces
+    # this same message.
+    not_found_shown = False
+    try:
+        await reply_msg.edit_text(
+            text=script.I_CUDNT.format(mv_rqst),
+            reply_markup=InlineKeyboardMarkup([[google_button]])
+        )
+        not_found_shown = True
+    except Exception as e:
+        logger.exception(e)
+
     async def _build_and_show(labels):
         SPELL_CHECK[mv_id] = labels
         btn = [
             [InlineKeyboardButton(text=t.strip(), callback_data=f"spol#{reqstr1}#{k}")]
             for k, t in enumerate(labels)
         ]
-        reqst_gle = urllib.parse.quote_plus(mv_rqst)
-        btn.append([InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)])
+        btn.append([google_button])
         btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
         spell_check_del = await reply_msg.edit_text(
             text=script.CUDNT_FND.format(mv_rqst),
@@ -4353,50 +4508,48 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         # ✅ Suggestion messages always self-clean after 30s, regardless
         # of the group's general auto_delete setting.
         await asyncio.sleep(30)
-        await spell_check_del.delete()
+        try:
+            await spell_check_del.delete()
+        except Exception:
+            pass
 
-    # ✅ 1) Check OUR OWN library FIRST. A match from here is guaranteed
-    # to be a real, clickable, in-stock movie — checking it before the
-    # external API means a loosely-matched external guess (e.g. TMDB
-    # returning some other title for "Durandhar" instead of the real
-    # "Dhurandhar" that's actually sitting in our own DB) never shadows
-    # the better, correct local match.
-    similar = await get_similar_titles(mv_rqst)
-    if similar:
-        async def _imdb_correct_name(local_title):
-            """Our own DB match is guaranteed clickable/in-stock, but the
-            displayed text is just our locally-extracted filename stem
-            (can be messy — wrong capitalization, missing punctuation,
-            etc). Look the title up on IMDb and show its real, correctly
-            formatted name instead. Capped with a timeout and falls back
-            to the local title on any failure/slowness, so a flaky IMDb
-            lookup never breaks or stalls the suggestion list."""
-            try:
-                imdb = await asyncio.wait_for(get_poster(local_title), timeout=6)
-                if imdb and imdb.get('title'):
-                    return imdb['title']
-            except Exception as e:
-                print(f"[spell-fuzzy] IMDb name-correction failed for '{local_title}': {e}")
-            return local_title
+    async def _imdb_correct_name(local_title):
+        """Our own DB match is guaranteed clickable/in-stock, but the
+        displayed text is just our locally-extracted filename stem
+        (can be messy — wrong capitalization, missing punctuation,
+        etc). Look the title up on IMDb and show its real, correctly
+        formatted name instead. Capped with a short timeout and falls back
+        to the local title on any failure/slowness, so a flaky IMDb
+        lookup never breaks or stalls the suggestion list."""
+        try:
+            imdb = await asyncio.wait_for(get_poster(local_title), timeout=3)
+            if imdb and imdb.get('title'):
+                return imdb['title']
+        except Exception as e:
+            print(f"[spell-fuzzy] IMDb name-correction failed for '{local_title}': {e}")
+        return local_title
 
-        corrected = await asyncio.gather(*[_imdb_correct_name(t) for t in similar])
-        await _build_and_show(list(corrected))
-        return
+    async def _find_suggestions():
+        # ✅ 1) Check OUR OWN library FIRST. A match from here is guaranteed
+        # to be a real, clickable, in-stock movie — checking it before the
+        # external API means a loosely-matched external guess (e.g. TMDB
+        # returning some other title for "Durandhar" instead of the real
+        # "Dhurandhar" that's actually sitting in our own DB) never shadows
+        # the better, correct local match.
+        similar = await get_similar_titles(mv_rqst)
+        if similar:
+            return list(await asyncio.gather(*[_imdb_correct_name(t) for t in similar]))
 
-    # 2) Nothing close in our own library — fall back to the external
-    # poster/TMDB lookup. Mainly useful to confirm correct spelling even
-    # for a movie that isn't uploaded yet, so /request gets the right name.
-    # Bounded with a timeout — this used to have none at all, so a slow
-    # or hung IMDb response could leave the "Searching..." message stuck
-    # forever with no suggestions and no error, exactly what looked like
-    # the bot "getting stuck" on certain typo'd/unusual queries.
-    try:
-        movies = await asyncio.wait_for(get_poster(mv_rqst, bulk=True), timeout=15)
-    except Exception as e:
-        logger.exception(e)
-        movies = None
-
-    if movies:
+        # 2) Nothing close in our own library — fall back to the external
+        # poster/TMDB lookup. Mainly useful to confirm correct spelling even
+        # for a movie that isn't uploaded yet, so /request gets the right name.
+        try:
+            movies = await get_poster(mv_rqst, bulk=True)
+        except Exception as e:
+            logger.exception(e)
+            movies = None
+        if not movies:
+            return []
         # Deduped, max 5, "Title (Year)" so each button is a distinct,
         # useful guess instead of the old list which duplicated every
         # title once plain and once with the year tacked on (unbounded).
@@ -4414,21 +4567,42 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             movielist.append(label)
             if len(movielist) >= 5:
                 break
-        if movielist:
-            await _build_and_show(movielist)
-            return
+        return movielist
 
-    # 3) Truly nothing anywhere (our own DB AND the external API) —
-    # Google-only fallback.
-    reqst_gle = urllib.parse.quote_plus(mv_rqst)
-    button = [[
-        InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}", style=enums.ButtonStyle.DANGER)
-    ]]
+    # One overall time box for ALL the slow lookups (they run after the
+    # not-found message is already on screen, so nothing is waiting on them).
+    try:
+        labels = await asyncio.wait_for(_find_suggestions(), timeout=10)
+    except asyncio.TimeoutError:
+        labels = []          # expected when IMDb/TMDB is slow - not worth a stack trace
+    except Exception as e:
+        logger.exception(e)
+        labels = []
+
+    if labels:
+        try:
+            await _build_and_show(labels)
+            return
+        except Exception as e:
+            logger.exception(e)
+
+    # 3) Truly nothing anywhere (our own DB AND the external API) — the
+    # not-found message with the Google button stays as it is.
     if NO_RESULTS_MSG:
-        await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
-    k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        try:
+            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr_id, reqstr_mention, mv_rqst)))
+        except Exception as e:
+            logger.exception(e)
+    if not not_found_shown:
+        try:
+            await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup([[google_button]]))
+        except Exception as e:
+            logger.exception(e)
     await asyncio.sleep(30)
-    await k.delete()
+    try:
+        await reply_msg.delete()
+    except Exception:
+        pass
 
 
 async def manual_filters(client, message, text=False):
