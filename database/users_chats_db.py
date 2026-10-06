@@ -368,6 +368,30 @@ class Database:
     async def mark_expired_notified(self, user_id):
         await self.users.update_one({"id": user_id}, {"$set": {"expired_notified": True}})
 
+    # ── One-time offer tracking ────────────────────────────────────────
+    # `offer_claimed` holds the id of the last offer this user used (see
+    # plan_pricing.py). Same id as the running offer = already used, so they
+    # pay the standard price; a brand new offer has a new id = usable again.
+    async def get_offer_claimed(self, user_id):
+        user_data = await self._safe_find_one(self.users, {"id": int(user_id)}, {"offer_claimed": 1, "_id": 0})
+        return user_data.get("offer_claimed") if user_data else None
+
+    async def claim_offer(self, user_id, offer_id) -> bool:
+        """Atomically marks `offer_id` as used by this user. True = this call
+        claimed it; False = it had already been claimed before (so two
+        payments racing each other can never both count as the 'first')."""
+        uid = int(user_id)
+        # Make sure the user's document exists first (a no-op for existing users),
+        # so the claim below is ONE atomic conditional update in every case -
+        # Mongo lets exactly one of several simultaneous callers match the
+        # "not already claimed" filter.
+        await self.users.update_one({"id": uid}, {"$setOnInsert": {"id": uid}}, upsert=True)
+        res = await self.users.update_one(
+            {"id": uid, "offer_claimed": {"$ne": offer_id}},
+            {"$set": {"offer_claimed": offer_id, "offer_claimed_at": datetime.datetime.now()}},
+        )
+        return res.matched_count == 1
+
     # ================== [PERSISTENT DAILY VERIFICATION] ==================
     # These mirror the free-trial/premium pattern above but store the
     # "verified until" date in Mongo instead of an in-memory dict, so
