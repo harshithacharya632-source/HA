@@ -81,7 +81,10 @@ from info import (
 )
 from plugins.commands import (
     load_plan_rates, format_plan_rates, format_remaining_time, format_expiry_time,
+    get_user_pricing,
 )
+from plan_pricing import format_user_plan_rates
+from upi_qr import upi_enabled, plan_qr_buttons, send_plan_qr
 # The main Goflix bot's own Client instance, so the "premium unlocked"
 # message can be sent from THAT bot too (in addition to this AdminBot),
 # since that's the bot the user is actually using day-to-day.
@@ -1226,16 +1229,64 @@ async def talk_to_admin_cb(client, query):
 async def admin_bot_plan_cmd(client, message):
     if PREMIUM_AND_REFERAL_MODE == False:
         return
-    rates = await load_plan_rates(MAIN_BOT_ID)
-    caption_text = PAYMENT_TEXT.format(plan_rates=format_plan_rates(rates["upi"]))
-    sent = await message.reply_photo(
-        photo=PAYMENT_QR,
-        caption=caption_text,
-        parse_mode=enums.ParseMode.HTML,
-        has_spoiler=True,
-        reply_markup=_welcome_markup(),
-    )
+    # This user's own prices: standard price struck through next to the offer
+    # price while they still have their one-time offer (see plan_pricing.py).
+    pricing = await get_user_pricing(MAIN_BOT_ID, message.from_user.id)
+    caption_text = PAYMENT_TEXT.format(plan_rates=format_user_plan_rates(pricing))
+    if upi_enabled():
+        # One button per plan -> a fresh QR with that plan's price filled in.
+        btn = plan_qr_buttons(pricing, PLAN_LABELS) + [
+            [InlineKeyboardButton("🧾 Submit Payment Screenshot", callback_data="submit_upi_screenshot")]
+        ]
+        sent = await message.reply_text(
+            caption_text + "\n\n👇 <b>Tap a plan to get your payment QR code</b>",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(btn),
+        )
+    else:
+        # UPI_ID not configured yet -> the old static QR picture.
+        sent = await message.reply_photo(
+            photo=PAYMENT_QR,
+            caption=caption_text,
+            parse_mode=enums.ParseMode.HTML,
+            has_spoiler=True,
+            reply_markup=_welcome_markup(),
+        )
     asyncio.create_task(_delayed_delete(sent, 180))
+
+
+@Client.on_callback_query(filters.regex(r"^upiqr_(\w+)$"))
+async def upi_plan_qr_cb(client, query):
+    plan = query.matches[0].group(1)
+    if not upi_enabled():
+        return await query.answer("UPI QR isn't set up yet — please contact the admin.", show_alert=True)
+    if plan not in PLAN_LABELS:
+        return await query.answer("Invalid plan.", show_alert=True)
+    if MAIN_BOT_ID is None:
+        return await query.answer("Bot misconfigured (BOT_TOKEN missing) — contact an admin.", show_alert=True)
+    # Live + per user: the QR always carries the CURRENT price, and an
+    # already-used one-time offer falls back to the standard price.
+    pricing = await get_user_pricing(MAIN_BOT_ID, query.from_user.id)
+    markup = InlineKeyboardMarkup([
+        # Reuses the existing flow: plan is already known, so it goes straight to "send the screenshot".
+        [InlineKeyboardButton("✅ I've paid — send screenshot", callback_data=f"claim_upi_plan_{plan}")],
+        [InlineKeyboardButton("❌ Close", callback_data="upi_close")],
+    ])
+    try:
+        await send_plan_qr(client, query.from_user.id, plan, PLAN_LABELS, pricing, reply_markup=markup)
+    except Exception as e:
+        logger.exception(e)
+        return await query.answer("Couldn't send the QR — please try /plan again.", show_alert=True)
+    await query.answer("QR sent 👇")
+
+
+@Client.on_callback_query(filters.regex(r"^upi_close$"))
+async def upi_close_cb(client, query):
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
 
 
 @Client.on_message(filters.private & filters.command("myplan"))
@@ -1270,10 +1321,9 @@ async def start_screenshot_flow_cb(client, query):
     if MAIN_BOT_ID is None:
         return await client.send_message(query.from_user.id, "⚠️ Bot misconfigured (BOT_TOKEN missing) — contact an admin.")
 
-    rates = await load_plan_rates(MAIN_BOT_ID)
-    upi = rates["upi"]
+    pricing = await get_user_pricing(MAIN_BOT_ID, query.from_user.id)
     btn = [
-        [InlineKeyboardButton(f"{PLAN_LABELS[p]} — {upi[p]}Rs", callback_data=f"claim_upi_plan_{p}")]
+        [InlineKeyboardButton(f"{PLAN_LABELS[p]} — {pricing['prices'][p]}Rs", callback_data=f"claim_upi_plan_{p}")]
         for p in ("week", "month", "3months", "6months")
     ]
     await client.send_message(
@@ -1389,10 +1439,9 @@ async def unsolicited_screenshot_cb(client, message):
         return await relay_user_question_to_admins_cb(client, message)
 
     await db.set_pending_screenshot(message.from_user.id, message.photo.file_id, extracted)
-    rates = await load_plan_rates(MAIN_BOT_ID)
-    upi = rates["upi"]
+    pricing = await get_user_pricing(MAIN_BOT_ID, message.from_user.id)
     btn = [
-        [InlineKeyboardButton(f"{PLAN_LABELS[p]} — {upi[p]}Rs", callback_data=f"claim_upi_plan_{p}")]
+        [InlineKeyboardButton(f"{PLAN_LABELS[p]} — {pricing['prices'][p]}Rs", callback_data=f"claim_upi_plan_{p}")]
         for p in ("week", "month", "3months", "6months")
     ]
     await status_msg.edit_text(
@@ -1455,9 +1504,22 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     # before this field existed).
     extracted = cached_extracted if cached_extracted is not None else await ocr_screenshot(photo_bytes)
 
-    rates = await load_plan_rates(MAIN_BOT_ID)
-    upi = rates["upi"]
-    claimed_amount = upi.get(claimed_plan)
+    # What THIS user owes right now: the offer price while they still have their
+    # one-time offer, otherwise the standard price (read live from Mongo).
+    pricing = await get_user_pricing(MAIN_BOT_ID, user.id)
+    claimed_amount = pricing["prices"].get(claimed_plan)
+    offer_applied = bool(pricing["is_offer"].get(claimed_plan))
+    # Saved with the request so _grant_premium knows this purchase used the offer.
+    extracted["offer_id"] = pricing["offer_id"] if offer_applied else None
+    if offer_applied:
+        extracted["offer_note"] = (
+            f"One-time offer price ₹{claimed_amount} (standard ₹{pricing['standard'][claimed_plan]}) "
+            "— marked as used for this user once approved."
+        )
+    elif pricing["offer_active"] and not pricing["eligible"]:
+        extracted["offer_note"] = (
+            f"This user already used the current offer — standard price ₹{claimed_amount} was required."
+        )
     amount_read = extracted["amount"]
     amount_matches = _amounts_equal(amount_read, claimed_amount)
     fusion_corrected_amount = None
@@ -1766,6 +1828,18 @@ async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, adm
         result["error"] = str(e)
         return result
 
+    # One-time offer: if this purchase was at the offer price, it is now used up.
+    # (Separate try: a hiccup here must never undo or hide a premium grant that worked.)
+    try:
+        req = await db.get_payment_request(request_id)
+        offer_id = ((req or {}).get("extracted") or {}).get("offer_id")
+        if offer_id:
+            result["offer_first_use"] = await db.claim_offer(user_id, offer_id)
+            if not result["offer_first_use"]:
+                logger.warning(f"User {user_id} got the offer price again (offer {offer_id}) — it was already used.")
+    except Exception as e:
+        logger.warning(f"Couldn't record the offer as used for user {user_id}: {e}")
+
     unlock_text = (
         "<b>👑 ᴄᴏɴɢʀᴀᴛꜱ 👑</b>\n\n"
         f"💎 <b>ᴘʀᴇᴍɪᴜᴍ ᴜɴʟᴏᴄᴋᴇᴅ ꜰᴏʀ {PLAN_LABELS[plan]}</b>\n"
@@ -1815,6 +1889,10 @@ async def _log_auto_approval(client, request_id, user, plan: str, extracted, fil
     # admin had to act on it.
     if extracted.get("fusion_note"):
         status_line += f"\nℹ️ {extracted['fusion_note']}"
+    if extracted.get("offer_note"):
+        status_line += f"\n🎁 {extracted['offer_note']}"
+    if grant_result.get("offer_first_use") is False:
+        status_line += "\n⚠️ This user had ALREADY used this offer — check for a second offer-priced payment."
 
     caption = (
         f"<b>✅ All clear — thank you for purchasing GoFlix Premium!</b>\n\n"
@@ -1954,7 +2032,8 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
         f"📦 Claimed: <b>{PLAN_LABELS[claimed_plan]}</b>\n"
         f"🔎 OCR amount: {amount_display}\n"
         f"🕐 OCR date: {extracted['raw_date'] or 'not detected'}\n"
-        f"{reason_line}\n\n"
+        f"{reason_line}"
+        f"{chr(10) + '🎁 ' + extracted['offer_note'] if extracted.get('offer_note') else ''}\n\n"
         f"Request ID: <code>{request_id}</code>"
     )
     try:
