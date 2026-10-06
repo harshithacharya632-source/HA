@@ -9,6 +9,9 @@ from database.users_chats_db import db, delete_all_referal_users, get_referal_us
 from database.join_reqs import JoinReqs
 from info import CLONE_MODE, OWNER_LNK, REACTIONS, CHANNELS, REQUEST_TO_JOIN_MODE, TRY_AGAIN_BTN, ADMINS, SHORTLINK_MODE, PREMIUM_AND_REFERAL_MODE, STREAM_MODE, AUTH_CHANNEL, REFERAL_PREMEIUM_TIME, REFERAL_COUNT, PAYMENT_TEXT, PAYMENT_QR, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, CHNL_LNK, GRP_LNK, REQST_CHANNEL, SUPPORT_CHAT, MAX_B_TN, VERIFY, SHORTLINK_API, SHORTLINK_URL, TUTORIAL, VERIFY_TUTORIAL, IS_TUTORIAL, URL, STAR_PLAN_RATES, STAR_PLAN_LABELS, STAR_PLAN_SECONDS
 from pyrogram.types import LabeledPrice
+from info import STANDARD_PLAN_RATES
+from plan_pricing import active_offer_id, any_offer, user_pricing, format_user_plan_rates, new_offer_id
+from upi_qr import upi_enabled, plan_qr_buttons, send_plan_qr
 from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds, is_premium_user, MIN_VERIFY_SECONDS
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
@@ -134,24 +137,55 @@ _DEFAULT_STAR_RATES = {
 }
 
 
+_DEFAULT_STANDARD_RATES = {k: str(v) for k, v in STANDARD_PLAN_RATES.items()}
+
+
 async def load_plan_rates(bot_id) -> dict:
-    """Returns {"upi": {...}, "stars": {...}}. Transparently upgrades
-    older stored data (which was just the flat UPI dict) to the new
-    nested shape so existing deployments keep working."""
-    stored = await db.get_bot_setting(bot_id, PLAN_RATES_SETTING_KEY, None)
-    if not stored:
-        return {"upi": dict(_DEFAULT_PLAN_RATES), "stars": dict(_DEFAULT_STAR_RATES)}
+    """Returns {"upi", "stars", "standard", "offer_id", "standard_stored"}.
+
+    upi      - what is being SOLD for right now (below standard = an offer)
+    standard - regular prices: info.STANDARD_PLAN_RATES unless changed with /plan_standard
+    offer_id - id of the running offer (new id each time /plan_rate sets new offer prices);
+               each user can use one offer purchase per id (see plan_pricing.py)
+
+    Transparently upgrades older stored data (which was just the flat UPI
+    dict) so existing deployments keep working."""
+    stored = await db.get_bot_setting(bot_id, PLAN_RATES_SETTING_KEY, None) or {}
     if "upi" in stored or "stars" in stored:
-        return {
-            "upi": {**_DEFAULT_PLAN_RATES, **stored.get("upi", {})},
-            "stars": {**_DEFAULT_STAR_RATES, **stored.get("stars", {})},
-        }
-    # Legacy flat shape from before Star rates were editable.
-    return {"upi": {**_DEFAULT_PLAN_RATES, **stored}, "stars": dict(_DEFAULT_STAR_RATES)}
+        upi = {**_DEFAULT_PLAN_RATES, **stored.get("upi", {})}
+        stars = {**_DEFAULT_STAR_RATES, **stored.get("stars", {})}
+    elif stored:
+        # Legacy flat shape from before Star rates were editable.
+        upi, stars = {**_DEFAULT_PLAN_RATES, **stored}, dict(_DEFAULT_STAR_RATES)
+    else:
+        upi, stars = dict(_DEFAULT_PLAN_RATES), dict(_DEFAULT_STAR_RATES)
+    raw_std = stored.get("standard") if isinstance(stored.get("standard"), dict) else {}
+    standard_stored = {k: str(v) for k, v in raw_std.items() if k in _DEFAULT_STANDARD_RATES}
+    return {
+        "upi": upi, "stars": stars,
+        "standard": {**_DEFAULT_STANDARD_RATES, **standard_stored},
+        "standard_stored": standard_stored,       # only what /plan_standard saved (so edits to info.py still apply)
+        "offer_id": stored.get("offer_id"),
+    }
 
 
 async def save_plan_rates(bot_id, rates: dict) -> None:
     await db.update_bot_setting(bot_id, PLAN_RATES_SETTING_KEY, rates)
+
+
+async def get_user_pricing(bot_id, user_id) -> dict:
+    """What `user_id` pays RIGHT NOW: the offer price if an offer is running and
+    they haven't used it yet, otherwise the standard price. Read live from the
+    database every time, so a /plan_rate change shows up instantly everywhere
+    (plan list, QR code, screenshot check). See plan_pricing.user_pricing."""
+    rates = await load_plan_rates(bot_id)
+    claimed = None
+    if user_id and active_offer_id(rates):
+        try:
+            claimed = await db.get_offer_claimed(user_id)
+        except Exception as e:
+            logger.warning(f"Offer lookup failed for user {user_id}: {e}")
+    return user_pricing(rates, claimed)
 
 
 def format_plan_rates(rates: dict) -> str:
@@ -2213,27 +2247,57 @@ async def remove_premium_cmd_handler(client, message):
 async def plans_cmd_handler(client, message): 
     if PREMIUM_AND_REFERAL_MODE == False:
         return 
-    btn = [
-        [InlineKeyboardButton("⭐ ᴘᴀʏ ɪɴsᴛᴀɴᴛʟʏ ᴡɪᴛʜ sᴛᴀʀs", callback_data="show_star_plans")],
-        [InlineKeyboardButton("ᴘᴀɪᴅ ᴠɪᴀ ᴜᴘɪ? sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ 🧾", url=OWNER_LNK)],
-        [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")]
-    ]
-    reply_markup = InlineKeyboardMarkup(btn)
-    rates = await load_plan_rates(client.me.id)
-    caption_text = PAYMENT_TEXT.format(plan_rates=format_plan_rates(rates["upi"]))
-    sent = await message.reply_photo(
-        photo=PAYMENT_QR,
-        caption=caption_text,
-        parse_mode=enums.ParseMode.HTML,
-        has_spoiler=True,
-        reply_markup=reply_markup
-    )
+    uid = message.from_user.id if message.from_user else None
+    pricing = await get_user_pricing(client.me.id, uid)
+    caption_text = PAYMENT_TEXT.format(plan_rates=format_user_plan_rates(pricing))
+    stars_row = [InlineKeyboardButton("⭐ ᴘᴀʏ ɪɴsᴛᴀɴᴛʟʏ ᴡɪᴛʜ sᴛᴀʀs", callback_data="show_star_plans")]
+    paid_row = [InlineKeyboardButton("ᴘᴀɪᴅ ᴠɪᴀ ᴜᴘɪ? sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ 🧾", url=OWNER_LNK)]
+    close_row = [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")]
+    if upi_enabled():
+        # One button per plan -> a fresh QR with that plan's price filled in.
+        btn = plan_qr_buttons(pricing, STAR_PLAN_LABELS) + [stars_row, paid_row, close_row]
+        sent = await message.reply_text(
+            caption_text + "\n\n👇 <b>ᴛᴀᴘ ᴀ ᴘʟᴀɴ ᴛᴏ ɢᴇᴛ ʏᴏᴜʀ ᴘᴀʏᴍᴇɴᴛ ǫʀ ᴄᴏᴅᴇ</b>",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
+    else:
+        # UPI_ID not configured yet -> the old static QR picture.
+        sent = await message.reply_photo(
+            photo=PAYMENT_QR,
+            caption=caption_text,
+            parse_mode=enums.ParseMode.HTML,
+            has_spoiler=True,
+            reply_markup=InlineKeyboardMarkup([stars_row, paid_row, close_row])
+        )
     # Auto-delete the /plan message after 3 minutes.
     await asyncio.sleep(180)
     try:
         await sent.delete()
     except Exception:
         pass
+
+
+@Client.on_callback_query(filters.regex(r"^upiqr_(\w+)$"))
+async def upi_plan_qr_cb(client, query):
+    plan = query.matches[0].group(1)
+    if not upi_enabled():
+        return await query.answer("UPI QR isn't set up yet — please contact the admin.", show_alert=True)
+    if plan not in STAR_PLAN_LABELS:
+        return await query.answer("Invalid plan.", show_alert=True)
+    # Price is read live and per user, so the QR always matches /plan_rate and
+    # an already-used one-time offer falls back to the standard price.
+    pricing = await get_user_pricing(client.me.id, query.from_user.id)
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("ᴘᴀɪᴅ? sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ 🧾", url=OWNER_LNK)],
+        [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")],
+    ])
+    try:
+        await send_plan_qr(client, query.from_user.id, plan, STAR_PLAN_LABELS, pricing, reply_markup=markup)
+    except Exception as e:
+        logger.exception(e)
+        return await query.answer("Couldn't send the QR here — open the bot in private chat and send /plan.", show_alert=True)
+    await query.answer("QR sent — check your chat with me 👇")
 
 
 # ── Telegram Stars (XTR) — instant premium ─────────────────────────────
@@ -2366,6 +2430,7 @@ async def plan_rate_cmd_handler(client, message):
         bot_id = client.me.id
         current = await load_plan_rates(bot_id)
         current_upi, current_stars = current["upi"], current["stars"]
+        current_std = current["standard"]
 
         current_text = (
             "💰 <b>Current Plan Rates</b>\n\n"
@@ -2374,6 +2439,10 @@ async def plan_rate_cmd_handler(client, message):
             f"- {current_upi['month']}Rs - 1 Month\n"
             f"- {current_upi['3months']}Rs - 3 Months\n"
             f"- {current_upi['6months']}Rs - 6 Months\n\n"
+            "<b>Standard prices (₹)</b> — a plan priced below its standard price is an <b>offer</b> "
+            "(each user can use it once)\n"
+            f"- {current_std['week']} / {current_std['month']} / {current_std['3months']} / {current_std['6months']} Rs "
+            "(change with /plan_standard)\n\n"
             "<b>Telegram Stars ⭐</b>\n"
             f"- {current_stars['week']} Stars - 1 Week\n"
             f"- {current_stars['month']} Stars - 1 Month\n"
@@ -2419,7 +2488,17 @@ async def plan_rate_cmd_handler(client, message):
             new_stars = {"week": int(lines2[0]), "month": int(lines2[1]),
                          "3months": int(lines2[2]), "6months": int(lines2[3])}
 
-        new_rates = {"upi": new_upi, "stars": new_stars}
+        # A different set of offer prices = a NEW offer, so everybody can use it
+        # once again; re-saving the same prices keeps the old offer (and who used it).
+        if not any_offer(new_upi, current_std):
+            offer_id_to_save = None
+        elif new_upi != current_upi:
+            offer_id_to_save = new_offer_id()
+        else:
+            offer_id_to_save = current.get("offer_id")
+        new_rates = {"upi": new_upi, "stars": new_stars, "offer_id": offer_id_to_save}
+        if current.get("standard_stored"):
+            new_rates["standard"] = current["standard_stored"]
         await save_plan_rates(bot_id, new_rates)
 
         confirm_text = (
@@ -2435,10 +2514,83 @@ async def plan_rate_cmd_handler(client, message):
             f"- {_strike_line(current_stars['3months'], new_stars['3months'], ' Stars')} - 3 Months\n"
             f"- {_strike_line(current_stars['6months'], new_stars['6months'], ' Stars')} - 6 Months"
         )
+        if any_offer(new_upi, current_std):
+            confirm_text += (
+                "\n\n🎁 <b>Offer is ON</b> — prices below the standard "
+                f"({current_std['week']} / {current_std['month']} / {current_std['3months']} / {current_std['6months']} Rs) "
+                "can be bought <b>once per user</b>; after that they pay the standard price."
+            )
+        else:
+            confirm_text += "\n\nℹ️ No offer running — prices are at the standard price."
         await reply2.reply_text(confirm_text, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
         logger.exception(e)
         await message.reply_text(f"⚠️ /plan_rate failed:\n<code>{e}</code>", parse_mode=enums.ParseMode.HTML)
+
+
+@Client.on_message(filters.command("plan_standard") & filters.private)
+async def plan_standard_cmd_handler(client, message):
+    """Admin: set the STANDARD (regular) UPI prices. Anything sold below these
+    (via /plan_rate) is an offer - struck-through standard price in /plan, and
+    one use per user."""
+    if message.from_user.id not in ADMINS:
+        return await message.reply_text("⛔ This command is for the bot owner/admins only.")
+    try:
+        bot_id = client.me.id
+        current = await load_plan_rates(bot_id)
+        std = current["standard"]
+        reply = await client.ask(
+            message.from_user.id,
+            "🏷️ <b>Standard prices (₹)</b>\n\n"
+            f"- {std['week']}Rs - 1 Week\n"
+            f"- {std['month']}Rs - 1 Month\n"
+            f"- {std['3months']}Rs - 3 Months\n"
+            f"- {std['6months']}Rs - 6 Months\n\n"
+            "Send the new standard prices as 4 numbers, one per line, in this order "
+            "(1 week, 1 month, 3 months, 6 months) — numbers only, e.g.:\n\n"
+            "<code>15\n40\n110\n200</code>\n\n"
+            "Send /cancel to keep them unchanged.",
+            parse_mode=enums.ParseMode.HTML
+        )
+        if reply.text and reply.text.strip().lower() == "/cancel":
+            return await reply.reply_text("❌ Cancelled — standard prices unchanged.")
+        lines = [ln.strip() for ln in (reply.text or "").splitlines() if ln.strip()]
+        if len(lines) != 4 or not all(ln.isdigit() and int(ln) > 0 for ln in lines):
+            return await reply.reply_text(
+                "⚠️ Invalid format. Send exactly 4 numbers (above 0), one per line. "
+                "Run /plan_standard again to retry."
+            )
+        new_std = {"week": lines[0], "month": lines[1], "3months": lines[2], "6months": lines[3]}
+
+        # If this change turns the current selling prices into an offer (or ends
+        # one), keep the offer bookkeeping consistent.
+        was_offer = any_offer(current["upi"], current["standard"])
+        is_offer = any_offer(current["upi"], new_std)
+        if not is_offer:
+            offer_id = None
+        elif not was_offer:
+            offer_id = new_offer_id()
+        else:
+            offer_id = current.get("offer_id")
+        await save_plan_rates(bot_id, {
+            "upi": current["upi"], "stars": current["stars"],
+            "standard": new_std, "offer_id": offer_id,
+        })
+        up = current["upi"]
+        await reply.reply_text(
+            "✅ <b>Standard prices updated!</b>\n\n"
+            f"- {_strike_line(std['week'], new_std['week'], 'Rs')} - 1 Week\n"
+            f"- {_strike_line(std['month'], new_std['month'], 'Rs')} - 1 Month\n"
+            f"- {_strike_line(std['3months'], new_std['3months'], 'Rs')} - 3 Months\n"
+            f"- {_strike_line(std['6months'], new_std['6months'], 'Rs')} - 6 Months\n\n"
+            f"Selling prices right now: {up['week']} / {up['month']} / {up['3months']} / {up['6months']} Rs\n"
+            + ("🎁 Those are below standard, so an offer is running (one use per user)."
+               if is_offer else "No offer running (selling prices are at the standard price)."),
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception as e:
+        logger.exception(e)
+        await message.reply_text(f"⚠️ /plan_standard failed:\n<code>{e}</code>", parse_mode=enums.ParseMode.HTML)
 
 
 @Client.on_message(filters.command("myplan"))
