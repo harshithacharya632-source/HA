@@ -85,6 +85,7 @@ from plugins.commands import (
 )
 from plan_pricing import format_user_plan_rates
 from upi_qr import upi_enabled, plan_qr_buttons, send_plan_qr
+from payment_dedupe import find_duplicate, image_fingerprint, user_lock
 # The main Goflix bot's own Client instance, so the "premium unlocked"
 # message can be sent from THAT bot too (in addition to this AdminBot),
 # since that's the bot the user is actually using day-to-day.
@@ -1458,6 +1459,14 @@ async def unsolicited_screenshot_cb(client, message):
 
 
 async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, cached_extracted=None):
+    """One check at a time per user: if the same screenshot is sent twice quickly (or the plan button is
+    double-tapped), the second one waits until the first is approved and is then caught as a duplicate,
+    instead of both passing the duplicate check at the same moment."""
+    async with user_lock(user.id):
+        return await _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan, cached_extracted)
+
+
+async def _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan: str, cached_extracted=None):
     status_msg = await client.send_message(
         chat_id,
         "⏳ <b>Please give us some time</b>\n\n"
@@ -1472,6 +1481,7 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     if _dl_elapsed > 5:
         logger.warning(f"Downloading the screenshot from Telegram took {_dl_elapsed:.1f}s.")
     photo_bytes = bytes(photo_bytes_io.getbuffer())
+    image_sha256 = image_fingerprint(photo_bytes)   # exact-file fingerprint, saved with the request
 
     # Checked FIRST, before any OCR at all — a simple byte scan, so this
     # costs virtually nothing and a confirmed hit means there's nothing
@@ -1515,6 +1525,7 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     # /start → pick plan → send screenshot order, or a stash saved
     # before this field existed).
     extracted = cached_extracted if cached_extracted is not None else await ocr_screenshot(photo_bytes)
+    extracted["image_sha256"] = image_sha256
 
     # What THIS user owes right now: the offer price while they still have their
     # one-time offer, otherwise the standard price (read live from Mongo).
@@ -1601,7 +1612,12 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     # itself changes), so this has to be checked and short-circuit
     # BEFORE the exact-match branch below, not fall through to it.
     txn_id = extracted.get("txn_id")
-    duplicate_of = await db.find_approved_request_by_txn_id(txn_id) if txn_id else None
+    duplicate_of, duplicate_kind = await find_duplicate(
+        db, txn_id=txn_id, image_sha256=image_sha256, user_id=user.id,
+        amount=extracted.get("amount"), parsed_date=extracted.get("parsed_date"),
+    )
+    if duplicate_kind:
+        extracted["duplicate_kind"] = duplicate_kind
 
     # A CONFIRMED wrong amount — OCR actually read a number off the
     # screenshot and it does not equal the claimed plan's CURRENT rate
@@ -1945,7 +1961,8 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
     record of what happened in case of a dispute."""
     if reject_reason == "duplicate":
         reason_line = (
-            f"🔴 This transaction ID was already approved on a previous request. "
+            f"🔴 This payment was already approved on a previous request "
+            f"({extracted.get('duplicate_kind') or 'same transaction ID'}). "
             f"Looks like a reused screenshot. Rejected automatically, no admin action needed."
         )
     elif reject_reason == "stale_date":
