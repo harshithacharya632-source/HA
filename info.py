@@ -126,6 +126,23 @@ STAR_PLAN_RATES = {
     "6months": int(environ.get('STAR_RATE_6MONTHS', '500')),
 }
 STAR_PLAN_LABELS = {"week": "1 Week", "month": "1 Month", "3months": "3 Months", "6months": "6 Months"}
+
+# 💳 Dynamic UPI QR: a fresh QR per plan with that plan's current price as the amount.
+# Set UPI_ID (e.g. yourname@okhdfcbank) in the environment / Koyeb variables.
+# Left empty = the old static PAYMENT_QR picture keeps being used.
+UPI_ID = environ.get('UPI_ID', '').strip()
+UPI_PAYEE_NAME = environ.get('UPI_PAYEE_NAME', 'Goflix').strip()  # name shown in the UPI app
+
+# 🏷️ STANDARD (regular) UPI price of each plan, in rupees. A plan whose selling price
+# (set with /plan_rate) is BELOW its standard price is "on offer": /plan shows the
+# standard price struck through, and each user can use that offer only ONCE.
+# Can also be changed live from Telegram with /plan_standard (no redeploy needed).
+STANDARD_PLAN_RATES = {
+    "week": environ.get('STANDARD_RATE_WEEK', '15'),
+    "month": environ.get('STANDARD_RATE_MONTH', '40'),
+    "3months": environ.get('STANDARD_RATE_3MONTHS', '110'),
+    "6months": environ.get('STANDARD_RATE_6MONTHS', '200'),
+}
 STAR_PLAN_SECONDS = {"week": 7 * 86400, "month": 30 * 86400, "3months": 90 * 86400, "6months": 180 * 86400}
 
 
