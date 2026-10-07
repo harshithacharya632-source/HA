@@ -2288,16 +2288,23 @@ async def upi_plan_qr_cb(client, query):
     # Price is read live and per user, so the QR always matches /plan_rate and
     # an already-used one-time offer falls back to the standard price.
     pricing = await get_user_pricing(client.me.id, query.from_user.id)
-    markup = InlineKeyboardMarkup([
+    rows_after = [
         [InlineKeyboardButton("ᴘᴀɪᴅ? sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ 🧾", url=OWNER_LNK)],
         [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")],
-    ])
+    ]
     try:
-        await send_plan_qr(client, query.from_user.id, plan, STAR_PLAN_LABELS, pricing, reply_markup=markup)
+        await send_plan_qr(client, query.from_user.id, plan, STAR_PLAN_LABELS, pricing, rows_after=rows_after)
     except Exception as e:
         logger.exception(e)
         return await query.answer("Couldn't send the QR here — open the bot in private chat and send /plan.", show_alert=True)
-    await query.answer("QR sent — check your chat with me 👇")
+    # The plan list has done its job: remove it so only the QR is left in the chat.
+    # (Only in a private chat - in a group that message is shared with everybody.)
+    if query.message and query.message.chat.id == query.from_user.id:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+    await query.answer("QR sent 👇")
 
 
 # ── Telegram Stars (XTR) — instant premium ─────────────────────────────
