@@ -10,10 +10,13 @@ Environment variables on the stream service
 -------------------------------------------
 UPI_ID           same UPI id the bot uses, e.g. name@okaxis        (required)
 UPI_PAYEE_NAME   shown in the UPI app, default "Goflix"             (optional)
-PAY_SECRET       64-hex signing key (preferred, keeps the bot token off this server)
-  or BOT_TOKEN   the bot's token; the same key is derived from it
+GOFLIX_BOT_TOKEN the token of the main Goflix bot (the one that sends the QR / pay buttons)
+  or PAY_SECRET  64-hex key derived from that token (keeps the token itself off this server)
 
-Get PAY_SECRET by running, anywhere:   python upi_pay.py "<your BOT_TOKEN>"
+NOTE: this server's own BOT_TOKEN belongs to the stream bot. It is NOT used here on purpose
+(it is a different bot, so links signed by the Goflix bot would never match it).
+
+Get PAY_SECRET by running, anywhere:   python upi_pay.py "<Goflix bot token>"
 
 How the buttons behave
 -----------------------
@@ -42,7 +45,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 UPI_ID = os.environ.get("UPI_ID", "").strip()
 UPI_PAYEE_NAME = os.environ.get("UPI_PAYEE_NAME", "Goflix").strip()
-_BOT_TOKEN = os.environ.get("BOT_TOKEN", "")      # not stripped: must match the bot byte-for-byte
+_BOT_TOKEN = os.environ.get("GOFLIX_BOT_TOKEN", "")   # not stripped: must match the bot byte-for-byte
 _PAY_SECRET = os.environ.get("PAY_SECRET", "").strip()
 
 _VPA_RE = re.compile(r"^[A-Za-z0-9.\-_]{2,256}@[A-Za-z][A-Za-z0-9]{1,64}$")
@@ -227,7 +230,7 @@ async def upi_pay_page(
 
 
 if __name__ == "__main__":
-    # python upi_pay.py "<BOT_TOKEN>"   -> prints the PAY_SECRET value to put on this service
+    # python upi_pay.py "<Goflix bot token>"   -> prints the PAY_SECRET value to put on this service
     import sys
     if len(sys.argv) != 2:
         sys.exit('usage: python upi_pay.py "<BOT_TOKEN>"')
