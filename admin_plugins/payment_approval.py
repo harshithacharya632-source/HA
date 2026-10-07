@@ -1267,16 +1267,22 @@ async def upi_plan_qr_cb(client, query):
     # Live + per user: the QR always carries the CURRENT price, and an
     # already-used one-time offer falls back to the standard price.
     pricing = await get_user_pricing(MAIN_BOT_ID, query.from_user.id)
-    markup = InlineKeyboardMarkup([
+    rows_after = [
         # Reuses the existing flow: plan is already known, so it goes straight to "send the screenshot".
         [InlineKeyboardButton("✅ I've paid — send screenshot", callback_data=f"claim_upi_plan_{plan}")],
         [InlineKeyboardButton("❌ Close", callback_data="upi_close")],
-    ])
+    ]
     try:
-        await send_plan_qr(client, query.from_user.id, plan, PLAN_LABELS, pricing, reply_markup=markup)
+        await send_plan_qr(client, query.from_user.id, plan, PLAN_LABELS, pricing, rows_after=rows_after)
     except Exception as e:
         logger.exception(e)
         return await query.answer("Couldn't send the QR — please try /plan again.", show_alert=True)
+    # The plan list has done its job: remove it so only the QR is left in the chat.
+    if query.message and query.message.chat.id == query.from_user.id:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
     await query.answer("QR sent 👇")
 
 
@@ -1452,7 +1458,13 @@ async def unsolicited_screenshot_cb(client, message):
 
 
 async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, cached_extracted=None):
-    status_msg = await client.send_message(chat_id, "🔍 Reading your screenshot…")
+    status_msg = await client.send_message(
+        chat_id,
+        "⏳ <b>Please give us some time</b>\n\n"
+        "We're verifying your payment screenshot. Your premium will be activated instantly "
+        "as soon as it's verified — no need to send it again.",
+        parse_mode=enums.ParseMode.HTML,
+    )
 
     _dl_t0 = asyncio.get_event_loop().time()
     photo_bytes_io = await client.download_media(file_id, in_memory=True)
@@ -1724,7 +1736,11 @@ async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, 
     if decision == "exact":
         grant_result = await _grant_premium(client, request_id, user.id, claimed_plan, auto=True)
         if grant_result["db_ok"]:
-            sent = await status_msg.edit_text("✅ All clear! Thank you for purchasing GoFlix Premium 🎉")
+            sent = await status_msg.edit_text(
+                "🎉 <b>Premium activated instantly!</b>\n\n"
+                "Thank you for purchasing GoFlix Premium 💎 — enjoy all the premium features!",
+                parse_mode=enums.ParseMode.HTML,
+            )
             asyncio.create_task(_delayed_delete(sent, 60))
         else:
             # Don't tell the user everything's fine when the database
