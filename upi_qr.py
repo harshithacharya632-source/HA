@@ -47,6 +47,11 @@ UPI_APPS = {
 }
 
 
+# Apps that get their OWN button under the QR. The 4th button is "Other UPI apps": it opens the web
+# page with no app chosen, which lists every app (Navi included) plus Android's "all UPI apps" chooser.
+BUTTON_APPS = ("phonepe", "gpay", "paytm")
+
+
 def upi_enabled() -> bool:
     return bool(segno and UPI_ID and _VPA_RE.match(UPI_ID.strip()))
 
@@ -116,14 +121,18 @@ def pay_page_url(amount, note: str, app: str = None):
 
 
 def app_button_rows(amount, note: str) -> list:
-    """2x2 grid of 'open in <app>' URL buttons ([] if no https server URL is configured)."""
+    """2x2 grid: PhonePe / GPay / Paytm + "Other UPI apps" ([] if no https server URL is configured)."""
     from pyrogram.types import InlineKeyboardButton
     buttons = []
-    for key, meta in UPI_APPS.items():
+    for key in BUTTON_APPS:
         url = pay_page_url(amount, note, key)
         if not url:
             return []
-        buttons.append(InlineKeyboardButton(f"📱 {meta['short']}", url=url))
+        buttons.append(InlineKeyboardButton(f"📱 {UPI_APPS[key]['short']}", url=url))
+    more_url = pay_page_url(amount, note)          # no app => the page lists all apps
+    if not more_url:
+        return []
+    buttons.append(InlineKeyboardButton("➕ Other UPI apps", url=more_url))
     return [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
 
 
