@@ -19,7 +19,7 @@ from TechVJ.util.file_properties import get_hash, get_name
 
 from database.ia_filterdb import get_search_results
 from utils import is_premium_user
-from upi_qr import upi_enabled, verify_pay_sig, render_pay_page
+from upi_qr import upi_enabled, verify_pay_sig, render_pay_page, render_open_page, UPI_APPS
 
 WEBAPP_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "webapp")
@@ -83,6 +83,18 @@ async def upi_pay_page(request: web.Request):
         page = render_pay_page(amount, note, app, request.headers.get("User-Agent", ""))
     except ValueError:
         raise web.HTTPNotFound()
+    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
+
+
+# ---------------- "JUST OPEN THE UPI APP" PAGE (the PhonePe / GPay / Paytm buttons under the QR) ----------------
+# Only opens the app - no amount or UPI id is passed to it. Must stay above the catch-all "/{path}" route.
+@routes.get("/open", allow_head=True)
+@routes.get("/open/{app_key}", allow_head=True)
+async def upi_open_page(request: web.Request):
+    app_key = request.match_info.get("app_key", "")
+    if app_key and app_key not in UPI_APPS:
+        raise web.HTTPNotFound()
+    page = render_open_page(app_key or None, request.headers.get("User-Agent", ""))
     return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
