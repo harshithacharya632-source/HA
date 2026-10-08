@@ -20,12 +20,9 @@ import asyncio
 import hashlib
 import hmac
 import html
-import inspect
 import io
 import json
-import logging
 import re
-import time
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote, urlencode
 
@@ -43,10 +40,10 @@ _MAX_AMOUNT = Decimal("100000")      # UPI's usual per-transaction ceiling (Rs 1
 # iOS: each app's own URL scheme. (Package names / schemes as published in the
 # Juspay and Razorpay UPI-intent docs.)
 UPI_APPS = {
-    "phonepe": {"name": "PhonePe",    "short": "PhonePe", "package": "com.phonepe.app",                         "ios": "phonepe://pay"},
-    "gpay":    {"name": "Google Pay", "short": "GPay",    "package": "com.google.android.apps.nbu.paisa.user", "ios": "tez://upi/pay"},
-    "paytm":   {"name": "Paytm",      "short": "Paytm",   "package": "net.one97.paytm",                         "ios": "paytmmp://upi/pay"},
-    "navi":    {"name": "Navi",       "short": "Navi",    "package": "com.naviapp",                             "ios": "navipay://pay"},
+    "phonepe": {"name": "PhonePe",    "short": "PhonePe", "package": "com.phonepe.app",                         "ios": "phonepe://pay", "scheme": "phonepe"},
+    "gpay":    {"name": "Google Pay", "short": "GPay",    "package": "com.google.android.apps.nbu.paisa.user", "ios": "tez://upi/pay", "scheme": "tez"},
+    "paytm":   {"name": "Paytm",      "short": "Paytm",   "package": "net.one97.paytm",                         "ios": "paytmmp://upi/pay", "scheme": "paytmmp"},
+    "navi":    {"name": "Navi",       "short": "Navi",    "package": "com.naviapp",                             "ios": "navipay://pay", "scheme": "navipay"},
 }
 
 
@@ -209,6 +206,72 @@ def render_pay_page(amount, note: str, app_key: str = None, user_agent: str = ""
     )
 
 
+# ───────────────────── "just open the app" (no payment details) ─────────────────────
+# The PhonePe / GPay / Paytm buttons under the QR land on /open/<app>. That page only OPENS the app -
+# nothing (amount, UPI id) is passed to it, so the app shows no "payment from a link" warning.
+# The user then taps Scan QR inside the app and scans the QR by hand.
+def play_store_url(app_key: str) -> str:
+    return f"https://play.google.com/store/apps/details?id={UPI_APPS[app_key]['package']}"
+
+
+def open_app_url(app_key: str, platform: str):
+    """Link that only opens the app. None when this device can't do that (e.g. a computer)."""
+    meta = UPI_APPS[app_key]
+    scheme = meta.get("scheme")
+    if platform == "android":
+        store = play_store_url(app_key)
+        if not scheme:
+            return store
+        # If the app doesn't answer, Chrome goes to the app's Play Store page, which has an "Open" button.
+        return f"intent://#Intent;scheme={scheme};package={meta['package']};S.browser_fallback_url={quote(store, safe='')};end"
+    if platform == "ios" and scheme:
+        return f"{scheme}://"
+    return None
+
+
+def render_open_page(app_key: str = None, user_agent: str = "") -> str:
+    platform = detect_platform(user_agent)
+    chosen = app_key if app_key in UPI_APPS else None
+    esc = lambda s: html.escape(s, quote=True)
+    keys = [k for k in UPI_APPS if platform == "android" or UPI_APPS[k].get("scheme")]
+    if chosen in keys:
+        keys.remove(chosen)
+        keys.insert(0, chosen)
+    buttons = []
+    for k in keys:
+        href = open_app_url(k, platform)
+        if not href:
+            continue
+        cls = "btn main" if k == chosen else "btn"
+        buttons.append(f'<a class="{cls}" href="{esc(href)}">Open {esc(UPI_APPS[k]["name"])}</a>')
+    if platform == "desktop":
+        hint = "This page is meant for your phone. On a computer, scan the QR code shown in Telegram with your phone."
+    else:
+        hint = "App didn't open? Tap the button above, or open the app from your phone's home screen."
+    auto = ""
+    first = open_app_url(chosen, platform) if chosen else None
+    if first and platform in ("android", "ios"):
+        auto = "<script>setTimeout(function(){window.location.href=" + json.dumps(first).replace("</", "<\\/") + ";},250);</script>"
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        "<title>Open your UPI app — Goflix</title><style>"
+        "body{margin:0;background:#0f1115;color:#f2f4f8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
+        "display:flex;justify-content:center}main{width:100%;max-width:420px;padding:28px 18px;text-align:center}"
+        "h1{font-size:26px;margin:6px 0}.sub{color:#9aa3b2;margin:0 0 22px;line-height:1.5}"
+        ".btn{display:block;margin:10px 0;padding:15px;border-radius:12px;background:#1d2330;color:#fff;"
+        "text-decoration:none;font-weight:600;font-size:17px;border:1px solid #2c3446}"
+        ".btn.main{background:#2f6bff;border-color:#2f6bff}"
+        ".hint{color:#9aa3b2;font-size:13px;line-height:1.5;margin:18px 0 0}"
+        '</style></head><body><main><h1>Open your UPI app</h1>'
+        '<p class="sub">Then tap <b>Scan QR</b> and scan the payment QR from Telegram.</p>'
+        + "".join(buttons)
+        + f'<p class="hint">{esc(hint)}</p>'
+        '<p class="hint">After paying, go back to Telegram, tap “I\'ve paid” and send the payment screenshot.</p>'
+        + auto + "</main></body></html>"
+    )
+
+
 # ───────────────────────────── Telegram message ─────────────────────────────
 def build_caption(plan_label: str, amount, standard_amount=None, offer: bool = False, has_app_buttons: bool = False) -> str:
     if offer and standard_amount is not None and str(standard_amount) != str(amount):
@@ -218,15 +281,16 @@ def build_caption(plan_label: str, amount, standard_amount=None, offer: bool = F
     lines = [f"<b>💳 Pay {price} — {plan_label} Premium</b>\n"]
     if has_app_buttons:
         lines += [
-            "1️⃣ Tap <b>💾 Save QR code</b> below",
-            f"2️⃣ Open your UPI app (buttons below) → <b>Scan QR</b> → choose the saved QR from your gallery — the amount ₹{amount} is already filled in",
+            "1️⃣ Tap your UPI app below — it only opens the app",
+            f"2️⃣ In the app tap <b>Scan QR</b> and scan this QR — the amount ₹{amount} is already filled in",
+            "     <i>Paying from this phone? Take a screenshot of this QR and pick it from your gallery.</i>",
             "3️⃣ After paying, tap “I've paid” and send the payment screenshot",
             "\n<i>On another phone? Just scan the QR above.</i>",
         ]
     else:
         lines += [
             f"1️⃣ Scan this QR with any UPI app — the amount ₹{amount} is already filled in",
-            "💾 Paying from this phone? Tap <b>Save QR code</b> below, then in your UPI app choose scan → gallery",
+            "     <i>Paying from this phone? Take a screenshot of this QR and pick it from your gallery.</i>",
             "2️⃣ After paying, tap “I've paid” and send the payment screenshot",
         ]
     # Some UPI apps show their own warning for payments opened from a link/QR (PhonePe's "QR via gallery"
@@ -268,108 +332,24 @@ def plan_qr_buttons(pricing: dict, labels: dict) -> list:
     return rows
 
 
-# ───────────────────────────── "Save QR code" button ─────────────────────────────
-# Telegram can't save a picture to the phone's gallery by itself, so the button sends the same QR again as
-# a FILE (not compressed, with a Save/Download option). The handler is attached to whichever bot sent the QR
-# (main bot or admin bot) the first time that bot sends one.
-SAVE_QR_DATA = "upi_saveqr"
-_QR_CACHE = {}                 # (chat_id, message_id) -> (png_bytes, amount, time stored)
-_QR_CACHE_TTL = 900            # the QR message itself is deleted after 10 minutes
-_save_handler_clients = set()
-_log = logging.getLogger(__name__)
-
-
-def _cache_put(chat_id, message_id, png: bytes, amount):
-    now = time.time()
-    for k in [k for k, v in _QR_CACHE.items() if now - v[2] > _QR_CACHE_TTL]:
-        _QR_CACHE.pop(k, None)
-    _QR_CACHE[(chat_id, message_id)] = (png, amount, now)
-
-
-async def _ensure_save_handler(client):
-    """Registers the Save-QR button handler on this bot, once. Runs before the normal button handlers
-    (group -7) and stops them, so no other callback handler ever sees this button's data."""
-    key = id(client)
-    if key in _save_handler_clients:
-        return
-    from pyrogram import filters
-    from pyrogram.handlers import CallbackQueryHandler
-    _save_handler_clients.add(key)
-    try:
-        res = client.add_handler(CallbackQueryHandler(_on_save_qr, filters.regex(rf"^{SAVE_QR_DATA}$")), group=-7)
-        if inspect.isawaitable(res):
-            await res
-    except Exception:
-        _save_handler_clients.discard(key)
-        raise
-
-
-async def _on_save_qr(client, query):
-    from pyrogram import StopPropagation, enums
-    answered = False
-    chat_id = None
-    try:
-        msg = query.message
-        chat_id = msg.chat.id if msg else None
-        cached = _QR_CACHE.get((msg.chat.id, msg.id)) if msg else None
-        if cached:
-            png, amount = cached[0], cached[1]
-        elif msg is not None and msg.photo:                       # bot restarted: take the picture from the message
-            buf = await client.download_media(msg.photo.file_id, in_memory=True)
-            png, amount = bytes(buf.getbuffer()), None
-        else:
-            answered = True
-            await query.answer("This QR has expired — please open /plan again.", show_alert=True)
-            png = None
-        if png:
-            answered = True
-            await query.answer("Sending the QR file…")
-            f = io.BytesIO(png)
-            f.name = "Goflix-UPI-QR.png"
-            amt = f" ₹{amount}" if amount else ""
-            sent = await client.send_document(
-                msg.chat.id, document=f, force_document=True, parse_mode=enums.ParseMode.HTML,
-                caption=(f"💾 <b>Goflix UPI QR{amt}</b>\n"
-                         "Open this file and save it to your gallery "
-                         "(Android: ⋮ → <b>Save to Gallery</b> · iPhone: Share → <b>Save Image</b>).\n"
-                         "Then open your UPI app → <b>Scan QR</b> → choose it from the gallery."),
-            )
-            _spawn(_delete_later(sent, 600))
-    except Exception:
-        _log.exception("Save QR button failed")
-        notice = "Couldn't send the QR file. Long-press the QR picture above and choose Save instead."
-        try:
-            if not answered:
-                await query.answer(notice, show_alert=True)
-            elif chat_id is not None:               # a button tap can only be answered once, so tell them in the chat
-                _spawn(_delete_later(await client.send_message(chat_id, "⚠️ " + notice), 60))
-        except Exception:
-            pass
-    raise StopPropagation
-
-
 async def send_plan_qr(client, chat_id, plan: str, labels: dict, pricing: dict, rows_after: list = None, delete_after: int = 600):
     """Generate + send the QR for `plan` at this user's price. Returns the sent message.
-    Under the QR: PhonePe/GPay/Paytm/Other apps (only open the app), a "Save QR code" button, then `rows_after`."""
+    Under the QR: PhonePe/GPay/Paytm/Other apps (they only open the app), then `rows_after`."""
     from pyrogram import enums
-    from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    from pyrogram.types import InlineKeyboardMarkup
     amount = pricing["prices"][plan]
     offer = bool(pricing["is_offer"].get(plan))
     note = f"Goflix {labels[plan]}"
     link = build_upi_link(amount, note=note)
     png = await asyncio.to_thread(make_qr_png, link)
-    png_bytes = png.getvalue()
-    await _ensure_save_handler(client)
     app_rows = app_button_rows()
-    save_row = [[InlineKeyboardButton("💾 Save QR code", callback_data=SAVE_QR_DATA)]]
     sent = await client.send_photo(
         chat_id=chat_id,
         photo=png,
         caption=build_caption(labels[plan], amount, pricing["standard"].get(plan), offer, has_app_buttons=bool(app_rows)),
         parse_mode=enums.ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(app_rows + save_row + list(rows_after or [])),
+        reply_markup=InlineKeyboardMarkup(app_rows + list(rows_after or [])),
     )
-    _cache_put(chat_id, sent.id, png_bytes, amount)
     if delete_after:
         _spawn(_delete_later(sent, delete_after))    # old QRs don't linger after a price change
     return sent
