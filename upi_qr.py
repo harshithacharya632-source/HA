@@ -216,6 +216,13 @@ def build_caption(plan_label: str, amount, standard_amount=None, offer: bool = F
     else:
         lines.append("2️⃣ After paying, tap “I've paid” and send the payment screenshot")
         lines.append("\n<i>On the same phone? Save this image, then in your UPI app choose “scan from gallery / upload QR”.</i>")
+    # Some UPI apps show their own warning for payments opened from a link/QR (PhonePe's "QR via gallery"
+    # note, Paytm's "UPI Risk Policy" alert). The bot can't remove those, so give a manual way that always works.
+    if upi_enabled():
+        lines.append(
+            f"\n💡 <i>UPI app shows a warning or fails? Close it, open your UPI app → Pay to UPI ID, "
+            f"and pay ₹{amount} to (tap to copy):</i>\n<code>{html.escape(UPI_ID.strip())}</code>"
+        )
     return "\n".join(lines)
 
 
@@ -269,3 +276,4 @@ async def send_plan_qr(client, chat_id, plan: str, labels: dict, pricing: dict, 
     if delete_after:
         _spawn(_delete_later(sent, delete_after))    # old QRs don't linger after a price change
     return sent
+    
