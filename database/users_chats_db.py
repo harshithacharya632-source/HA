@@ -88,6 +88,7 @@ class Database:
         self.bot = self.db.clone_bots
         self.payment_requests = self.db.payment_requests
         self.pending_screenshots = self.db.pending_screenshots
+        self.payment_signatures = self.db.payment_signatures   # unique-key claims: one real payment = one premium
         self.support_links = self.db.support_links
 
     async def _safe_find_one(self, collection, filter_query, projection=None):
