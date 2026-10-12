@@ -85,10 +85,6 @@ from plugins.commands import (
 )
 from plan_pricing import format_user_plan_rates
 from upi_qr import upi_enabled, plan_qr_buttons, send_plan_qr
-from payment_dedupe import (
-    find_duplicate, image_fingerprint, user_lock,
-    signature_keys, claim_signatures, release_claims,
-)
 # The main Goflix bot's own Client instance, so the "premium unlocked"
 # message can be sent from THAT bot too (in addition to this AdminBot),
 # since that's the bot the user is actually using day-to-day.
@@ -643,7 +639,6 @@ def _extract_datetime(text: str):
 _TXN_ID_PATTERNS = [
     re.compile(r'UPI\s+transaction\s+ID[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
     re.compile(r'UPI\s+Ref\.?\s*No\.?[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),
-    re.compile(r'\btxn\s*(?:ID|No\.?)[:\s]*([A-Za-z0-9]{6,})', re.IGNORECASE),   # Navi: "UPI txn ID : 001094313298"
     re.compile(r'Google\s+transaction\s+ID[:\s]*([A-Za-z0-9_]{6,})', re.IGNORECASE),
     # PhonePe doesn't use either of the above labels — it prints its own
     # "PhonePe Transaction ID" line, and separately a bank "UTR" number.
@@ -1272,22 +1267,16 @@ async def upi_plan_qr_cb(client, query):
     # Live + per user: the QR always carries the CURRENT price, and an
     # already-used one-time offer falls back to the standard price.
     pricing = await get_user_pricing(MAIN_BOT_ID, query.from_user.id)
-    rows_after = [
+    markup = InlineKeyboardMarkup([
         # Reuses the existing flow: plan is already known, so it goes straight to "send the screenshot".
         [InlineKeyboardButton("✅ I've paid — send screenshot", callback_data=f"claim_upi_plan_{plan}")],
         [InlineKeyboardButton("❌ Close", callback_data="upi_close")],
-    ]
+    ])
     try:
-        await send_plan_qr(client, query.from_user.id, plan, PLAN_LABELS, pricing, rows_after=rows_after)
+        await send_plan_qr(client, query.from_user.id, plan, PLAN_LABELS, pricing, reply_markup=markup)
     except Exception as e:
         logger.exception(e)
         return await query.answer("Couldn't send the QR — please try /plan again.", show_alert=True)
-    # The plan list has done its job: remove it so only the QR is left in the chat.
-    if query.message and query.message.chat.id == query.from_user.id:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
     await query.answer("QR sent 👇")
 
 
@@ -1463,21 +1452,7 @@ async def unsolicited_screenshot_cb(client, message):
 
 
 async def _handle_screenshot(client, user, chat_id, file_id, claimed_plan: str, cached_extracted=None):
-    """One check at a time per user: if the same screenshot is sent twice quickly (or the plan button is
-    double-tapped), the second one waits until the first is approved and is then caught as a duplicate,
-    instead of both passing the duplicate check at the same moment."""
-    async with user_lock(user.id):
-        return await _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan, cached_extracted)
-
-
-async def _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan: str, cached_extracted=None):
-    status_msg = await client.send_message(
-        chat_id,
-        "⏳ <b>Please give us some time</b>\n\n"
-        "We're verifying your payment screenshot. Your premium will be activated instantly "
-        "as soon as it's verified — no need to send it again.",
-        parse_mode=enums.ParseMode.HTML,
-    )
+    status_msg = await client.send_message(chat_id, "🔍 Reading your screenshot…")
 
     _dl_t0 = asyncio.get_event_loop().time()
     photo_bytes_io = await client.download_media(file_id, in_memory=True)
@@ -1485,7 +1460,6 @@ async def _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan:
     if _dl_elapsed > 5:
         logger.warning(f"Downloading the screenshot from Telegram took {_dl_elapsed:.1f}s.")
     photo_bytes = bytes(photo_bytes_io.getbuffer())
-    image_sha256 = image_fingerprint(photo_bytes)   # exact-file fingerprint, saved with the request
 
     # Checked FIRST, before any OCR at all — a simple byte scan, so this
     # costs virtually nothing and a confirmed hit means there's nothing
@@ -1529,7 +1503,6 @@ async def _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan:
     # /start → pick plan → send screenshot order, or a stash saved
     # before this field existed).
     extracted = cached_extracted if cached_extracted is not None else await ocr_screenshot(photo_bytes)
-    extracted["image_sha256"] = image_sha256
 
     # What THIS user owes right now: the offer price while they still have their
     # one-time offer, otherwise the standard price (read live from Mongo).
@@ -1616,18 +1589,7 @@ async def _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan:
     # itself changes), so this has to be checked and short-circuit
     # BEFORE the exact-match branch below, not fall through to it.
     txn_id = extracted.get("txn_id")
-    # Compared on the FINAL amount (after the ₹-fusion correction), because that is the value an
-    # approved request is saved with — comparing the raw misread "215" against a saved "15" would
-    # never match. Applies to EVERY user: one real payment unlocks premium once, whoever sends it.
-    duplicate_of, duplicate_kind = await find_duplicate(
-        db, txn_id=txn_id, image_sha256=image_sha256, user_id=user.id,
-        amount=fusion_corrected_amount or extracted.get("amount"),
-        parsed_date=extracted.get("parsed_date"),
-    )
-    if duplicate_kind:
-        extracted["duplicate_kind"] = duplicate_kind
-        extracted["duplicate_of_request"] = str(duplicate_of.get("_id"))
-        extracted["duplicate_of_user"] = duplicate_of.get("user_id")
+    duplicate_of = await db.find_approved_request_by_txn_id(txn_id) if txn_id else None
 
     # A CONFIRMED wrong amount — OCR actually read a number off the
     # screenshot and it does not equal the claimed plan's CURRENT rate
@@ -1761,21 +1723,8 @@ async def _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan:
 
     if decision == "exact":
         grant_result = await _grant_premium(client, request_id, user.id, claimed_plan, auto=True)
-        if grant_result.get("duplicate"):
-            # Lost the race: the SAME payment was claimed by another request in the meantime (e.g. a
-            # friend sent it at the same instant). Nothing was granted — fall through to the
-            # standard rejection below.
-            decision = "reject"
-            reject_reason = "duplicate"
-            extracted["confidence"] = "duplicate"
-            extracted["duplicate_kind"] = "claimed by another request at the same moment"
-            extracted["duplicate_of_request"] = grant_result["duplicate"]
-        elif grant_result["db_ok"]:
-            sent = await status_msg.edit_text(
-                "🎉 <b>Premium activated instantly!</b>\n\n"
-                "Thank you for purchasing GoFlix Premium 💎 — enjoy all the premium features!",
-                parse_mode=enums.ParseMode.HTML,
-            )
+        if grant_result["db_ok"]:
+            sent = await status_msg.edit_text("✅ All clear! Thank you for purchasing GoFlix Premium 🎉")
             asyncio.create_task(_delayed_delete(sent, 60))
         else:
             # Don't tell the user everything's fine when the database
@@ -1786,9 +1735,8 @@ async def _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan:
                 "⚠️ Your payment was verified, but something went wrong granting premium. "
                 f"An admin has been notified — please wait a moment or contact {OWNER_LNK}."
             )
-        if not grant_result.get("duplicate"):
-            await _log_auto_approval(client, request_id, user, claimed_plan, extracted, file_id, grant_result)
-            return
+        await _log_auto_approval(client, request_id, user, claimed_plan, extracted, file_id, grant_result)
+        return
 
     if decision == "reject":
         appeal_btn = InlineKeyboardMarkup([
@@ -1832,7 +1780,7 @@ async def _handle_screenshot_inner(client, user, chat_id, file_id, claimed_plan:
     await _notify_admins(client, request_id, user, claimed_plan, extracted, file_id)
 
 
-async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, admin_id=None, enforce_unique=None):
+async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, admin_id=None):
     """Shared by the auto-approve path above and the manual Approve
     button below — same premium-granting logic either way, only the
     payment_request's recorded status differs.
@@ -1859,42 +1807,9 @@ async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, adm
     result = {
         "db_ok": False, "verified": False,
         "admin_bot_dm_ok": False, "main_bot_dm_ok": False, "error": None,
-        "duplicate": None,
     }
     seconds = PLAN_SECONDS[plan]
     now = datetime.datetime.now()
-
-    # ONE real payment = ONE premium, for everybody. Before granting anything, atomically CLAIM this
-    # payment's signatures (transaction ID / file hash / amount+payment-minute) in a unique-indexed
-    # collection. Only one request can ever own a signature, so even if the payer and a friend send
-    # the same screenshot at the same instant, exactly one is granted and the other gets
-    # result["duplicate"]. Automatic approvals are strictly enforced; an ADMIN pressing Approve is a
-    # deliberate override (never blocked) but still records the signatures so later copies are caught.
-    # If the claims store itself errors, this fails OPEN (logged) — the earlier find_duplicate check
-    # already ran, and a database hiccup must not turn away a genuine paying customer.
-    if enforce_unique is None:
-        enforce_unique = auto
-    claimed_here = False
-    try:
-        req0 = await db.get_payment_request(request_id)
-        ex0 = (req0 or {}).get("extracted") or {}
-        keys = signature_keys(
-            txn_id=ex0.get("txn_id"), image_sha256=ex0.get("image_sha256"),
-            amount=ex0.get("fusion_corrected_amount") or ex0.get("amount"),
-            parsed_date=ex0.get("parsed_date"),
-        )
-        claim_ok, owner = await claim_signatures(db, request_id, keys)
-        if claim_ok:
-            claimed_here = True
-        elif enforce_unique:
-            result["duplicate"] = owner or "unknown"
-            logger.warning(f"Blocked duplicate grant for request {request_id}: payment already claimed by {owner}.")
-            return result
-        else:
-            logger.warning(f"Admin override: request {request_id} repeats a payment already claimed by {owner}.")
-    except Exception as e:
-        logger.warning(f"Payment-signature claim failed for request {request_id} ({e}); continuing without it.")
-
     try:
         existing = await db.get_user(user_id)
         current_expiry = existing.get("expiry_time") if existing else None
@@ -1911,10 +1826,6 @@ async def _grant_premium(client, request_id, user_id, plan: str, auto: bool, adm
     except Exception as e:
         logger.warning(f"CRITICAL: failed to grant premium for user {user_id}, request {request_id}: {e}")
         result["error"] = str(e)
-        if claimed_here:
-            # The grant failed, so the payment is NOT used yet — give its signatures back, otherwise a
-            # retry (or the user re-sending) would be wrongly blocked by this failed attempt.
-            await release_claims(db, request_id)
         return result
 
     # One-time offer: if this purchase was at the offer price, it is now used up.
@@ -2018,9 +1929,7 @@ async def _log_auto_rejection(client, request_id, user, claimed_plan, extracted,
     record of what happened in case of a dispute."""
     if reject_reason == "duplicate":
         reason_line = (
-            f"🔴 This payment was already approved on a previous request "
-            f"({extracted.get('duplicate_kind') or 'same transaction ID'}"
-            f"{', first used by user ' + str(extracted['duplicate_of_user']) if extracted.get('duplicate_of_user') else ''}). "
+            f"🔴 This transaction ID was already approved on a previous request. "
             f"Looks like a reused screenshot. Rejected automatically, no admin action needed."
         )
     elif reject_reason == "stale_date":
