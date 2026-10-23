@@ -198,7 +198,13 @@ async def _delayed_delete(message, delay: int):
 # would never itself contain.
 _AD_MARKER_PATTERN = re.compile(
     r'\b(claim\s*now|shows?\s+daily|watch\s+\d+\+|download\s+(the\s+)?app|install\s+now|'
-    r'subscribe\s+now|unlock\s+now|grab\s+(this\s+)?(deal|offer)\s+now|recharge\s+now)\b',
+    r'subscribe\s+now|unlock\s+now|grab\s+(this\s+)?(deal|offer)\s+now|recharge\s+now|'
+    # FamPay's own promo cards, printed under its "Pay again / Check Balance"
+    # buttons ("Make payments go FAAAHHHHH", "Customise your Paytune",
+    # "Google Play Recharge Code / Flat 4% Instant Discount"). Specific to
+    # FamPay, and always BELOW the payment card, so cutting here is safe.
+    r'make\s+payments\s+go|customi[sz]e\s+your\s+paytune|google\s+play\s+recharge\s+code|'
+    r'flat\s+\d+%\s+instant\s+discount)\b',
     re.IGNORECASE,
 )
 
@@ -347,6 +353,46 @@ _RECEIPT_STATUS_ANCHORS = (
 _TRAILING_AMOUNT_RE = re.compile(r'([₹]|Rs\.?|INR)?[ \t]*([0-9][0-9,]*(?:\.\d{1,2})?)\s*$', re.IGNORECASE)
 
 
+# FamPay's success screen ("Paid in 1.7 sec") prints the amount as a big
+# standalone number and the OCR very often drops the rupee glyph entirely,
+# leaving a bare "10" on its own line. The generic last-resort fallback in
+# _extract_amount() only accepts such a line if it is the ONLY bare-number
+# line in the whole screenshot, so ONE stray digit anywhere (the phone's
+# battery %, an icon numeral, "4%" in a promo) made the amount "not
+# detected" and pushed a genuine payment to manual review. FamPay's layout
+# is fixed, so anchor on position instead:
+#     Paid in 1.7 sec
+#     <payee name>
+#     21 Oct 2026, 7:13pm • UTR 629404070001
+#     ₹10                         <- the amount: first number under the UTR line
+#     <payment note>              <- a real word, so the scan stops here
+#     Pay again / Check Balance
+# Only used when the screenshot looks like FamPay AND none of the
+# explicit-symbol patterns above matched, so no other app is affected.
+_FAMPAY_SIGNAL = re.compile(r'paid\s+in\s+\d+(?:[.,]\d+)?\s*s', re.IGNORECASE)
+_FAMPAY_ANCHOR_LINE = re.compile(r'\bUTR\b|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}', re.IGNORECASE)
+_FAMPAY_AMOUNT_LINE = re.compile(
+    r'^(?:[^\w\n]{0,3}|[A-Za-z])?\s*((?:\d{1,3}(?:,\d{3})+|\d{1,6})(?:\.\d{1,2})?)\s*[^\w\n]{0,3}$'
+)
+
+
+def _fampay_amount(text: str):
+    low = text.lower()
+    if not (_FAMPAY_SIGNAL.search(text) or ("pay again" in low and "check balance" in low)):
+        return None
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    start = next((i for i, l in enumerate(lines) if _FAMPAY_ANCHOR_LINE.search(l)), None)
+    if start is None:
+        return None
+    for l in lines[start + 1:start + 6]:
+        m = _FAMPAY_AMOUNT_LINE.match(l)
+        if m:
+            return m.group(1).replace(",", "")
+        if re.search(r'[A-Za-z]{4,}', l):
+            break  # reached the payment note / buttons: no amount line exists
+    return None
+
+
 def _extract_amount(text: str):
     for pattern in _AMOUNT_PATTERNS:
         m = pattern.search(text)
@@ -373,6 +419,10 @@ def _extract_amount(text: str):
             m = _TRAILING_AMOUNT_RE.search(line)
             if m:
                 return m.group(2).replace(",", "")
+
+    fam_amount = _fampay_amount(text)
+    if fam_amount:
+        return fam_amount
 
     # Last-resort fallback: whole-rupee amounts with no paise at all
     # (e.g. "₹3" or "₹1,100") have no decimal for the pattern above to
