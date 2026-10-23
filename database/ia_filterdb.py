@@ -49,6 +49,28 @@ except Exception as e:
     print(f"[startup] create_search_index() failed: {e}")
 
 
+def warn_if_name_index_is_unique():
+    """Same-name files of different sizes can only be stored if the DB has no
+    UNIQUE index on file_name alone (an index left over from an older setup
+    would make every second version fail with DuplicateKeyError). This only
+    reports it at startup - it never changes or drops anything."""
+    for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
+        try:
+            for name, spec in collection.index_information().items():
+                keys = [k for k, _ in spec.get('key', [])]
+                if name != '_id_' and spec.get('unique') and 'file_name' in keys and 'file_size' not in keys:
+                    print(f"[startup] WARNING: unique index '{name}' on {collection.full_name} blocks same-name "
+                          f"files of different sizes. Drop it with: db.{collection.name}.dropIndex('{name}')")
+        except Exception as e:
+            print(f"[startup] could not check indexes on {collection.full_name}: {e}")
+
+
+try:
+    warn_if_name_index_is_unique()
+except Exception as e:
+    print(f"[startup] warn_if_name_index_is_unique() failed: {e}")
+
+
 async def save_file(media):
     """Save file in the database."""
     
@@ -62,7 +84,7 @@ async def save_file(media):
         'caption': media.caption.html if media.caption else None
     }
 
-    if is_file_already_saved(file_id, file_name):
+    if is_file_already_saved(file_id, file_name, media.file_size):
         return False, 0
 
     try:
@@ -94,16 +116,26 @@ def clean_file_name(file_name):
         
     return ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), file_name.split()))
 
-def is_file_already_saved(file_id, file_name):
-    """Check if the file is already saved in either collection."""
-    found1 = {'file_name': file_name}
-    found = {'file_id': file_id}
+def is_file_already_saved(file_id, file_name, file_size=None):
+    """Check if the file is already saved in either collection.
+
+    A file is a duplicate only if it is the SAME Telegram file (same
+    file_id) or has the same name AND the same size. Files that share a
+    name but differ in size (e.g. a 400 MB, a 1 GB and a 3 GB version of
+    one movie) are different files, so every size is kept. If the size is
+    unknown the versions can't be told apart, so it falls back to the old
+    name-only check.
+    """
+    by_id = {'file_id': file_id}
+    by_name = {'file_name': file_name}
+    if file_size is not None:
+        by_name['file_size'] = file_size
 
     for collection in [col, sec_col]:
-        if collection.find_one(found1) or collection.find_one(found):
-            print(f"{file_name} is already saved.")
+        if collection.find_one(by_name) or collection.find_one(by_id):
+            print(f"{file_name} ({file_size} bytes) is already saved.")
             return True
-            
+
     return False
 
 async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False, need_count=True, projection=None, article_fallback=True):
