@@ -130,10 +130,15 @@ STAR_PLAN_LABELS = {"week": "1 Week", "month": "1 Month", "3months": "3 Months",
 # 💳 Dynamic UPI QR: a fresh QR per plan with that plan's current price as the amount.
 # Set UPI_ID (e.g. yourname@okhdfcbank) in the environment / Koyeb variables.
 # Left empty = the old static PAYMENT_QR picture keeps being used.
-UPI_ID = environ.get('UPI_ID', '').strip()
+UPI_ID = environ.get('UPI_ID', 'BHARATPE2Z0M0A9L0L06155@unitype').strip()
 # Name put inside the QR. NOTE: UPI apps show the name the BANK has registered for the UPI ID
 # (your own name for a personal UPI ID); a custom business name only shows for a merchant UPI ID.
-UPI_PAYEE_NAME = environ.get('UPI_PAYEE_NAME', 'Goflix').strip()
+UPI_PAYEE_NAME = environ.get('UPI_PAYEE_NAME', 'HARSHITH').strip()
+
+# The /plan text above shows the UPI id in a spoiler. If it still contains the OLD id, show the current UPI_ID instead,
+# so changing UPI_ID is the only thing you ever have to do.
+if UPI_ID:
+    PAYMENT_TEXT = PAYMENT_TEXT.replace('harshithacharya632-3@oksbi', UPI_ID)
 
 # 🏷️ STANDARD (regular) UPI price of each plan, in rupees. A plan whose selling price
 # (set with /plan_rate) is BELOW its standard price is "on offer": /plan shows the
