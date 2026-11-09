@@ -1,4 +1,4 @@
-"""Dynamic UPI payment QR codes + one-tap "open in PhonePe / GPay / Paytm / Navi".
+"""Dynamic UPI payment QR codes + one-tap "pay with PhonePe / GPay / Paytm / Navi / Amazon Pay".
 
 A fresh QR is generated for the plan the user tapped, with THAT user's current
 price as the amount, so scanning it opens the UPI app with the payment request
@@ -7,9 +7,10 @@ from the live plan rates every time, changing a plan to Rs 7 with /plan_rate
 immediately gives a Rs 7 QR - nothing is saved or cached.
 
 The "pay with your UPI app" buttons: Telegram only allows https:// links on
-buttons (upi:// and phonepe:// are rejected), so each button opens a tiny page
-on this bot's own web server (plugins/route.py -> /pay) which then hands the
-payment over to the chosen app. The link is signed, so nobody can edit the
+buttons (upi:// and phonepe:// are rejected), so each button opens the /pay page
+on the server behind URL (the stream service: app/upi_pay.py) which then hands the
+payment over to the chosen app WITH the amount, payee and note already filled in -
+the user only enters the UPI PIN. The link is signed, so nobody can edit the
 amount or point it at another UPI ID.
 
 Needs UPI_ID (and optionally UPI_PAYEE_NAME) in the environment / info.py and
@@ -44,12 +45,13 @@ UPI_APPS = {
     "gpay":    {"name": "Google Pay", "short": "GPay",    "package": "com.google.android.apps.nbu.paisa.user", "ios": "tez://upi/pay", "scheme": "tez", "open_path": "upi/pay"},
     "paytm":   {"name": "Paytm",      "short": "Paytm",   "package": "net.one97.paytm",                         "ios": "paytmmp://upi/pay", "scheme": "paytmmp", "open_path": "upi/pay"},
     "navi":    {"name": "Navi",       "short": "Navi",    "package": "com.naviapp",                             "ios": "navipay://pay", "scheme": "navipay", "open_path": "pay"},
+    # Amazon Pay has no iOS URL scheme of its own, so on iPhone it falls back to the generic upi:// link.
+    "amazon":  {"name": "Amazon Pay", "short": "Amazon Pay", "package": "in.amazon.mShop.android.shopping",     "ios": None, "scheme": None, "open_path": ""},
 }
 
 
-# Apps that get their OWN button under the QR. The 4th button is "Other UPI apps": it opens the web
-# page with no app chosen, which lists every app (Navi included) plus Android's "all UPI apps" chooser.
-BUTTON_APPS = ("phonepe", "gpay", "paytm")
+# Apps that get their OWN "pay" button under the QR (shown in this order, 3 + 2).
+BUTTON_APPS = ("phonepe", "gpay", "paytm", "navi", "amazon")
 
 
 def upi_enabled() -> bool:
@@ -68,7 +70,7 @@ def format_amount(amount) -> str:
 
 
 def build_upi_query(amount, note: str = "", upi_id: str = None, payee: str = None) -> str:
-    """pa=<id>&pn=<name>&am=<amount>&cu=INR&tn=<note>   (the part after upi://pay?)"""
+    """pa=<id>&pn=<n>&am=<amount>&cu=INR&tn=<note>   (the part after upi://pay?)"""
     pa = (upi_id or UPI_ID).strip()
     pn = (payee or UPI_PAYEE_NAME or "Goflix").strip()
     params = [("pa", pa), ("pn", pn), ("am", format_amount(amount)), ("cu", "INR")]
@@ -78,7 +80,7 @@ def build_upi_query(amount, note: str = "", upi_id: str = None, payee: str = Non
 
 
 def build_upi_link(amount, note: str = "", upi_id: str = None, payee: str = None) -> str:
-    """upi://pay?pa=<id>&pn=<name>&am=<amount>&cu=INR&tn=<note>"""
+    """upi://pay?pa=<id>&pn=<n>&am=<amount>&cu=INR&tn=<note>"""
     return "upi://pay?" + build_upi_query(amount, note, upi_id, payee)
 
 
@@ -130,16 +132,22 @@ def open_page_url(app: str = None):
 
 
 def app_button_rows(amount=None, note: str = "") -> list:
-    """2x2 grid: PhonePe / GPay / Paytm + "Other UPI apps". Each only OPENS that app ([] if URL isn't https)."""
+    """Direct-pay buttons: PhonePe / GPay / Paytm on the first row, Navi / Amazon Pay on the second.
+    Each one opens that app with the amount, payee and note already filled in (signed /pay link).
+    Returns [] when there is no amount or URL isn't an https address (the QR alone is still sent)."""
     from pyrogram.types import InlineKeyboardButton
+    if amount is None:
+        return []
     buttons = []
     for key in BUTTON_APPS:
-        url = open_page_url(key)
+        try:
+            url = pay_page_url(amount, note, key)
+        except ValueError:
+            return []
         if not url:
             return []
         buttons.append(InlineKeyboardButton(f"📱 {UPI_APPS[key]['short']}", url=url))
-    buttons.append(InlineKeyboardButton("➕ Other UPI apps", url=open_page_url()))
-    return [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    return [buttons[:3], buttons[3:]]
 
 
 def detect_platform(user_agent: str) -> str:
@@ -155,7 +163,7 @@ def app_url(app_key: str, platform: str, query: str) -> str:
     meta = UPI_APPS[app_key]
     if platform == "android":
         return f"intent://pay?{query}#Intent;scheme=upi;package={meta['package']};end"
-    if platform == "ios":
+    if platform == "ios" and meta.get("ios"):
         return f"{meta['ios']}?{query}"
     return f"upi://pay?{query}"
 
@@ -165,8 +173,9 @@ def render_pay_page(amount, note: str, app_key: str = None, user_agent: str = ""
     amt = format_amount(amount)
     query = build_upi_query(amt, note)
     platform = detect_platform(user_agent)
-    keys = list(UPI_APPS)
-    if app_key in UPI_APPS:
+    # iPhone can only open apps that have their own URL scheme (Amazon Pay has none -> "Any other UPI app")
+    keys = [k for k in UPI_APPS if platform != "ios" or UPI_APPS[k].get("ios")]
+    if app_key in keys:
         keys.remove(app_key)
         keys.insert(0, app_key)
     esc = lambda s: html.escape(s, quote=True)
@@ -286,11 +295,11 @@ def build_caption(plan_label: str, amount, standard_amount=None, offer: bool = F
     lines = [f"<b>💳 Pay {price} — {plan_label} Premium</b>\n"]
     if has_app_buttons:
         lines += [
-            "1️⃣ Tap your UPI app below — it only opens the app",
-            f"2️⃣ In the app tap <b>Scan QR</b> and scan this QR — the amount ₹{amount} is already filled in",
-            "     <i>Paying from this phone? Take a screenshot of this QR and pick it from your gallery.</i>",
+            f"1️⃣ Tap your UPI app below — it opens with ₹{amount} and the payee already filled in",
+            "2️⃣ Just enter your UPI PIN to pay",
             "3️⃣ After paying, tap “I've paid” and send the payment screenshot",
-            "\n<i>On another phone? Just scan the QR above.</i>",
+            "\n<i>Prefer scanning? Scan this QR with any UPI app — the amount ₹" + str(amount) + " is filled in too.\n"
+            "Paying from this phone? Take a screenshot of this QR and pick it from your gallery.</i>",
         ]
     else:
         lines += [
@@ -337,9 +346,11 @@ def plan_qr_buttons(pricing: dict, labels: dict) -> list:
     return rows
 
 
-async def send_plan_qr(client, chat_id, plan: str, labels: dict, pricing: dict, rows_after: list = None, delete_after: int = 600):
+async def send_plan_qr(client, chat_id, plan: str, labels: dict, pricing: dict, rows_after: list = None,
+                       delete_after: int = 600, reply_markup=None):
     """Generate + send the QR for `plan` at this user's price. Returns the sent message.
-    Under the QR: PhonePe/GPay/Paytm/Other apps (they only open the app), then `rows_after`."""
+    Under the QR: PhonePe / GPay / Paytm / Navi / Amazon Pay (each opens that app with the amount filled in),
+    then `rows_after` and/or the rows of `reply_markup` (an InlineKeyboardMarkup - the admin bot passes this)."""
     from pyrogram import enums
     from pyrogram.types import InlineKeyboardMarkup
     amount = pricing["prices"][plan]
@@ -347,13 +358,16 @@ async def send_plan_qr(client, chat_id, plan: str, labels: dict, pricing: dict, 
     note = f"Goflix {labels[plan]}"
     link = build_upi_link(amount, note=note)
     png = await asyncio.to_thread(make_qr_png, link)
-    app_rows = app_button_rows()
+    app_rows = app_button_rows(amount, note)
+    extra_rows = list(rows_after or [])
+    if reply_markup is not None:
+        extra_rows += [list(r) for r in (getattr(reply_markup, "inline_keyboard", None) or [])]
     sent = await client.send_photo(
         chat_id=chat_id,
         photo=png,
         caption=build_caption(labels[plan], amount, pricing["standard"].get(plan), offer, has_app_buttons=bool(app_rows)),
         parse_mode=enums.ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(app_rows + list(rows_after or [])),
+        reply_markup=InlineKeyboardMarkup(app_rows + extra_rows),
     )
     if delete_after:
         _spawn(_delete_later(sent, delete_after))    # old QRs don't linger after a price change
