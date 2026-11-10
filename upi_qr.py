@@ -298,8 +298,7 @@ def build_caption(plan_label: str, amount, standard_amount=None, offer: bool = F
             f"1️⃣ Tap your UPI app below — it opens with ₹{amount} and the payee already filled in",
             "2️⃣ Just enter your UPI PIN to pay",
             "3️⃣ After paying, tap “I've paid” and send the payment screenshot",
-            "\n<i>Prefer scanning? Scan this QR with any UPI app — the amount ₹" + str(amount) + " is filled in too.\n"
-            "Paying from this phone? Take a screenshot of this QR and pick it from your gallery.</i>",
+            "\n<i>On another phone? Just scan the QR above — the amount ₹" + str(amount) + " is filled in too.</i>",
         ]
     else:
         lines += [
