@@ -10,8 +10,9 @@ The "pay with your UPI app" buttons: Telegram only allows https:// links on
 buttons (upi:// and phonepe:// are rejected), so each button opens the /pay page
 on the server behind URL (the stream service: app/upi_pay.py) which then hands the
 payment over to the chosen app WITH the amount, payee and note already filled in -
-the user only enters the UPI PIN. The link is signed, so nobody can edit the
-amount or point it at another UPI ID.
+the user only enters the UPI PIN. The link is signed and carries YOUR UPI id and name
+(UPI_ID / UPI_PAYEE_NAME from info.py), so the QR and every app button always use the same
+payee and nobody can edit the amount or point it at another UPI ID.
 
 Needs UPI_ID (and optionally UPI_PAYEE_NAME) in the environment / info.py and
 the `segno` package. If either is missing, upi_enabled() is False and the bots
@@ -111,12 +112,23 @@ def verify_pay_sig(amount, note: str, sig: str) -> bool:
         return False
 
 
+def sign_payee(amount, note: str, pa: str, pn: str) -> str:
+    """Signature that also covers the payee (UPI id + name) carried in the link."""
+    msg = f"payee|{format_amount(amount)}|{note}|{pa}|{pn}".encode()
+    return hmac.new(_secret(), msg, hashlib.sha256).hexdigest()[:24]
+
+
 def pay_page_url(amount, note: str, app: str = None):
     """https link to this server's /pay page, or None when URL isn't an https address."""
     base = (URL or "").strip().rstrip("/")
     if not base.startswith("https://"):
         return None
+    pa = (UPI_ID or "").strip()
+    pn = (UPI_PAYEE_NAME or "Goflix").strip()
     params = {"am": format_amount(amount), "tn": note, "sig": sign_pay(amount, note)}
+    if pa and _VPA_RE.match(pa):
+        # the payee travels inside the signed link, so the stream server never uses a stale UPI id of its own
+        params.update({"pa": pa, "pn": pn, "ps": sign_payee(amount, note, pa, pn)})
     if app:
         params["app"] = app
     return f"{base}/pay?{urlencode(params)}"
