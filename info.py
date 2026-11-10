@@ -113,32 +113,48 @@ PREMIUM_AND_REFERAL_MODE = bool(environ.get('PREMIUM_AND_REFERAL_MODE', True)) #
 # If PREMIUM_AND_REFERAL_MODE is True Then Fill Below Variable, If Flase Then No Need To Fill.
 REFERAL_COUNT = int(environ.get('REFERAL_COUNT', '1')) # number of referal count
 REFERAL_PREMEIUM_TIME = environ.get('REFERAL_PREMEIUM_TIME', '1week') # time in week, day, month.
-PAYMENT_QR = environ.get('PAYMENT_QR', 'https://ibb.co/9HZdjvMW') # payment code picture url.
-PAYMENT_TEXT = environ.get('PAYMENT_TEXT', '<b>- ᴀᴠᴀɪʟᴀʙʟᴇ ᴘʟᴀɴs - \n\n{plan_rates}\n\n🎁 ᴘʀᴇᴍɪᴜᴍ ғᴇᴀᴛᴜʀᴇs 🎁\n\n○ ɴᴏ ɴᴇᴇᴅ ᴛᴏ ᴠᴇʀɪғʏ\n○ ɴᴏ ɴᴇᴇᴅ ᴛᴏ ᴏᴘᴇɴ ʟɪɴᴋ\n○ ᴅɪʀᴇᴄᴛ ғɪʟᴇs\n○ ᴀᴅ-ғʀᴇᴇ ᴇxᴘᴇʀɪᴇɴᴄᴇ\n○ ʜɪɢʜ-sᴘᴇᴇᴅ ᴅᴏᴡɴʟᴏᴀᴅ ʟɪɴᴋ\n○ ᴍᴜʟᴛɪ-ᴘʟᴀʏᴇʀ sᴛʀᴇᴀᴍɪɴɢ ʟɪɴᴋs\n○ ᴜɴʟɪᴍɪᴛᴇᴅ ᴍᴏᴠɪᴇs & sᴇʀɪᴇs\n○ ꜰᴜʟʟ ᴀᴅᴍɪɴ sᴜᴘᴘᴏʀᴛ\n○ ʀᴇǫᴜᴇsᴛ ᴡɪʟʟ ʙᴇ ᴄᴏᴍᴘʟᴇᴛᴇᴅ ɪɴ 1ʜ ɪꜰ ᴀᴠᴀɪʟᴀʙʟᴇ\n\n✨ ᴜᴘɪ ɪᴅ - <tg-spoiler><code>harshithacharya632-3@oksbi</code></tg-spoiler>\n\nᴄʟɪᴄᴋ ᴛᴏ ᴄʜᴇᴄᴋ ʏᴏᴜʀ ᴀᴄᴛɪᴠᴇ ᴘʟᴀɴ /myplan\n\n💢 ᴍᴜsᴛ sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ ᴀғᴛᴇʀ ᴘᴀʏᴍᴇɴᴛ\n\n‼️ ᴀғᴛᴇʀ sᴇɴᴅɪɴɢ ᴀ sᴄʀᴇᴇɴsʜᴏᴛ ᴘʟᴇᴀsᴇ ɢɪᴠᴇ ᴜs sᴏᴍᴇ ᴛɪᴍᴇ ᴛᴏ ᴀᴅᴅ ʏᴏᴜ ɪɴ ᴛʜᴇ ᴘʀᴇᴍɪᴜᴍ</b>')
-
-# Telegram Stars (XTR) instant-premium settings. Amounts are in Stars, one
-# per plan key — matches the same plan keys used by PLAN_RATES (week,
-# month, 3months, 6months). No provider token is needed for Stars.
-STAR_PLAN_RATES = {
-    "week": int(environ.get('STAR_RATE_WEEK', '50')),
-    "month": int(environ.get('STAR_RATE_MONTH', '120')),
-    "3months": int(environ.get('STAR_RATE_3MONTHS', '300')),
-    "6months": int(environ.get('STAR_RATE_6MONTHS', '500')),
-}
-STAR_PLAN_LABELS = {"week": "1 Week", "month": "1 Month", "3months": "3 Months", "6months": "6 Months"}
 
 # 💳 Dynamic UPI QR: a fresh QR per plan with that plan's current price as the amount.
 # Set UPI_ID (e.g. yourname@okhdfcbank) in the environment / Koyeb variables.
-# Left empty = the old static PAYMENT_QR picture keeps being used.
+# Your BharatPe merchant UPI id. It is used for the QR codes, the UPI app buttons, the payment text and the payee check.
 UPI_ID = environ.get('UPI_ID', 'BHARATPE2Z0M0A9L0L06155@unitype').strip()
 # Name put inside the QR. NOTE: UPI apps show the name the BANK has registered for the UPI ID
 # (your own name for a personal UPI ID); a custom business name only shows for a merchant UPI ID.
 UPI_PAYEE_NAME = environ.get('UPI_PAYEE_NAME', 'HARSHITH').strip()
 
-# The /plan text above shows the UPI id in a spoiler. If it still contains the OLD id, show the current UPI_ID instead,
-# so changing UPI_ID is the only thing you ever have to do.
-if UPI_ID:
-    PAYMENT_TEXT = PAYMENT_TEXT.replace('harshithacharya632-3@oksbi', UPI_ID)
+
+def _make_static_upi_qr():
+    """Static QR (no amount) for YOUR UPI id, drawn at start-up from UPI_ID - so there is no picture to upload
+    and it can never show an old UPI id. Used wherever the bot sends the plain payment QR picture."""
+    try:
+        import os, tempfile
+        from urllib.parse import quote
+        import segno
+        link = f"upi://pay?pa={UPI_ID}&pn={quote(UPI_PAYEE_NAME or 'Goflix', safe='')}&cu=INR&tn={quote('Goflix Premium', safe='')}"
+        path = os.path.join(tempfile.gettempdir(), "goflix_payment_qr.png")
+        segno.make(link, error="m", micro=False).save(path, kind="png", scale=10, border=4, dark="#000000", light="#ffffff")
+        return path
+    except Exception as e:
+        print(f"[info.py] could not draw the payment QR: {e}")
+        return ""
+
+
+# Set PAYMENT_QR in Koyeb only if you want to show your own picture instead of the generated QR.
+PAYMENT_QR = environ.get('PAYMENT_QR', '').strip() or _make_static_upi_qr()
+
+PAYMENT_TEXT = environ.get('PAYMENT_TEXT', '<b>- ᴀᴠᴀɪʟᴀʙʟᴇ ᴘʟᴀɴs - \n\n{plan_rates}\n\n🎁 ᴘʀᴇᴍɪᴜᴍ ғᴇᴀᴛᴜʀᴇs 🎁\n\n○ ɴᴏ ɴᴇᴇᴅ ᴛᴏ ᴠᴇʀɪғʏ\n○ ɴᴏ ɴᴇᴇᴅ ᴛᴏ ᴏᴘᴇɴ ʟɪɴᴋ\n○ ᴅɪʀᴇᴄᴛ ғɪʟᴇs\n○ ᴀᴅ-ғʀᴇᴇ ᴇxᴘᴇʀɪᴇɴᴄᴇ\n○ ʜɪɢʜ-sᴘᴇᴇᴅ ᴅᴏᴡɴʟᴏᴀᴅ ʟɪɴᴋ\n○ ᴍᴜʟᴛɪ-ᴘʟᴀʏᴇʀ sᴛʀᴇᴀᴍɪɴɢ ʟɪɴᴋs\n○ ᴜɴʟɪᴍɪᴛᴇᴅ ᴍᴏᴠɪᴇs & sᴇʀɪᴇs\n○ ꜰᴜʟʟ ᴀᴅᴍɪɴ sᴜᴘᴘᴏʀᴛ\n○ ʀᴇǫᴜᴇsᴛ ᴡɪʟʟ ʙᴇ ᴄᴏᴍᴘʟᴇᴛᴇᴅ ɪɴ 1ʜ ɪꜰ ᴀᴠᴀɪʟᴀʙʟᴇ\n\n✨ ᴜᴘɪ ɪᴅ - <tg-spoiler><code>__UPI_ID__</code></tg-spoiler>\n\nᴄʟɪᴄᴋ ᴛᴏ ᴄʜᴇᴄᴋ ʏᴏᴜʀ ᴀᴄᴛɪᴠᴇ ᴘʟᴀɴ /myplan\n\n💢 ᴍᴜsᴛ sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ ᴀғᴛᴇʀ ᴘᴀʏᴍᴇɴᴛ\n\n‼️ ᴀғᴛᴇʀ sᴇɴᴅɪɴɢ ᴀ sᴄʀᴇᴇɴsʜᴏᴛ ᴘʟᴇᴀsᴇ ɢɪᴠᴇ ᴜs sᴏᴍᴇ ᴛɪᴍᴇ ᴛᴏ ᴀᴅᴅ ʏᴏᴜ ɪɴ ᴛʜᴇ ᴘʀᴇᴍɪᴜᴍ</b>')
+PAYMENT_TEXT = PAYMENT_TEXT.replace('__UPI_ID__', UPI_ID)   # the UPI id in the /plan text always follows UPI_ID
+
+# Telegram Stars (XTR) instant-premium settings. Amounts are in Stars, one
+# per plan key — matches the same plan keys used by PLAN_RATES (week,
+# month, 3months, 6months). No provider token is needed for Stars.
+STAR_PLAN_RATES = {
+    "week": int(environ.get('STAR_RATE_WEEK', '17')),
+    "month": int(environ.get('STAR_RATE_MONTH', '45')),
+    "3months": int(environ.get('STAR_RATE_3MONTHS', '120')),
+    "6months": int(environ.get('STAR_RATE_6MONTHS', '220')),
+}
+STAR_PLAN_LABELS = {"week": "1 Week", "month": "1 Month", "3months": "3 Months", "6months": "6 Months"}
 
 # 🏷️ STANDARD (regular) UPI price of each plan, in rupees. A plan whose selling price
 # (set with /plan_rate) is BELOW its standard price is "on offer": /plan shows the
