@@ -1,6 +1,7 @@
 import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64, math
 from Script import script
 from pyrogram.errors import MediaEmpty
+from pymongo.errors import PyMongoError
 from pyrogram import Client, filters, enums
 from pyrogram.errors import ChatAdminRequired, FloodWait
 from pyrogram.types import *
@@ -2195,7 +2196,19 @@ async def give_premium_cmd_handler(client, message):
             base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
             expiry_time = base_time + datetime.timedelta(seconds=seconds)
             user_data = {"id": user_id, "expiry_time": expiry_time, "expiry_reminder_sent": False, "expired_notified": False} 
-            await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            try:
+                await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            except PyMongoError as e:
+                # Most common cause: Atlas free tier (512 MB) is full -> every write is blocked.
+                logger.error(f"[add_premium] DB write failed for {user_id}: {e}")
+                await message.reply_text(
+                    "❌ <b>Premium NOT added.</b>\n\n"
+                    "The users database refused the write (usually MongoDB storage is full - "
+                    "512 MB free-tier limit). Free up space or point DATABASE_URI at a new / bigger "
+                    "cluster, then run /add_premium again.\n\n"
+                    f"<code>{str(e)[:150]}</code>"
+                )
+                return
             await message.reply_text("Premium access added to the user.")            
             await client.send_message(
                 chat_id=user_id,
@@ -2232,7 +2245,17 @@ async def remove_premium_cmd_handler(client, message):
         if seconds > 0:
             expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
             user_data = {"id": user_id, "expiry_time": expiry_time, "expiry_reminder_sent": True, "expired_notified": True}  # Using "id" instead of "user_id"
-            await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            try:
+                await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            except PyMongoError as e:
+                logger.error(f"[remove_premium] DB write failed for {user_id}: {e}")
+                await message.reply_text(
+                    "❌ <b>Premium NOT removed.</b>\n\n"
+                    "The users database refused the write (usually MongoDB storage is full). "
+                    "Free up space or point DATABASE_URI at a new cluster, then try again.\n\n"
+                    f"<code>{str(e)[:150]}</code>"
+                )
+                return
             await message.reply_text("Premium access removed to the user.")
             await client.send_message(
                 chat_id=user_id,
@@ -2403,7 +2426,16 @@ async def star_payment_success_handler(client, message):
         "expiry_reminder_sent": False,
         "expired_notified": False,
     }
-    await db.update_user(user_data)
+    try:
+        await db.update_user(user_data)
+    except PyMongoError as e:
+        # The user already paid. Never fail silently - log the charge id so an admin can add premium by hand.
+        logger.error(f"[stars_premium] DB write failed for user {user_id}, charge_id={charge_id}, plan={plan}: {e}")
+        return await message.reply_text(
+            "⚠️ <b>Payment received, but I couldn't activate premium right now.</b>\n\n"
+            "Please contact the admin and share this payment ID:\n"
+            f"<code>{charge_id}</code>"
+        )
 
     await message.reply_text(
         f"<b>👑 ᴘᴀʏᴍᴇɴᴛ sᴜᴄᴄᴇssꜰᴜʟ — ᴘʀᴇᴍɪᴜᴍ ᴀᴄᴛɪᴠᴀᴛᴇᴅ ɪɴsᴛᴀɴᴛʟʏ! 👑</b>\n\n"
