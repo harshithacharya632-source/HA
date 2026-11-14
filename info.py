@@ -95,6 +95,14 @@ O_DB_URI = environ.get('O_DB_URI', "")   # This Db Is For Other Data Store
 F_DB_URI = environ.get('F_DB_URI', "")   # This Db Is For File Data Store
 S_DB_URI = environ.get('S_DB_URI', "")   # This Db is for File Data Store When First Db Is Going To Be Full.
 
+# Premium / payment data DB (OPTIONAL).
+# Premium users, free trials, daily verification, offer claims and the UPI payment queue are
+# stored in this database. Leave it empty and they stay in DATABASE_URI exactly like before.
+# Set it to the URI of ANY cluster that still has free space (it can be the same value as
+# O_DB_URI or S_DB_URI) when DATABASE_URI is full and /add_premium fails.
+# IMPORTANT: copy the existing premium data first with:  python tools/migrate_users_db.py --premium-only
+P_DB_URI = environ.get('PREMIUM_DB_URI', "")
+
 # Movie Notification & Update Settings
 # ============================
 MOVIE_UPDATE_NOTIFICATION = bool(environ.get('MOVIE_UPDATE_NOTIFICATION', True))  # Notification On (True) / Off (False)
@@ -301,3 +309,6 @@ else:
     OTHER_DB_URI = O_DB_URI       # This Db Is For Other Data Store
     FILE_DB_URI = F_DB_URI        # This Db Is For File Data Store
     SEC_FILE_DB_URI = S_DB_URI    # This Db is for File Data Store When First Db Is Going To Be Full.
+
+# Where premium / payment data lives. Empty PREMIUM_DB_URI = same DB as users (old behaviour).
+PREMIUM_DB_URI = P_DB_URI or USER_DB_URI
