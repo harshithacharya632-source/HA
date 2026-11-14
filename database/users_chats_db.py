@@ -1,11 +1,14 @@
 import re
 import asyncio
-from pymongo.errors import DuplicateKeyError, ServerSelectionTimeoutError
+import logging
+from pymongo.errors import DuplicateKeyError, ServerSelectionTimeoutError, PyMongoError
 import motor.motor_asyncio
 from pymongo import MongoClient
 from info import DATABASE_NAME, USER_DB_URI, OTHER_DB_URI, PREMIUM_DB_URI, CUSTOM_FILE_CAPTION, IMDB, IMDB_TEMPLATE, MELCOW_NEW_USERS, BUTTON_MODE, SPELL_CHECK_REPLY, PROTECT_CONTENT, AUTO_DELETE, MAX_BTN, AUTO_FFILTER, SHORTLINK_API, SHORTLINK_URL, SHORTLINK_MODE, TUTORIAL, IS_TUTORIAL
 import time
 import datetime
+
+logger = logging.getLogger(__name__)
 
 my_client = MongoClient(
     OTHER_DB_URI,
@@ -70,6 +73,277 @@ default_setgs = {
 }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  PREMIUM DATA ON TWO CLUSTERS
+#
+#  When PREMIUM_DB_URI is set to a DIFFERENT cluster than DATABASE_URI, the five
+#  premium / payment collections are served through _DualCollection:
+#
+#     NEW cluster (PREMIUM_DB_URI)  -> receives EVERY write (new premium users,
+#                                      payments, screenshots, flags ...)
+#     OLD cluster (DATABASE_URI)    -> only READ, as a fallback. Atlas keeps
+#                                      reads working even when the cluster is
+#                                      over its 512 MB quota, so existing premium
+#                                      users keep their premium without any
+#                                      migration.
+#
+#  Copy-on-write: the first time an old record has to change (extend premium,
+#  mark expired, claim an offer ...) the whole record is copied to the NEW
+#  cluster (same _id) and the change is applied there. From then on the NEW
+#  copy is the real one; the stale OLD copy is ignored everywhere.
+#
+#  If PREMIUM_DB_URI is empty / the same as DATABASE_URI none of this is used and
+#  the bot behaves exactly like before.
+# ══════════════════════════════════════════════════════════════════════════════
+def _apply_projection(doc, projection):
+    """Tiny stand-in for a Mongo projection, only used on documents read from the OLD cluster."""
+    if not projection:
+        return doc
+    keep_id = bool(projection.get("_id", 1))
+    wanted = {k.split(".")[0] for k, v in projection.items() if k != "_id" and v}
+    if wanted:
+        out = {k: doc[k] for k in wanted if k in doc}
+    else:
+        dropped = {k for k, v in projection.items() if k != "_id" and not v}
+        out = {k: v for k, v in doc.items() if k not in dropped}
+    if keep_id and "_id" in doc:
+        out["_id"] = doc["_id"]
+    else:
+        out.pop("_id", None)
+    return out
+
+
+def _chunks(items, size):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+class _MergedCursor:
+    """What .find() returns on a _DualCollection: supports .sort(), .limit(), `async for` and .to_list()."""
+
+    def __init__(self, coll, flt):
+        self._coll = coll
+        self._flt = flt or {}
+        self._sort = []
+        self._limit = 0
+
+    def sort(self, key_or_list, direction=1):
+        self._sort = [(key_or_list, direction)] if isinstance(key_or_list, str) else list(key_or_list)
+        return self
+
+    def limit(self, n):
+        self._limit = int(n or 0)
+        return self
+
+    async def _fetch(self):
+        docs = await self._coll._merged_docs(self._flt)
+        for key, direction in reversed(self._sort):
+            docs.sort(key=lambda d, k=key: (d.get(k) is None, d.get(k)), reverse=(direction == -1))
+        if self._limit > 0:
+            docs = docs[:self._limit]
+        return docs
+
+    async def to_list(self, length=None):
+        docs = await self._fetch()
+        return docs[:length] if length else docs
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        for doc in await self._fetch():
+            yield doc
+
+
+class _DualCollection:
+    """One logical collection stored on two clusters (see the block comment above).
+
+    new         : collection on the NEW cluster - gets all writes.
+    old         : same collection on the OLD (full) cluster - read-only fallback.
+    key_field   : the field that identifies a record (users: "id"). Lets us skip the
+                  OLD cluster completely for ids that were never there (free users),
+                  and recognise a record that was already copied to the NEW cluster.
+    unique_field: a field that must be unique across BOTH clusters on insert
+                  (payment_signatures.key).
+    """
+
+    def __init__(self, new, old, key_field=None, unique_field=None, name=""):
+        self.new = new
+        self.old = old
+        self.key_field = key_field
+        self.unique_field = unique_field
+        self.name = name or getattr(new, "name", "collection")
+        self._legacy_keys = None          # set of key_field values that exist on the OLD cluster
+        self._legacy_try_at = 0.0
+        self._legacy_lock = asyncio.Lock()
+
+    def __getattr__(self, item):
+        # Anything not wrapped below just goes to the NEW cluster.
+        if item in ("new", "old"):
+            raise AttributeError(item)
+        return getattr(self.new, item)
+
+    # ── OLD-cluster helpers (never raise: a problem there must not break the bot) ──
+    async def _load_legacy_keys(self):
+        """All key_field values that exist on the OLD cluster, loaded once. They never
+        change (the OLD cluster is not written to), so free users never cost an OLD query."""
+        if self.key_field is None or self.old is None:
+            return None
+        if self._legacy_keys is not None:
+            return self._legacy_keys
+        async with self._legacy_lock:
+            if self._legacy_keys is not None:
+                return self._legacy_keys
+            if time.monotonic() - self._legacy_try_at < 60:
+                return None
+            self._legacy_try_at = time.monotonic()
+            try:
+                keys = set()
+                async for d in self.old.find({}, {self.key_field: 1, "_id": 0}):
+                    v = d.get(self.key_field)
+                    if v is not None:
+                        try:
+                            keys.add(v)
+                        except TypeError:
+                            pass
+                self._legacy_keys = keys
+                print(f"[premium_db] {self.name}: {len(keys)} records are still on the first (old) cluster - read as fallback")
+            except Exception as e:
+                logger.warning(f"[premium_db] {self.name}: could not list old-cluster records: {e}")
+                return None
+        return self._legacy_keys
+
+    async def _old_may_have(self, flt):
+        if self.old is None:
+            return False
+        if (self.key_field and len(flt) == 1 and self.key_field in flt
+                and not isinstance(flt[self.key_field], (dict, list))):
+            keys = await self._load_legacy_keys()
+            if keys is not None:
+                try:
+                    return flt[self.key_field] in keys
+                except TypeError:
+                    return True
+        return True
+
+    async def _old_find_one(self, flt):
+        try:
+            return await self.old.find_one(flt)
+        except Exception as e:
+            logger.warning(f"[premium_db] {self.name}: old-cluster read failed: {e}")
+            return None
+
+    async def _in_new(self, old_doc):
+        """True when this OLD record already has its (authoritative) copy on the NEW cluster."""
+        conds = [{"_id": old_doc["_id"]}]
+        if self.key_field and old_doc.get(self.key_field) is not None:
+            conds.append({self.key_field: old_doc[self.key_field]})
+        return await self.new.find_one({"$or": conds}, {"_id": 1}) is not None
+
+    async def _pull_legacy(self, flt):
+        """Copy-on-write: before changing a record that only exists on the OLD cluster,
+        copy it to the NEW cluster so the change keeps everything the record already had
+        (offer_claimed, has_free_trial, verified_until ...)."""
+        if self.old is None or not await self._old_may_have(flt):
+            return
+        if await self.new.find_one(flt, {"_id": 1}) is not None:
+            return                                   # already on the NEW cluster
+        old_doc = await self._old_find_one(flt)
+        if old_doc is None or await self._in_new(old_doc):
+            return
+        try:
+            await self.new.insert_one(old_doc)       # same _id -> can never be copied twice
+        except DuplicateKeyError:
+            pass
+
+    async def _merged_docs(self, flt):
+        """NEW matches + OLD matches, where a record that exists on the NEW cluster always wins
+        (even if its newer version no longer matches the filter)."""
+        new_docs = [d async for d in self.new.find(flt)]
+        if self.old is None:
+            return new_docs
+        try:
+            old_docs = [d async for d in self.old.find(flt)]
+        except Exception as e:
+            logger.warning(f"[premium_db] {self.name}: old-cluster list failed: {e}")
+            return new_docs
+        if old_docs:
+            covered_ids, covered_keys = set(), set()
+            for part in _chunks(old_docs, 500):
+                conds = [{"_id": {"$in": [d["_id"] for d in part]}}]
+                proj = {"_id": 1}
+                if self.key_field:
+                    vals = [d[self.key_field] for d in part if d.get(self.key_field) is not None]
+                    if vals:
+                        conds.append({self.key_field: {"$in": vals}})
+                        proj[self.key_field] = 1
+                async for d in self.new.find({"$or": conds}, proj):
+                    covered_ids.add(d["_id"])
+                    if self.key_field and d.get(self.key_field) is not None:
+                        covered_keys.add(d[self.key_field])
+            old_docs = [d for d in old_docs
+                        if d["_id"] not in covered_ids
+                        and not (self.key_field and d.get(self.key_field) in covered_keys)]
+        return new_docs + old_docs
+
+    # ── the collection API the bot uses ──────────────────────────────────────
+    async def find_one(self, flt=None, projection=None, *args, **kwargs):
+        flt = flt or {}
+        if projection is not None:
+            doc = await self.new.find_one(flt, projection, *args, **kwargs)
+        else:
+            doc = await self.new.find_one(flt, *args, **kwargs)
+        if doc is not None or not await self._old_may_have(flt):
+            return doc
+        old_doc = await self._old_find_one(flt)
+        if old_doc is None or await self._in_new(old_doc):
+            return None
+        return _apply_projection(old_doc, projection)
+
+    def find(self, flt=None, *args, **kwargs):
+        return _MergedCursor(self, flt)
+
+    async def count_documents(self, flt=None, *args, **kwargs):
+        return len(await self._merged_docs(flt or {}))
+
+    async def insert_one(self, doc, *args, **kwargs):
+        if self.unique_field and self.old is not None and doc.get(self.unique_field) is not None:
+            try:
+                clash = await self.old.find_one({self.unique_field: doc[self.unique_field]}, {"_id": 1})
+            except Exception:
+                clash = None
+            if clash:
+                raise DuplicateKeyError(
+                    f"E11000 duplicate key error ({self.name}.{self.unique_field} already on the old cluster)")
+        return await self.new.insert_one(doc, *args, **kwargs)
+
+    async def update_one(self, flt, update, upsert=False, *args, **kwargs):
+        await self._pull_legacy(flt)
+        return await self.new.update_one(flt, update, upsert=upsert, *args, **kwargs)
+
+    async def find_one_and_delete(self, flt, *args, **kwargs):
+        doc = await self.new.find_one_and_delete(flt, *args, **kwargs)
+        if doc is not None or not await self._old_may_have(flt):
+            return doc
+        try:
+            return await self.old.find_one_and_delete(flt)   # deleting is still allowed on a full cluster
+        except Exception as e:
+            logger.warning(f"[premium_db] {self.name}: old-cluster delete failed: {e}")
+            return None
+
+    async def delete_many(self, flt, *args, **kwargs):
+        res = await self.new.delete_many(flt, *args, **kwargs)
+        if self.old is not None:
+            try:
+                await self.old.delete_many(flt)
+            except Exception as e:
+                logger.warning(f"[premium_db] {self.name}: old-cluster delete failed: {e}")
+        return res
+
+    async def create_index(self, *args, **kwargs):
+        return await self.new.create_index(*args, **kwargs)
+
+
 class Database:
     
     def __init__(self, uri, database_name, premium_uri=None):
@@ -100,14 +374,29 @@ class Database:
                 maxPoolSize=20,
             )
             self.premium_db = self._premium_client[database_name]
+            # SECOND cluster: every write goes to it. The first (full) cluster is only read, as a
+            # fallback, so existing premium users and old payments keep working - no migration needed.
+            first, second = self.db, self.premium_db
+            self.users = _DualCollection(second.uersz, first.uersz, key_field="id", name="uersz")
+            self.payment_requests = _DualCollection(second.payment_requests, first.payment_requests, name="payment_requests")
+            self.pending_screenshots = _DualCollection(second.pending_screenshots, first.pending_screenshots, key_field="user_id", name="pending_screenshots")
+            self.payment_signatures = _DualCollection(second.payment_signatures, first.payment_signatures, key_field="key", unique_field="key", name="payment_signatures")   # unique-key claims: one real payment = one premium
+            self.support_links = _DualCollection(second.support_links, first.support_links, name="support_links")
+            print("[premium_db] PREMIUM_DB_URI is set: new premium users + payments are written to the SECOND cluster; the first cluster is only read for old records")
         else:
             self._premium_client = self._client
             self.premium_db = self.db
-        self.users = self.premium_db.uersz
-        self.payment_requests = self.premium_db.payment_requests
-        self.pending_screenshots = self.premium_db.pending_screenshots
-        self.payment_signatures = self.premium_db.payment_signatures   # unique-key claims: one real payment = one premium
-        self.support_links = self.premium_db.support_links
+            self.users = self.premium_db.uersz
+            self.payment_requests = self.premium_db.payment_requests
+            self.pending_screenshots = self.premium_db.pending_screenshots
+            self.payment_signatures = self.premium_db.payment_signatures   # unique-key claims: one real payment = one premium
+            self.support_links = self.premium_db.support_links
+
+        # Safety net for the daily expiry notifier: if marking a user as "notified" ever fails
+        # (database full / down), remember it here so the same "premium ended" message is not
+        # re-sent to the same people every 5 minutes. Cleared again when premium is renewed.
+        self._reminder_sent_mem = set()
+        self._expired_notified_mem = set()
 
     async def _safe_find_one(self, collection, filter_query, projection=None):
         """find_one wrapped so a transient replica-set election (no primary
@@ -291,6 +580,11 @@ class Database:
             
     async def update_user(self, user_data):
         await self.users.update_one({"id": user_data["id"]}, {"$set": user_data}, upsert=True)
+        # Renewed premium resets the flags -> allow the reminder / expired notice again later.
+        if user_data.get("expiry_reminder_sent") is False:
+            self._reminder_sent_mem.discard(user_data["id"])
+        if user_data.get("expired_notified") is False:
+            self._expired_notified_mem.discard(user_data["id"])
 
     async def has_premium_access(self, user_id):
         user_data = await self.get_user(user_id)
@@ -302,7 +596,11 @@ class Database:
             elif isinstance(expiry_time, datetime.datetime) and datetime.datetime.now() <= expiry_time:
                 return True
             else:
-                await self.users.update_one({"id": user_id}, {"$set": {"expiry_time": None}})
+                try:
+                    await self.users.update_one({"id": user_id}, {"$set": {"expiry_time": None}})
+                except PyMongoError as e:
+                    # Only bookkeeping (marks the old plan as ended). The answer is still "no premium".
+                    logger.warning(f"[premium] could not mark premium ended for {user_id}: {e}")
         return False
     
     async def check_remaining_uasge(self, userid):
@@ -367,9 +665,10 @@ class Database:
             "expiry_time": {"$gt": now, "$lte": soon},
             "expiry_reminder_sent": {"$ne": True}
         })
-        return [user_data async for user_data in cursor]
+        return [u async for u in cursor if u.get("id") not in self._reminder_sent_mem]
 
     async def mark_expiry_reminder_sent(self, user_id):
+        self._reminder_sent_mem.add(user_id)      # remembered even if the DB write below fails
         await self.users.update_one({"id": user_id}, {"$set": {"expiry_reminder_sent": True}})
 
     async def get_recently_expired_users(self, seconds):
@@ -382,9 +681,10 @@ class Database:
             "expiry_time": {"$lte": now, "$gt": cutoff},
             "expired_notified": {"$ne": True}
         })
-        return [user_data async for user_data in cursor]
+        return [u async for u in cursor if u.get("id") not in self._expired_notified_mem]
 
     async def mark_expired_notified(self, user_id):
+        self._expired_notified_mem.add(user_id)   # remembered even if the DB write below fails
         await self.users.update_one({"id": user_id}, {"$set": {"expired_notified": True}})
 
     # ── One-time offer tracking ────────────────────────────────────────
