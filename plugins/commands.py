@@ -2203,9 +2203,10 @@ async def give_premium_cmd_handler(client, message):
                 logger.error(f"[add_premium] DB write failed for {user_id}: {e}")
                 await message.reply_text(
                     "❌ <b>Premium NOT added.</b>\n\n"
-                    "The users database refused the write (usually MongoDB storage is full - "
-                    "512 MB free-tier limit). Free up space or point DATABASE_URI at a new / bigger "
-                    "cluster, then run /add_premium again.\n\n"
+                    "The premium database refused the write (usually MongoDB storage is full - "
+                    "512 MB free-tier limit). Free up space, or set PREMIUM_DB_URI to a cluster "
+                    "with free space (run tools/migrate_users_db.py --premium-only first), "
+                    "then run /add_premium again.\n\n"
                     f"<code>{str(e)[:150]}</code>"
                 )
                 return
@@ -2251,8 +2252,8 @@ async def remove_premium_cmd_handler(client, message):
                 logger.error(f"[remove_premium] DB write failed for {user_id}: {e}")
                 await message.reply_text(
                     "❌ <b>Premium NOT removed.</b>\n\n"
-                    "The users database refused the write (usually MongoDB storage is full). "
-                    "Free up space or point DATABASE_URI at a new cluster, then try again.\n\n"
+                    "The premium database refused the write (usually MongoDB storage is full). "
+                    "Free up space, or set PREMIUM_DB_URI to a cluster with free space, then try again.\n\n"
                     f"<code>{str(e)[:150]}</code>"
                 )
                 return
