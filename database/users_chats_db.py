@@ -3,7 +3,7 @@ import asyncio
 from pymongo.errors import DuplicateKeyError, ServerSelectionTimeoutError
 import motor.motor_asyncio
 from pymongo import MongoClient
-from info import DATABASE_NAME, USER_DB_URI, OTHER_DB_URI, CUSTOM_FILE_CAPTION, IMDB, IMDB_TEMPLATE, MELCOW_NEW_USERS, BUTTON_MODE, SPELL_CHECK_REPLY, PROTECT_CONTENT, AUTO_DELETE, MAX_BTN, AUTO_FFILTER, SHORTLINK_API, SHORTLINK_URL, SHORTLINK_MODE, TUTORIAL, IS_TUTORIAL
+from info import DATABASE_NAME, USER_DB_URI, OTHER_DB_URI, PREMIUM_DB_URI, CUSTOM_FILE_CAPTION, IMDB, IMDB_TEMPLATE, MELCOW_NEW_USERS, BUTTON_MODE, SPELL_CHECK_REPLY, PROTECT_CONTENT, AUTO_DELETE, MAX_BTN, AUTO_FFILTER, SHORTLINK_API, SHORTLINK_URL, SHORTLINK_MODE, TUTORIAL, IS_TUTORIAL
 import time
 import datetime
 
@@ -72,7 +72,7 @@ default_setgs = {
 
 class Database:
     
-    def __init__(self, uri, database_name):
+    def __init__(self, uri, database_name, premium_uri=None):
         self._client = motor.motor_asyncio.AsyncIOMotorClient(
             uri,
             serverSelectionTimeoutMS=15000,   # fail in 15s instead of the 30s default
@@ -84,12 +84,30 @@ class Database:
         self.db = self._client[database_name]
         self.col = self.db.users
         self.grp = self.db.groups
-        self.users = self.db.uersz
         self.bot = self.db.clone_bots
-        self.payment_requests = self.db.payment_requests
-        self.pending_screenshots = self.db.pending_screenshots
-        self.payment_signatures = self.db.payment_signatures   # unique-key claims: one real payment = one premium
-        self.support_links = self.db.support_links
+
+        # Premium + payment data can live in a SEPARATE cluster (PREMIUM_DB_URI), so that
+        # /add_premium and payments keep working when the main users DB hits its size limit.
+        # Every caller reaches these collections through the attributes below, so moving them
+        # here moves them everywhere. Same URI (or none) = old behaviour, nothing changes.
+        if premium_uri and premium_uri != uri:
+            self._premium_client = motor.motor_asyncio.AsyncIOMotorClient(
+                premium_uri,
+                serverSelectionTimeoutMS=15000,
+                connectTimeoutMS=15000,
+                retryReads=True,
+                retryWrites=True,
+                maxPoolSize=20,
+            )
+            self.premium_db = self._premium_client[database_name]
+        else:
+            self._premium_client = self._client
+            self.premium_db = self.db
+        self.users = self.premium_db.uersz
+        self.payment_requests = self.premium_db.payment_requests
+        self.pending_screenshots = self.premium_db.pending_screenshots
+        self.payment_signatures = self.premium_db.payment_signatures   # unique-key claims: one real payment = one premium
+        self.support_links = self.premium_db.support_links
 
     async def _safe_find_one(self, collection, filter_query, projection=None):
         """find_one wrapped so a transient replica-set election (no primary
@@ -601,4 +619,4 @@ class Database:
         return doc["user_id"] if doc else None
 
 
-db = Database(USER_DB_URI, DATABASE_NAME)
+db = Database(USER_DB_URI, DATABASE_NAME, premium_uri=PREMIUM_DB_URI)
