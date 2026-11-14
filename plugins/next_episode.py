@@ -13,7 +13,11 @@
 #  - If that range is missing -> the closest available file (nearest range,
 #    then nearest size). "Not uploaded yet" only if the episode truly is missing
 #  - After the last episode of a season -> next season, episode 1
-#  - Remembers each user's last watched episode (stored on the user doc)
+#  - Remembers each user's last watched episode. DB STORAGE IS KEPT TINY: only one
+#    short field `lw` (the file id) is stored per user, everything else (show name,
+#    season, episode, size) is recomputed from that file when needed. The free-use
+#    counter and the card message id live in memory only (nothing in MongoDB).
+#    Set NEXT_SAVE_LAST=0 to store NOTHING in MongoDB at all.
 #  - /last shows only the last watched name (with a Next button)
 #  - Same premium / verification rules as every other file delivery
 #  - FREE users: FREE_NEXT_LIMIT Next Episode uses in a row (default 2, set
@@ -28,6 +32,7 @@ import re
 import time
 import asyncio
 import logging
+from collections import OrderedDict
 
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -49,6 +54,9 @@ logger = logging.getLogger(__name__)
 MAX_CANDIDATES = 400        # max DB rows examined per lookup
 CARD_DELAY = 2              # seconds to wait so the card lands AFTER the file message
 FREE_NEXT_LIMIT = int(os.environ.get("FREE_NEXT_LIMIT", 2))   # free users: Next Episodes per search
+# 1 = remember each user's last episode in MongoDB (one short field, survives restarts, used by /last)
+# 0 = store nothing in MongoDB (memory only; /last forgets after a bot restart)
+SAVE_LAST_IN_DB = os.environ.get("NEXT_SAVE_LAST", "1").strip().lower() not in ("0", "false", "no", "off")
 # ----------------------------------------------------------
 
 # Same naming styles as the bot's own season/episode navigation:
@@ -146,6 +154,43 @@ def _button(file_id, left=None):
     return InlineKeyboardButton(text, callback_data=data)
 
 
+# ============ IN-MEMORY STATE (nothing in this block touches MongoDB) ============
+# These used to be fields on every user document ("next_uses", "last_watched.card"):
+# one DB write per file delivery and bytes per user forever. Both are throw-away by nature:
+#   _uses  - free "Next" uses since the user's last fresh search
+#   _cards - message id of the user's "Last watched" card (only needed to delete the old one)
+#   _last  - the user's last watched file id (cache; the DB copy is only for surviving restarts)
+# A bot restart only means: free users get a fresh allowance, one old card may stay in a chat,
+# and /last falls back to the (tiny) DB copy. Each map is capped so memory can't grow forever.
+_STATE_MAX = 50000
+_uses = OrderedDict()
+_cards = OrderedDict()
+_last = OrderedDict()
+
+
+def _put(d, key, value):
+    d[key] = value
+    d.move_to_end(key)
+    while len(d) > _STATE_MAX:
+        d.popitem(last=False)
+
+
+def _uses_reset(user_id):
+    _uses.pop(int(user_id), None)
+
+
+def _uses_take(user_id):
+    """Counts one free Next use. Returns False if the limit was already reached.
+    No `await` inside, so two quick taps can never both slip through (same guarantee the
+    old atomic DB $inc gave)."""
+    uid = int(user_id)
+    used = _uses.get(uid, 0)
+    if used >= FREE_NEXT_LIMIT:
+        return False
+    _put(_uses, uid, used + 1)
+    return True
+
+
 # ============ FREE-USER LIMIT (premium = unlimited) ============
 
 
@@ -154,18 +199,9 @@ async def _next_status(user_id):
     try:
         if await db.has_premium_access(user_id):
             return True, None
-        u = await db.col.find_one({"id": int(user_id)}, {"next_uses": 1})
-        used = int((u or {}).get("next_uses", 0))
-        return False, max(0, FREE_NEXT_LIMIT - used)
+        return False, max(0, FREE_NEXT_LIMIT - _uses.get(int(user_id), 0))
     except Exception:
         return False, None
-
-
-async def _reset_next_uses(user_id):
-    try:
-        await db.col.update_one({"id": int(user_id)}, {"$set": {"next_uses": 0}})
-    except Exception as ex:
-        logger.warning(f"[next_episode] reset counter failed: {ex}")
 
 
 _locks = {}          # per-user lock so batch deliveries don't race
@@ -194,7 +230,7 @@ async def prepare_episode_button(user_id, file_id, from_next=False):
     """
     try:
         if not from_next:
-            await _reset_next_uses(user_id)
+            _uses_reset(user_id)
             logger.info(f"[next_episode] counter RESET user={user_id} file={file_id} "
                         f"-> treated as a fresh search")
         else:
@@ -208,7 +244,7 @@ async def prepare_episode_button(user_id, file_id, from_next=False):
             return None
         stem, s, e, _ = p
         size = f.get("file_size")
-        await _save_last_watched(user_id, stem, s, e, size, file_id)
+        await _save_last_watched(user_id, file_id)
         asyncio.create_task(_send_card(temp.BOT, user_id, stem, s, e, size, file_id, delay=CARD_DELAY))
     except Exception as ex:
         logger.warning(f"[next_episode] prepare failed: {ex}")
@@ -216,26 +252,43 @@ async def prepare_episode_button(user_id, file_id, from_next=False):
 
 
 # ====================== LAST WATCHED ======================
-async def _save_last_watched(user_id, stem, s, e, size, file_id):
+async def _save_last_watched(user_id, file_id):
+    """Remembers ONLY the file id (short field `lw`). Show name, season, episode and size are
+    recomputed from that file when needed, so they are not stored. Also removes the old bulky
+    fields (`last_watched`, `next_uses`) from this user's document, so documents of active
+    users shrink by themselves. Skips the DB write when nothing changed."""
+    uid = int(user_id)
+    unchanged = _last.get(uid) == file_id
+    _put(_last, uid, file_id)
+    if unchanged or not SAVE_LAST_IN_DB:
+        return
     try:
         await db.col.update_one(
-            {"id": int(user_id)},
-            {"$set": {
-                "last_watched.stem": stem, "last_watched.season": s,
-                "last_watched.episode": e, "last_watched.size": size,
-                "last_watched.fid": file_id,
-            }},
+            {"id": uid},
+            {"$set": {"lw": file_id}, "$unset": {"last_watched": "", "next_uses": ""}},
         )
     except Exception as ex:
         logger.warning(f"[next_episode] save last watched failed: {ex}")
 
 
-async def _get_last_watched(user_id):
+async def _get_last_fid(user_id):
+    """File id of the user's last watched episode: memory first, then the tiny DB field.
+    Old-format documents (`last_watched.fid`) are still understood."""
+    uid = int(user_id)
+    fid = _last.get(uid)
+    if fid:
+        return fid
+    if not SAVE_LAST_IN_DB:
+        return None
     try:
-        u = await db.col.find_one({"id": int(user_id)}, {"last_watched": 1})
-        return (u or {}).get("last_watched")
+        u = await db.col.find_one({"id": uid}, {"lw": 1, "last_watched.fid": 1, "_id": 0})
     except Exception:
         return None
+    u = u or {}
+    fid = u.get("lw") or (u.get("last_watched") or {}).get("fid")
+    if fid:
+        _put(_last, uid, fid)
+    return fid
 
 
 async def _season_end_note(stem, s, e):
@@ -272,8 +325,7 @@ async def _send_card(bot, user_id, stem, s, e, size, file_id, delay=0):
         await asyncio.sleep(delay)
     async with _lock(user_id):
         try:
-            old = await _get_last_watched(user_id)
-            old_mid = (old or {}).get("card")
+            old_mid = _cards.get(int(user_id))
             if old_mid:
                 try:
                     await bot.delete_messages(user_id, old_mid)
@@ -299,8 +351,7 @@ async def _send_card(bot, user_id, stem, s, e, size, file_id, delay=0):
             msg = await bot.send_message(
                 user_id, text,
                 reply_markup=InlineKeyboardMarkup([[_button(file_id, left)]]))
-            await db.col.update_one({"id": int(user_id)},
-                                    {"$set": {"last_watched.card": msg.id}})
+            _put(_cards, int(user_id), msg.id)
         except Exception as ex:
             logger.warning(f"[next_episode] send card failed: {ex}")
 
@@ -514,20 +565,13 @@ async def _send_next(client, user, chat_id, cur_file_id, answer=None):
 
     # gating passed -> this Next Episode counts for free users
     if not premium:
-        try:
-            # atomic: only counts while still under the limit (safe against double taps)
-            r = await db.col.update_one(
-                {"id": int(user.id),
-                 "$or": [{"next_uses": {"$lt": FREE_NEXT_LIMIT}}, {"next_uses": {"$exists": False}}]},
-                {"$inc": {"next_uses": 1}})
-            logger.info(f"[next_episode] counter inc user={user.id} matched={r.matched_count} "
-                        f"limit={FREE_NEXT_LIMIT}")
-            if r.matched_count == 0 and await db.col.find_one({"id": int(user.id)}, {"_id": 1}) is not None:
-                return await say(
-                    f"Free limit reached ({FREE_NEXT_LIMIT}/{FREE_NEXT_LIMIT} next episodes used).\n"
-                    f"Search again in the group to continue, or get Premium for unlimited.", True)
-        except Exception as ex:
-            logger.warning(f"[next_episode] counter update failed: {ex}")
+        # only counts while still under the limit (safe against double taps: no await inside)
+        if not _uses_take(user.id):
+            return await say(
+                f"Free limit reached ({FREE_NEXT_LIMIT}/{FREE_NEXT_LIMIT} next episodes used).\n"
+                f"Search again in the group to continue, or get Premium for unlimited.", True)
+        logger.info(f"[next_episode] counter inc user={user.id} "
+                    f"used={_uses.get(int(user.id))}/{FREE_NEXT_LIMIT}")
     if answer:
         await answer(f"Last watched: {cur_se}")
 
@@ -564,11 +608,16 @@ async def next_episode_cb(client, query):
 
 @Client.on_message(filters.command("last") & filters.private)
 async def last_watched_cmd(client, message):
-    d = await _get_last_watched(message.from_user.id)
-    if not d or not d.get("fid"):
+    fid = await _get_last_fid(message.from_user.id)
+    if not fid:
         return await message.reply_text("<b>You have not watched any episode yet.</b>")
-    await _send_card(client, message.from_user.id, d["stem"], d["season"],
-                     d["episode"], d.get("size"), d["fid"])
+    # name / season / episode / size are not stored: rebuild them from the file itself
+    f = await get_file_details(fid)
+    p = parse_name(f.get("file_name")) if f else None
+    if not p:
+        return await message.reply_text("<b>Your last watched file is no longer available.</b>")
+    stem, s, e, _ = p
+    await _send_card(client, message.from_user.id, stem, s, e, f.get("file_size"), fid)
 
 
 @Client.on_message(filters.command("nextdebug") & filters.private)
