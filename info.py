@@ -208,7 +208,7 @@ USE_CAPTION_FILTER = bool(environ.get('USE_CAPTION_FILTER', True))
 
 
 # Token Verification Info :
-VERIFY = bool(environ.get('VERIFY', True))
+VERIFY = bool(environ.get('VERIFY', False))
 
 # ============ VERIFY SHORTENER PROVIDERS ============
 # Which one is currently active: "linkskito" or "shortwala"
