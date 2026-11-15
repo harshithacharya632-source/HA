@@ -1,75 +1,88 @@
 # /dbcheck  (admins only)
-# Shows which MongoDB cluster the bot is REALLY writing premium data to, and whether a
-# test write works there. Use it when /add_premium still says "Premium NOT added".
+# Shows every database the bot uses, how full it is, which one NEW data is written to right now,
+# and whether a test write works on each. Use it whenever something says "space quota" / "Premium NOT added".
 
 import html
+import asyncio
 import datetime
 from pyrogram import Client, filters
-from info import ADMINS, USER_DB_URI, PREMIUM_DB_URI, P_DB_URI
-from database.users_chats_db import db, _DualCollection
+from info import ADMINS, OTHER_DB_URI
+from database.users_chats_db import db, mydb, _host_of
 
 MB = 1024 * 1024
-
-
-def _host(uri):
-    """Only the host part of a Mongo URI (never the user name / password)."""
-    try:
-        rest = (uri or "").split("://", 1)[-1].split("@", 1)[-1]
-        return rest.split("/", 1)[0].split("?", 1)[0] or "(empty)"
-    except Exception:
-        return "?"
 
 
 async def _size(database):
     try:
         s = await database.command("dbstats")
-        return f"data {s['dataSize'] / MB:.0f} MB, storage {s['storageSize'] / MB:.0f} MB"
+        return f"{s['dataSize'] / MB:.0f} MB data / {s['storageSize'] / MB:.0f} MB storage"
     except Exception as e:
-        return f"could not read ({html.escape(str(e)[:60])})"
+        return f"size unknown ({html.escape(str(e)[:50])})"
+
+
+async def _test_write(database):
+    """Insert + delete one temporary document. Returns (ok, error text)."""
+    try:
+        col = database["_dbcheck"]
+        res = await col.insert_one({"t": datetime.datetime.now()})
+        await col.delete_one({"_id": res.inserted_id})
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_write_sync(collection):
+    try:
+        res = collection.insert_one({"t": datetime.datetime.now()})
+        collection.delete_one({"_id": res.inserted_id})
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
 async def build_report():
-    split = isinstance(db.users, _DualCollection)
-    first_host, second_host = _host(USER_DB_URI), _host(PREMIUM_DB_URI)
+    n = len(db._dbs)
+    lines = ["<b>🔎 Database check</b>", "", f"Databases configured: <b>{n}</b> (users, premium, payments, admin chat, channel posts)"]
+    target = None
+    results = []
+    for i, d in enumerate(db._dbs):
+        ok, err = await _test_write(d)
+        results.append(ok)
+        if ok:
+            target = i                      # the newest database that accepts writes gets the new data
+    for i, d in enumerate(db._dbs):
+        mark = "OK ✅" if results[i] else "FULL / refused ❌"
+        here = "  ⬅️ <b>new data goes here</b>" if i == target else ""
+        lines.append(f"<b>#{i + 1}</b> <code>{html.escape(db.cluster_hosts[i])}</code>")
+        lines.append(f"   {await _size(d)}")
+        lines.append(f"   write: {mark}{here}")
 
-    # Test write on whichever cluster premium data is written to (temporary doc, deleted at once).
-    test_col = db.premium_db["_dbcheck"]
-    try:
-        res = await test_col.insert_one({"t": datetime.datetime.now()})
-        await test_col.delete_one({"_id": res.inserted_id})
-        write_ok, write_err = True, ""
-    except Exception as e:
-        write_ok, write_err = False, str(e)
+    hosts = db.cluster_hosts
+    dup = sorted({h for h in hosts if hosts.count(h) > 1})
+    if dup:
+        lines.append("")
+        lines.append("⚠️ Same cluster used more than once: <code>" + html.escape(", ".join(dup)) + "</code> "
+                     "(a second DB must be a DIFFERENT Atlas cluster)")
 
-    lines = [
-        "<b>🔎 Premium database check</b>",
-        "",
-        f"PREMIUM_DB_URI set in this running bot: <b>{'YES' if P_DB_URI else 'NO'}</b>",
-        f"First cluster (DATABASE_URI): <code>{html.escape(first_host)}</code>",
-        f"  {await _size(db.db)}",
-        f"Premium cluster (PREMIUM_DB_URI): <code>{html.escape(second_host)}</code>",
-        f"  {await _size(db.premium_db)}",
-        f"Two-cluster mode active: <b>{'YES' if split else 'NO'}</b>",
-        f"Test write on the premium cluster: <b>{'OK ✅' if write_ok else 'FAILED ❌'}</b>",
-    ]
-    if not write_ok:
-        lines.append(f"<code>{html.escape(write_err[:180])}</code>")
+    # filters / connections / referrals live on O_DB_URI (not part of the chain above)
+    o_ok, o_err = await asyncio.to_thread(_test_write_sync, mydb["_dbcheck"])
+    o_host = _host_of(OTHER_DB_URI)
+    lines.append("")
+    lines.append(f"Other data (filters, connections, referrals): <code>{html.escape(o_host)}</code> "
+                 f"write {'OK ✅' if o_ok else 'FAILED ❌'}")
+    if o_host in hosts:
+        lines.append("   (same cluster as database #" + str(hosts.index(o_host) + 1) + ")")
 
     lines.append("")
-    if not P_DB_URI:
-        lines.append("➡️ PREMIUM_DB_URI is NOT set in Koyeb (or the service was not redeployed). "
-                     "Add it in Koyeb → Environment variables, then redeploy.")
-    elif first_host == second_host:
-        lines.append("➡️ PREMIUM_DB_URI points to the SAME cluster as DATABASE_URI, so it is still full. "
-                     "Use the connection string of a DIFFERENT cluster that has free space.")
-    elif not split:
-        lines.append("➡️ Two-cluster mode is off. Make sure the updated users_chats_db.py is the one deployed.")
-    elif not write_ok:
-        lines.append("➡️ The premium cluster refused the write. Check its free space and its Network Access "
-                     "(allow 0.0.0.0/0), then try again.")
+    nxt = f"DB{n + 1}_URI"
+    if target is None:
+        lines.append(f"➡️ EVERY database is full. In Koyeb add a new variable <code>{nxt}</code> = connection string "
+                     "of a NEW Atlas cluster, then redeploy.")
+    elif n == 1:
+        lines.append("➡️ Only DATABASE_URI is set. When it gets full add <code>DB2_URI</code> in Koyeb and redeploy.")
     else:
-        lines.append("➡️ All good. New premium users are saved on the premium cluster. "
-                     "Try /add_premium again.")
+        lines.append(f"➡️ All good. New data goes to #{target + 1}. When it is full, add "
+                     f"<code>{nxt}</code> in Koyeb and redeploy - nothing else to change.")
     return "\n".join(lines)
 
 
