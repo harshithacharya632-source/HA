@@ -4,7 +4,8 @@ from struct import pack
 from pyrogram.file_id import FileId
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
-from info import FILE_DB_URI, SEC_FILE_DB_URI, DATABASE_NAME, COLLECTION_NAME, MULTIPLE_DATABASE, USE_CAPTION_FILTER, MAX_B_TN
+from info import FILE_DB_URI, SEC_FILE_DB_URI, DATABASE_NAME, COLLECTION_NAME, MULTIPLE_DATABASE, USE_CAPTION_FILTER, MAX_B_TN, P_DB_URI
+from database.extra_dbs import extra_db_uris, is_full_error, is_down_error, host_of, WritePool
 
 # Dedicated thread pool for Mongo calls. asyncio.to_thread() uses the loop's
 # DEFAULT executor, which is tiny on small hosts (min(32, cpu+4) -> ~5 threads
@@ -23,12 +24,46 @@ sec_client = MongoClient(SEC_FILE_DB_URI)
 sec_db = sec_client[DATABASE_NAME]
 sec_col = sec_db[COLLECTION_NAME]
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  MORE FILE DATABASES: DB2_URI, DB3_URI, DB4_URI ... (+ PREMIUM_DB_URI / EXTRA_DB_URIS)
+#  They are the SAME extra clusters the users database uses (see database/extra_dbs.py).
+#
+#  * NEW files are written to the NEWEST file database that still has space.
+#  * A database that answers "over your space quota" (or is unreachable) is skipped for a few
+#    minutes and the next one is used - no restart needed.
+#  * Searching / opening / deleting look in ALL of them, so nothing already indexed is lost.
+#  * When every one is full: add the next DB<n>_URI in Koyeb and redeploy. Nothing else.
+#  With no extra variable set, this behaves exactly like the old two-database setup.
+# ══════════════════════════════════════════════════════════════════════════════
+_original_uris = [FILE_DB_URI] + ([SEC_FILE_DB_URI] if MULTIPLE_DATABASE else [])
+extra_uris = [u for u in extra_db_uris(P_DB_URI) if u not in _original_uris]
+extra_clients = [MongoClient(u, serverSelectionTimeoutMS=15000, connectTimeoutMS=15000) for u in extra_uris]
+extra_cols = [c[DATABASE_NAME][COLLECTION_NAME] for c in extra_clients]
+_EXTRA_IDS = {id(c) for c in extra_cols}
+
+# Every file collection, oldest first: col, sec_col (only when MULTIPLE_DATABASE), DB2, DB3 ...
+file_cols = [col] + ([sec_col] if MULTIPLE_DATABASE else []) + extra_cols
+file_hosts = [host_of(u) for u in _original_uris + extra_uris]
+file_pool = WritePool(file_hosts)
+if extra_cols:
+    print("[files] " + str(len(file_cols)) + " file databases: "
+          + ", ".join(f"#{i + 1} {h}" for i, h in enumerate(file_hosts))
+          + " - new files go to the newest one that still has space")
+
+
+def _is_extra(collection):
+    return id(collection) in _EXTRA_IDS
+
+
+class _NoDelete:
+    deleted_count = 0
+
 
 def create_search_index():
     """One-time setup: create a text index on file_name so get_search_results()
     can use fast, indexed $text search instead of a full collection scan.
     Safe to call anytime - creating an index that already exists is a no-op."""
-    for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
+    for collection in file_cols:
         try:
             collection.create_index([('file_name', 'text')], name='file_name_text')
             print(f"Text index ready on {collection.full_name}")
@@ -54,7 +89,7 @@ def warn_if_name_index_is_unique():
     UNIQUE index on file_name alone (an index left over from an older setup
     would make every second version fail with DuplicateKeyError). This only
     reports it at startup - it never changes or drops anything."""
-    for collection in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
+    for collection in file_cols:
         try:
             for name, spec in collection.index_information().items():
                 keys = [k for k, _ in spec.get('key', [])]
@@ -87,24 +122,26 @@ async def save_file(media):
     if is_file_already_saved(file_id, file_name, media.file_size):
         return False, 0
 
-    try:
-        col.insert_one(file)
-        print(f"{file_name} is successfully saved.")
-        return True, 1
-    except DuplicateKeyError:
-        print(f"{file_name} is already saved.")
-        return False, 0
-    except:
-        if MULTIPLE_DATABASE:
-            try:
-                sec_col.insert_one(file)
-                print(f"{file_name} is successfully saved.")
-                return True, 1
-            except DuplicateKeyError:
-                print(f"{file_name} is already saved.")
-                return False, 0
-        else:
-            print("Your Current File Database Is Full, Turn On Multiple Database Feature And Add Second File Mongodb To Save File.")
+    # Newest file database first; a full / unreachable one is skipped and the next is used.
+    for i in file_pool.write_order():
+        try:
+            file_cols[i].insert_one(dict(file))
+            file_pool.ok(i)
+            print(f"{file_name} is successfully saved.")
+            return True, 1
+        except DuplicateKeyError:
+            print(f"{file_name} is already saved.")
+            return False, 0
+        except Exception as e:
+            if not (is_full_error(e) or is_down_error(e)):
+                print(f"[files] could not save {file_name} on database #{i + 1} ({file_hosts[i]}): {e}")
+            file_pool.mark_bad(i, e, what="files")
+            continue
+
+    # Every file database refused the write. (False, 2) = "error" for index.py's counter.
+    print(f"[files] NOT SAVED: {file_name} - every file database is full or refusing writes. "
+          f"Add the next DB<n>_URI in Koyeb (Settings > Environment variables) and redeploy.")
+    return False, 2
 
 def clean_file_name(file_name):
     """Clean and format the file name."""
@@ -131,8 +168,15 @@ def is_file_already_saved(file_id, file_name, file_size=None):
     if file_size is not None:
         by_name['file_size'] = file_size
 
-    for collection in [col, sec_col]:
-        if collection.find_one(by_name) or collection.find_one(by_id):
+    for collection in file_cols:
+        try:
+            found = collection.find_one({'$or': [by_name, by_id]})
+        except Exception as e:
+            if not _is_extra(collection):
+                raise
+            print(f"[files] duplicate check skipped on {collection.full_name}: {e}")
+            continue
+        if found:
             print(f"{file_name} ({file_size} bytes) is already saved.")
             return True
 
@@ -202,7 +246,13 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
                 # breaks - it's just slower until the index is created.
                 return _run(collection, text_filter)
             except Exception:
-                return _run(collection, regex_filter)
+                try:
+                    return _run(collection, regex_filter)
+                except Exception as e:
+                    if not _is_extra(collection):
+                        raise                  # the two original databases behave exactly as before
+                    print(f"[files] search skipped on {collection.full_name}: {e}")
+                    return [], 0
 
         # Run the blocking pymongo calls in worker threads instead of directly
         # in this async function. Without this, every search froze the ENTIRE
@@ -212,7 +262,7 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
         # queried one after the other, doubling the wait when
         # MULTIPLE_DATABASE is on). gather() keeps the original order.
         loop = asyncio.get_running_loop()
-        collections = [col, sec_col] if MULTIPLE_DATABASE else [col]
+        collections = file_cols
         results = await asyncio.gather(*[
             loop.run_in_executor(DB_EXECUTOR, _run_one_blocking, c) for c in collections
         ])
@@ -271,19 +321,70 @@ async def get_bad_files(query, file_type=None, use_filter=False):
     def count_documents(collection):
         return collection.count_documents(filter_criteria)
 
-    total_results = (count_documents(col) + count_documents(sec_col) if MULTIPLE_DATABASE else count_documents(col))
+    total_results = sum(count_documents(c) for c in file_cols)
 
     def find_documents(collection):
         return list(collection.find(filter_criteria))
 
-    files = (find_documents(col) + find_documents(sec_col) if MULTIPLE_DATABASE else find_documents(col))
+    files = []
+    for c in file_cols:
+        files += find_documents(c)
 
     return files, total_results
 
 async def get_file_details(query):
     def _lookup():
-        return col.find_one({'file_id': query}) or sec_col.find_one({'file_id': query})
+        for collection in file_cols:
+            try:
+                doc = collection.find_one({'file_id': query})
+            except Exception as e:
+                if not _is_extra(collection):
+                    raise
+                print(f"[files] lookup skipped on {collection.full_name}: {e}")
+                continue
+            if doc:
+                return doc
+        return None
     return await asyncio.get_running_loop().run_in_executor(DB_EXECUTOR, _lookup)
+
+
+def delete_file_docs(flt, many=False):
+    """Delete from the first file database (oldest first) that has a match - the same rule the
+    old `col`, then `sec_col` code followed, now over every database. Returns an object with
+    .deleted_count. Deleting also works on a FULL Atlas cluster."""
+    for collection in file_cols:
+        try:
+            res = collection.delete_many(flt) if many else collection.delete_one(flt)
+        except Exception as e:
+            if not _is_extra(collection):
+                raise
+            print(f"[files] delete skipped on {collection.full_name}: {e}")
+            continue
+        if res.deleted_count:
+            return res
+    return _NoDelete()
+
+
+def drop_all_files():
+    """/deleteall: remove every indexed file from every file database."""
+    for collection in file_cols:
+        try:
+            collection.drop()
+        except Exception as e:
+            if not _is_extra(collection):
+                raise
+            print(f"[files] drop skipped on {collection.full_name}: {e}")
+
+
+def count_extra_files():
+    """Files held by the extra databases (DB2, DB3 ...), for the bot's total-files figure."""
+    total = 0
+    for collection in extra_cols:
+        try:
+            total += collection.count_documents({})
+        except Exception:
+            pass
+    return total
 
 def encode_file_id(s: bytes) -> str:
     r = b""
