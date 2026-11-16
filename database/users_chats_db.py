@@ -6,6 +6,7 @@ from pymongo.errors import (DuplicateKeyError, ServerSelectionTimeoutError, PyMo
                             OperationFailure, AutoReconnect, ConnectionFailure)
 import motor.motor_asyncio
 from pymongo import MongoClient
+from database.extra_dbs import extra_db_uris
 from info import DATABASE_NAME, USER_DB_URI, OTHER_DB_URI, PREMIUM_DB_URI, CUSTOM_FILE_CAPTION, IMDB, IMDB_TEMPLATE, MELCOW_NEW_USERS, BUTTON_MODE, SPELL_CHECK_REPLY, PROTECT_CONTENT, AUTO_DELETE, MAX_BTN, AUTO_FFILTER, SHORTLINK_API, SHORTLINK_URL, SHORTLINK_MODE, TUTORIAL, IS_TUTORIAL
 import time
 import datetime
@@ -119,14 +120,11 @@ def _host_of(uri):
 
 
 def _cluster_uris(first_uri, premium_uri=None):
-    """DATABASE_URI first, then every extra database in order, without duplicates."""
-    cands = [premium_uri or ""]
-    cands += [os.environ.get(f"DB{n}_URI", "") for n in range(2, 21)]
-    cands += re.split(r"[\s,]+", os.environ.get("EXTRA_DB_URIS", ""))
+    """DATABASE_URI first, then every extra database in order, without duplicates.
+    (The list of extra databases is shared with the file index - see database/extra_dbs.py)"""
     uris = [first_uri]
-    for u in cands:
-        u = (u or "").strip()
-        if u and u not in uris:
+    for u in extra_db_uris(premium_uri):
+        if u not in uris:
             uris.append(u)
     return uris
 
