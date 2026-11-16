@@ -8,7 +8,7 @@ from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerId
 from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from utils import get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap, is_premium_user
 from database.users_chats_db import db
-from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files
+from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files, delete_file_docs, file_cols, count_extra_files
 from database.filters_mdb import del_all, find_filter, get_filters
 from database.connections_mdb import mydb, active_connection, all_connections, delete_connection, if_active, make_active, make_inactive
 from database.gfilters_mdb import find_gfilter, get_gfilters, del_allg
@@ -790,7 +790,7 @@ def _sync_fetch_known_titles(limit):
     get_search_results() already follows — so this doesn't hang on a
     second DB that isn't actually configured for use."""
     titles = set()
-    collections = (col, sec_col) if MULTIPLE_DATABASE else (col,)
+    collections = file_cols          # col, sec_col (if MULTIPLE_DATABASE) and DB2, DB3 ...
     for collection in collections:
         try:
             cursor = collection.find({}, {"file_name": 1}).sort("_id", -1).limit(limit)
@@ -2966,13 +2966,9 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 for file in files:
                     file_ids = file["file_id"]
                     file_name = file["file_name"]
-                    result = col.delete_one({
+                    result = delete_file_docs({
                         'file_id': file_ids,
                     })
-                    if not result.deleted_count:
-                        result = sec_col.delete_one({
-                            'file_id': file_ids,
-                        })
                     if result.deleted_count:
                         logger.info(f'File Found for your query {keyword}! Successfully deleted {file_name} from database.')
                     deleted += 1
@@ -3679,7 +3675,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         used_dbSize3 = (stats3['dataSize']/(1024*1024))+(stats3['indexSize']/(1024*1024))
         free_dbSize3 = 512-used_dbSize3
         await query.message.edit_text(
-            text=script.STATUS_TXT.format((int(filesp)+int(totalsec)), total_users, totl_chats, filesp, round(used_dbSize, 2), round(free_dbSize, 2), totalsec, round(used_dbSize2, 2), round(free_dbSize2, 2), round(used_dbSize3, 2), round(free_dbSize3, 2)),
+            text=script.STATUS_TXT.format((int(filesp)+int(totalsec)+count_extra_files()), total_users, totl_chats, filesp, round(used_dbSize, 2), round(free_dbSize, 2), totalsec, round(used_dbSize2, 2), round(free_dbSize2, 2), round(used_dbSize3, 2), round(free_dbSize3, 2)),
             reply_markup=reply_markup,
             parse_mode=enums.ParseMode.HTML
         )
@@ -3709,7 +3705,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         used_dbSize3 = (stats3['dataSize']/(1024*1024))+(stats3['indexSize']/(1024*1024))
         free_dbSize3 = 512-used_dbSize3
         await query.message.edit_text(
-            text=script.STATUS_TXT.format((int(filesp)+int(totalsec)), total_users, totl_chats, filesp, round(used_dbSize, 2), round(free_dbSize, 2), totalsec, round(used_dbSize2, 2), round(free_dbSize2, 2), round(used_dbSize3, 2), round(free_dbSize3, 2)),
+            text=script.STATUS_TXT.format((int(filesp)+int(totalsec)+count_extra_files()), total_users, totl_chats, filesp, round(used_dbSize, 2), round(free_dbSize, 2), totalsec, round(used_dbSize2, 2), round(free_dbSize2, 2), round(used_dbSize3, 2), round(free_dbSize3, 2)),
             reply_markup=reply_markup,
             parse_mode=enums.ParseMode.HTML
         )
