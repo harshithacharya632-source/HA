@@ -340,7 +340,12 @@ async def media_handler(bot, message):
     media.file_type = next(ft for ft in ("document", "video", "audio") if hasattr(message, ft))
     media.caption = message.caption or ""
 
-    await save_file(media)
+    saved, code = await save_file(media)
+    if code == 2:
+        # every file database is full / refusing writes: the file is NOT indexed, so do not announce it
+        logger.error(f"[channel] {media.file_name} was NOT saved - all file databases are full. "
+                     f"Add the next DB<n>_URI in Koyeb and redeploy.")
+        return
 
     try:
         if await db.movie_update_status(bot.me.id):
