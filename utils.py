@@ -557,7 +557,13 @@ class _FallbackUser:
 
 async def _resolve_user(bot, userid):
     try:
-        return await bot.get_users(userid)
+        # The verify deep-link hands the id over as a STRING. Pyrogram reads a numeric string as a
+        # PHONE NUMBER (contacts.ResolvePhone -> BOT_METHOD_INVALID for bots), so look it up as an int.
+        try:
+            lookup = int(userid)
+        except (TypeError, ValueError):
+            lookup = userid
+        return await bot.get_users(lookup)
     except Exception as e:
         logger.warning(f"[VERIFY] bot.get_users({userid}) failed ({e}); using fallback user object.")
         return _FallbackUser(userid)
