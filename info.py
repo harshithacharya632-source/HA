@@ -95,12 +95,17 @@ O_DB_URI = environ.get('O_DB_URI', "")   # This Db Is For Other Data Store
 F_DB_URI = environ.get('F_DB_URI', "")   # This Db Is For File Data Store
 S_DB_URI = environ.get('S_DB_URI', "")   # This Db is for File Data Store When First Db Is Going To Be Full.
 
-# Premium / payment data DB (OPTIONAL).
-# Premium users, free trials, daily verification, offer claims and the UPI payment queue are
-# stored in this database. Leave it empty and they stay in DATABASE_URI exactly like before.
-# Set it to the URI of ANY cluster that still has free space (it can be the same value as
-# O_DB_URI or S_DB_URI) when DATABASE_URI is full and /add_premium fails.
-# IMPORTANT: copy the existing premium data first with:  python tools/migrate_users_db.py --premium-only
+# ══ MORE DATABASES (OPTIONAL) - when an Atlas cluster is full (512 MB) ═══════════════════════
+# In Koyeb > Settings > Environment variables add, one by one as each cluster fills up:
+#       DB2_URI, DB3_URI, DB4_URI ... up to DB20_URI     (each = a NEW Atlas cluster's connection string)
+#   (or EXTRA_DB_URIS = several connection strings separated by a space)
+# then Deploy. NOTHING has to be copied or migrated:
+#   * NEW data (users, premium, payments, verification, indexed files ...) is written to the NEWEST
+#     database that still has space; a full one is skipped automatically.
+#   * Old data is still read from the full databases, and is moved to a free one the first time it changes.
+#   * Send /dbcheck to the bot to see every database, how full it is and where new data goes.
+# Not covered (small data, stays on O_DB_URI): group filters, connections, guard warnings, referral counters.
+# PREMIUM_DB_URI is the OLD name of the first extra database and still works.
 P_DB_URI = environ.get('PREMIUM_DB_URI', "")
 
 # Movie Notification & Update Settings
