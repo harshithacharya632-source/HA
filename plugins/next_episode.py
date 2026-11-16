@@ -42,7 +42,7 @@ try:
 except Exception:  # very old pyrogram
     ButtonStyle = None
 
-from database.ia_filterdb import col, sec_col, get_file_details
+from database.ia_filterdb import col, sec_col, file_cols, get_file_details
 from database.users_chats_db import db
 from info import MULTIPLE_DATABASE, VERIFY, VERIFY_TUTORIAL, PREMIUM_AND_REFERAL_MODE, ADMINS
 from database.ia_filterdb import clean_file_name
@@ -421,9 +421,9 @@ def _pick(cands, season, episode, cur_tier, cur_size, langs):
 
 
 def _run(query):
-    """Blocking pymongo find on col (+ sec_col). Run through asyncio.to_thread."""
+    """Blocking pymongo find on every file database (col, sec_col, DB2 ...). Run through asyncio.to_thread."""
     out = []
-    for c in ([col, sec_col] if MULTIPLE_DATABASE else [col]):
+    for c in file_cols:
         try:
             out.extend(c.find(query).limit(MAX_CANDIDATES))
         except Exception as ex:
