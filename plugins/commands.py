@@ -20,7 +20,7 @@ from database.users_chats_db import db
 from database.guard_db import reset_warns, remove_ban_log, get_settings
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
-from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results
+from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results, delete_file_docs, drop_all_files
 from plugins.pm_filter import auto_filter
 from plugins.next_episode import prepare_episode_button
 logger = logging.getLogger(__name__)
@@ -1507,13 +1507,9 @@ async def delete(bot, message):
         return
     
     file_id, file_ref, *_ = unpack_new_file_id(media.file_id)  # <-- FIXED
-    result = col.delete_one({
+    result = delete_file_docs({
         'file_id': file_id,
     })
-    if not result.deleted_count:
-        result = sec_col.delete_one({
-            'file_id': file_id,
-        })
     if result.deleted_count:
         await msg.edit('File is successfully deleted from database')
     else:
@@ -1523,27 +1519,17 @@ async def delete(bot, message):
             file_name = file_name.replace(char, '')
         file_name = ' '.join(filter(lambda x: not x.startswith('@'), file_name.split()))
     
-        result = col.delete_many({
+        result = delete_file_docs({
             'file_name': file_name,
             'file_size': media.file_size
-        })
-        if not result.deleted_count:
-            result = sec_col.delete_many({
-                'file_name': file_name,
-                'file_size': media.file_size
-            })
+        }, many=True)
         if result.deleted_count:
             await msg.edit('File is successfully deleted from database')
         else:
-            result = col.delete_many({
+            result = delete_file_docs({
                 'file_name': media.file_name,
                 'file_size': media.file_size
-            })
-            if not result.deleted_count:
-                result = sec_col.delete_many({
-                    'file_name': media.file_name,
-                    'file_size': media.file_size
-                })
+            }, many=True)
             if result.deleted_count:
                 await msg.edit('File is successfully deleted from database')
             else:
@@ -1567,8 +1553,7 @@ async def delete_all_index(bot, message):
 
 @Client.on_callback_query(filters.regex(r'^autofilter_delete'))
 async def delete_all_index_confirm(bot, query):
-    col.drop()
-    sec_col.drop()
+    drop_all_files()
     await query.answer('Piracy Is Crime')
     await query.message.edit('Succesfully Deleted All The Indexed Files.')
 
@@ -2203,10 +2188,11 @@ async def give_premium_cmd_handler(client, message):
                 logger.error(f"[add_premium] DB write failed for {user_id}: {e}")
                 await message.reply_text(
                     "❌ <b>Premium NOT added.</b>\n\n"
-                    "The premium database refused the write (usually MongoDB storage is full - "
-                    "512 MB free-tier limit). Free up space, or set PREMIUM_DB_URI to a cluster "
-                    "with free space (run tools/migrate_users_db.py --premium-only first), "
-                    "then run /add_premium again.\n\n"
+                    "The database(s) refused the write - usually because MongoDB storage is full (512 MB free-tier limit).\n\n"
+                    "Fix: Koyeb > Settings > Environment variables > add the NEXT database: "
+                    "DB2_URI (or DB3_URI, DB4_URI ... if those are already used) = connection string "
+                    "of a NEW Atlas cluster, then Deploy. Nothing has to be copied or migrated. "
+                    "Send /dbcheck to see which databases are full. Then run /add_premium again.\n\n"
                     f"<code>{str(e)[:150]}</code>"
                 )
                 return
@@ -2252,8 +2238,9 @@ async def remove_premium_cmd_handler(client, message):
                 logger.error(f"[remove_premium] DB write failed for {user_id}: {e}")
                 await message.reply_text(
                     "❌ <b>Premium NOT removed.</b>\n\n"
-                    "The premium database refused the write (usually MongoDB storage is full). "
-                    "Free up space, or set PREMIUM_DB_URI to a cluster with free space, then try again.\n\n"
+                    "The database(s) refused the write - usually because MongoDB storage is full. "
+                    "Add the next DB<n>_URI (DB2_URI, DB3_URI ...) in Koyeb and Deploy, then try again. "
+                    "Send /dbcheck to see which databases are full.\n\n"
                     f"<code>{str(e)[:150]}</code>"
                 )
                 return
