@@ -25,6 +25,14 @@ def _host(uri):
         return "?"
 
 
+def _next_var():
+    """Name of the first DB<n>_URI variable that is still empty = the one to add next in Koyeb."""
+    for n in range(2, 21):
+        if not os.environ.get(f"DB{n}_URI", "").strip():
+            return f"DB{n}_URI"
+    return "EXTRA_DB_URIS"
+
+
 def _env_line():
     return ", ".join(f"{k}: {'set' if os.environ.get(k, '').strip() else 'MISSING'}" for k in ENV_SHOW)
 
@@ -35,6 +43,11 @@ def _startup_print():
         print("[db-check] WARNING: the OLD users_chats_db.py is deployed - it has no multi-database support")
     else:
         print(f"[db-check] {len(hosts)} database(s) in use: " + ", ".join(hosts) + " | variables seen by the bot -> " + _env_line())
+    try:
+        import database.ia_filterdb as _F
+        print(f"[db-check] file index: {len(_F.file_cols)} database(s): " + ", ".join(_F.file_hosts))
+    except Exception as e:
+        print(f"[db-check] file index not readable: {e}")
 
 
 _startup_print()
@@ -43,6 +56,14 @@ _startup_print()
 async def _size(database):
     try:
         s = await database.command("dbstats")
+        return f"{s['dataSize'] / MB:.0f} MB data / {s['storageSize'] / MB:.0f} MB storage"
+    except Exception as e:
+        return f"size unknown ({html.escape(str(e)[:50])})"
+
+
+def _size_sync(database):
+    try:
+        s = database.command("dbstats")
         return f"{s['dataSize'] / MB:.0f} MB data / {s['storageSize'] / MB:.0f} MB storage"
     except Exception as e:
         return f"size unknown ({html.escape(str(e)[:50])})"
@@ -100,6 +121,33 @@ async def build_report():
         lines.append("⚠️ Same cluster used more than once: <code>" + html.escape(", ".join(dup)) + "</code> "
                      "(a second DB must be a DIFFERENT Atlas cluster)")
 
+    # the indexed FILES have their own chain: FILE_DB_URI, S_DB_URI, then DB2_URI, DB3_URI ...
+    try:
+        import database.ia_filterdb as F
+        fcols, fhosts = F.file_cols, F.file_hosts
+    except Exception as e:
+        fcols, fhosts = None, None
+        lines += ["", f"Files: could not read the file databases ({html.escape(str(e)[:80])})"]
+    if fcols:
+        fres = []
+        for c in fcols:
+            ok, _ = await asyncio.to_thread(_test_write_sync, c.database["_dbcheck"])
+            fres.append(ok)
+        ftarget = max((i for i, ok in enumerate(fres) if ok), default=None)
+        lines += ["", f"<b>Indexed files:</b> {len(fcols)} database(s)"]
+        for i, c in enumerate(fcols):
+            try:
+                cnt = await asyncio.to_thread(c.estimated_document_count)
+            except Exception:
+                cnt = "?"
+            here = "  ⬅️ <b>new files go here</b>" if i == ftarget else ""
+            lines.append(f"<b>F{i + 1}</b> <code>{html.escape(fhosts[i])}</code> - {cnt} files")
+            lines.append(f"   {await asyncio.to_thread(_size_sync, c.database)}")
+            lines.append(f"   write: {'OK ✅' if fres[i] else 'FULL / refused ❌'}{here}")
+        if ftarget is None:
+            lines.append(f"➡️ EVERY file database is full - new files are NOT saved. Add <code>{_next_var()}</code> "
+                         "(a NEW Atlas cluster) in Koyeb, then Deploy.")
+
     # filters / connections / referrals live on O_DB_URI (not part of the chain above)
     mydb = getattr(U, "mydb", None)
     if mydb is not None:
@@ -112,7 +160,7 @@ async def build_report():
             lines.append("   (same cluster as database #" + str(hosts.index(o_host) + 1) + ")")
 
     lines.append("")
-    nxt = f"DB{n + 1}_URI"
+    nxt = _next_var()
     if n == 1 and not os.environ.get("DB2_URI", "").strip():
         lines.append("➡️ <b>DB2_URI is MISSING</b> in this running bot, so nothing can move to a second database. "
                      "Koyeb → your service → Settings → Environment variables → add <code>DB2_URI</code> "
