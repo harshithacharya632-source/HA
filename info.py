@@ -100,8 +100,9 @@ S_DB_URI = environ.get('S_DB_URI', "")   # This Db is for File Data Store When F
 #       DB2_URI, DB3_URI, DB4_URI ... up to DB20_URI     (each = a NEW Atlas cluster's connection string)
 #   (or EXTRA_DB_URIS = several connection strings separated by a space)
 # then Deploy. NOTHING has to be copied or migrated:
-#   * NEW data (users, premium, payments, verification, indexed files ...) is written to the NEWEST
-#     database that still has space; a full one is skipped automatically.
+#   * NEW data (users, premium, payments, verification, indexed files ...) is written to the FIRST
+#     database (in order: DATABASE_URI, ... DB2_URI, DB3_URI ...) that still has space, so they fill
+#     up one after another; a full one is skipped automatically.
 #   * Old data is still read from the full databases, and is moved to a free one the first time it changes.
 #   * Send /dbcheck to the bot to see every database, how full it is and where new data goes.
 # Not covered (small data, stays on O_DB_URI): group filters, connections, guard warnings, referral counters.
