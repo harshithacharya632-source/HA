@@ -84,7 +84,8 @@ default_setgs = {
 #      2) PREMIUM_DB_URI (old name, still works), then DB2_URI, DB3_URI, DB4_URI ... DB20_URI
 #         (and optionally EXTRA_DB_URIS = several URIs separated by spaces)
 #
-#  * NEW DATA / WRITES always go to the NEWEST cluster that still accepts writes.
+#  * NEW DATA / WRITES go to the FIRST cluster (in the order above) that still accepts writes,
+#    so the clusters fill up one after another: 1st, then 2nd, then 3rd ...
 #  * When a cluster answers "over your space quota" (or is unreachable) it is skipped
 #    automatically (re-tried every 10 minutes) and the next one is used - no restart needed.
 #  * READS look in every cluster, newest first. A newer copy of a record always wins.
@@ -193,10 +194,11 @@ class _ClusterPool:
         return time.monotonic() >= self.skip_until[i]
 
     def write_order(self):
-        """Newest usable cluster first. Clusters that were marked full/unreachable come last, so
-        space you free up (or a cluster that came back) is found at once if nothing else works."""
-        newest_first = list(range(self.n - 1, -1, -1))
-        return [i for i in newest_first if self.usable(i)] + [i for i in newest_first if not self.usable(i)]
+        """First usable cluster first (1st, 2nd, 3rd ...). Clusters that were marked full/unreachable
+        come last, so space you free up (or a cluster that came back) is found at once if nothing
+        else works."""
+        in_order = list(range(self.n))
+        return [i for i in in_order if self.usable(i)] + [i for i in in_order if not self.usable(i)]
 
     def ok(self, i):
         self.skip_until[i] = 0.0
@@ -206,7 +208,7 @@ class _ClusterPool:
         was_usable = self.usable(i)
         self.skip_until[i] = time.monotonic() + (self.FULL_RETRY if full else self.DOWN_RETRY)
         if was_usable:
-            nxt = [j for j in range(self.n - 1, -1, -1) if j != i and self.usable(j)]
+            nxt = [j for j in range(self.n) if j != i and self.usable(j)]
             where = f"cluster #{nxt[0] + 1}" if nxt else "NOWHERE - every cluster is full, add a new DB (DB<next>_URI)"
             print(f"[db] cluster #{i + 1} ({self.hosts[i]}) is {'FULL' if full else 'unreachable'} -> new data goes to {where}")
 
@@ -678,12 +680,12 @@ class Database:
             self.pool = None
             self.db = self._dbs[0]
         else:
-            # several databases: writes go to the newest one that has space, reads look in all
+            # several databases: writes go to the first one (in order) that has space, reads look in all
             self.pool = _ClusterPool(self.cluster_hosts)
             self.db = _MultiDatabase(self._dbs, self.pool, _COLLECTION_SPECS)
             print("[db] " + str(len(self._dbs)) + " databases configured: "
                   + ", ".join(f"#{i + 1} {h}" for i, h in enumerate(self.cluster_hosts))
-                  + " - new data is written to the newest one that still has space")
+                  + " - new data goes to the first one (in this order) that still has space")
         self.col = self.db.users
         self.grp = self.db.groups
         self.bot = self.db.clone_bots
