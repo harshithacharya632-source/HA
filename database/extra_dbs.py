@@ -57,7 +57,8 @@ def host_of(uri):
 
 
 class WritePool:
-    """Which of N clusters can take writes right now (newest first, full ones are skipped)."""
+    """Which of N clusters can take writes right now. They are filled IN ORDER: 1st, then 2nd,
+    then 3rd ... a full one is skipped and the next one is used."""
     FULL_RETRY = 600     # seconds a FULL cluster is skipped before it is tried again
     DOWN_RETRY = 90      # seconds an unreachable cluster is skipped
 
@@ -70,10 +71,11 @@ class WritePool:
         return time.monotonic() >= self.skip_until[i]
 
     def write_order(self):
-        """Newest usable cluster first. Clusters marked full / unreachable come last, so space
-        you free up (or a cluster that came back) is found at once if nothing else works."""
-        newest_first = list(range(self.n - 1, -1, -1))
-        return [i for i in newest_first if self.usable(i)] + [i for i in newest_first if not self.usable(i)]
+        """First usable cluster first (1st, 2nd, 3rd ...). Clusters marked full / unreachable come
+        last, so space you free up (or a cluster that came back) is found at once if nothing
+        else works."""
+        in_order = list(range(self.n))
+        return [i for i in in_order if self.usable(i)] + [i for i in in_order if not self.usable(i)]
 
     def ok(self, i):
         self.skip_until[i] = 0.0
@@ -83,7 +85,7 @@ class WritePool:
         was_usable = self.usable(i)
         self.skip_until[i] = time.monotonic() + (self.FULL_RETRY if full else self.DOWN_RETRY)
         if was_usable:
-            nxt = [j for j in range(self.n - 1, -1, -1) if j != i and self.usable(j)]
+            nxt = [j for j in range(self.n) if j != i and self.usable(j)]
             where = (f"cluster #{nxt[0] + 1}" if nxt
                      else "NOWHERE - every cluster is full, add a new DB (DB<next>_URI)")
             print(f"[db] {what}: cluster #{i + 1} ({self.hosts[i]}) is "
