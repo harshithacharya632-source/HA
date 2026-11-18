@@ -105,8 +105,8 @@ async def build_report():
     for i, d in enumerate(dbs):
         ok, err = await _test_write(d)
         results.append(ok)
-        if ok:
-            target = i                      # the newest database that accepts writes gets the new data
+        if ok and target is None:
+            target = i                      # the FIRST database (in fill order) that accepts writes gets the new data
     for i, d in enumerate(dbs):
         mark = "OK ✅" if results[i] else "FULL / refused ❌"
         here = "  ⬅️ <b>new data goes here</b>" if i == target else ""
@@ -133,7 +133,7 @@ async def build_report():
         for c in fcols:
             ok, _ = await asyncio.to_thread(_test_write_sync, c.database["_dbcheck"])
             fres.append(ok)
-        ftarget = max((i for i, ok in enumerate(fres) if ok), default=None)
+        ftarget = next((i for i, ok in enumerate(fres) if ok), None)      # first one that accepts writes
         lines += ["", f"<b>Indexed files:</b> {len(fcols)} database(s)"]
         for i, c in enumerate(fcols):
             try:
