@@ -28,7 +28,8 @@ sec_col = sec_db[COLLECTION_NAME]
 #  MORE FILE DATABASES: DB2_URI, DB3_URI, DB4_URI ... (+ PREMIUM_DB_URI / EXTRA_DB_URIS)
 #  They are the SAME extra clusters the users database uses (see database/extra_dbs.py).
 #
-#  * NEW files are written to the NEWEST file database that still has space.
+#  * NEW files go to the FIRST file database (in this order) that still has space, so they
+#    fill up one after another: 1st, then 2nd, then 3rd ...
 #  * A database that answers "over your space quota" (or is unreachable) is skipped for a few
 #    minutes and the next one is used - no restart needed.
 #  * Searching / opening / deleting look in ALL of them, so nothing already indexed is lost.
@@ -48,7 +49,7 @@ file_pool = WritePool(file_hosts)
 if extra_cols:
     print("[files] " + str(len(file_cols)) + " file databases: "
           + ", ".join(f"#{i + 1} {h}" for i, h in enumerate(file_hosts))
-          + " - new files go to the newest one that still has space")
+          + " - new files go to the first one (in this order) that still has space")
 
 
 def _is_extra(collection):
@@ -122,7 +123,7 @@ async def save_file(media):
     if is_file_already_saved(file_id, file_name, media.file_size):
         return False, 0
 
-    # Newest file database first; a full / unreachable one is skipped and the next is used.
+    # First file database with space first (1st, 2nd, 3rd ...); a full / unreachable one is skipped.
     for i in file_pool.write_order():
         try:
             file_cols[i].insert_one(dict(file))
