@@ -5,7 +5,7 @@
 import re, logging
 from pyrogram import Client, filters
 from info import DELETE_CHANNELS
-from database.ia_filterdb import col, sec_col, unpack_new_file_id
+from database.ia_filterdb import delete_file_docs, unpack_new_file_id
 
 logger = logging.getLogger(__name__)
 media_filter = filters.document | filters.video
@@ -23,13 +23,9 @@ async def deletemultiplemedia(bot, message):
 
     file_id, file_ref = unpack_new_file_id(media.file_id)
 
-    result = col.delete_one({
+    result = delete_file_docs({
         'file_id': file_id,
     })
-    if not result.deleted_count:
-        result = sec_col.delete_one({
-            'file_id': file_id,
-        })
     if result.deleted_count:
         logger.info('File is successfully deleted from database.')
     else:
@@ -39,27 +35,17 @@ async def deletemultiplemedia(bot, message):
             file_name = file_name.replace(char, '')
         file_name = ' '.join(filter(lambda x: not x.startswith('@'), file_name.split()))
     
-        result = col.delete_many({
+        result = delete_file_docs({
             'file_name': file_name,
             'file_size': media.file_size
-        })
-        if not result.deleted_count:
-            result = sec_col.delete_many({
-                'file_name': file_name,
-                'file_size': media.file_size
-            })
+        }, many=True)
         if result.deleted_count:
             logger.info('File is successfully deleted from database.')
         else:
-            result = col.delete_many({
+            result = delete_file_docs({
                 'file_name': media.file_name,
                 'file_size': media.file_size
-            })
-            if not result.deleted_count:
-                result = sec_col.delete_many({
-                    'file_name': media.file_name,
-                    'file_size': media.file_size
-                })
+            }, many=True)
             if result.deleted_count:
                 logger.info('File is successfully deleted from database.')
             else:

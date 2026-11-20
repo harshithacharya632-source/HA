@@ -1,6 +1,7 @@
 import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64, math
 from Script import script
 from pyrogram.errors import MediaEmpty
+from pymongo.errors import PyMongoError
 from pyrogram import Client, filters, enums
 from pyrogram.errors import ChatAdminRequired, FloodWait
 from pyrogram.types import *
@@ -19,7 +20,7 @@ from database.users_chats_db import db
 from database.guard_db import reset_warns, remove_ban_log, get_settings
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
 from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files
-from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results
+from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file_id, get_bad_files, get_search_results, delete_file_docs, drop_all_files
 from plugins.pm_filter import auto_filter
 from plugins.next_episode import prepare_episode_button
 logger = logging.getLogger(__name__)
@@ -1506,13 +1507,9 @@ async def delete(bot, message):
         return
     
     file_id, file_ref, *_ = unpack_new_file_id(media.file_id)  # <-- FIXED
-    result = col.delete_one({
+    result = delete_file_docs({
         'file_id': file_id,
     })
-    if not result.deleted_count:
-        result = sec_col.delete_one({
-            'file_id': file_id,
-        })
     if result.deleted_count:
         await msg.edit('File is successfully deleted from database')
     else:
@@ -1522,27 +1519,17 @@ async def delete(bot, message):
             file_name = file_name.replace(char, '')
         file_name = ' '.join(filter(lambda x: not x.startswith('@'), file_name.split()))
     
-        result = col.delete_many({
+        result = delete_file_docs({
             'file_name': file_name,
             'file_size': media.file_size
-        })
-        if not result.deleted_count:
-            result = sec_col.delete_many({
-                'file_name': file_name,
-                'file_size': media.file_size
-            })
+        }, many=True)
         if result.deleted_count:
             await msg.edit('File is successfully deleted from database')
         else:
-            result = col.delete_many({
+            result = delete_file_docs({
                 'file_name': media.file_name,
                 'file_size': media.file_size
-            })
-            if not result.deleted_count:
-                result = sec_col.delete_many({
-                    'file_name': media.file_name,
-                    'file_size': media.file_size
-                })
+            }, many=True)
             if result.deleted_count:
                 await msg.edit('File is successfully deleted from database')
             else:
@@ -1566,8 +1553,7 @@ async def delete_all_index(bot, message):
 
 @Client.on_callback_query(filters.regex(r'^autofilter_delete'))
 async def delete_all_index_confirm(bot, query):
-    col.drop()
-    sec_col.drop()
+    drop_all_files()
     await query.answer('Piracy Is Crime')
     await query.message.edit('Succesfully Deleted All The Indexed Files.')
 
@@ -2195,7 +2181,21 @@ async def give_premium_cmd_handler(client, message):
             base_time = current_expiry if isinstance(current_expiry, datetime.datetime) and current_expiry > now else now
             expiry_time = base_time + datetime.timedelta(seconds=seconds)
             user_data = {"id": user_id, "expiry_time": expiry_time, "expiry_reminder_sent": False, "expired_notified": False} 
-            await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            try:
+                await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            except PyMongoError as e:
+                # Most common cause: Atlas free tier (512 MB) is full -> every write is blocked.
+                logger.error(f"[add_premium] DB write failed for {user_id}: {e}")
+                await message.reply_text(
+                    "❌ <b>Premium NOT added.</b>\n\n"
+                    "The database(s) refused the write - usually because MongoDB storage is full (512 MB free-tier limit).\n\n"
+                    "Fix: Koyeb > Settings > Environment variables > add the NEXT database: "
+                    "DB2_URI (or DB3_URI, DB4_URI ... if those are already used) = connection string "
+                    "of a NEW Atlas cluster, then Deploy. Nothing has to be copied or migrated. "
+                    "Send /dbcheck to see which databases are full. Then run /add_premium again.\n\n"
+                    f"<code>{str(e)[:150]}</code>"
+                )
+                return
             await message.reply_text("Premium access added to the user.")            
             await client.send_message(
                 chat_id=user_id,
@@ -2232,7 +2232,18 @@ async def remove_premium_cmd_handler(client, message):
         if seconds > 0:
             expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
             user_data = {"id": user_id, "expiry_time": expiry_time, "expiry_reminder_sent": True, "expired_notified": True}  # Using "id" instead of "user_id"
-            await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            try:
+                await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            except PyMongoError as e:
+                logger.error(f"[remove_premium] DB write failed for {user_id}: {e}")
+                await message.reply_text(
+                    "❌ <b>Premium NOT removed.</b>\n\n"
+                    "The database(s) refused the write - usually because MongoDB storage is full. "
+                    "Add the next DB<n>_URI (DB2_URI, DB3_URI ...) in Koyeb and Deploy, then try again. "
+                    "Send /dbcheck to see which databases are full.\n\n"
+                    f"<code>{str(e)[:150]}</code>"
+                )
+                return
             await message.reply_text("Premium access removed to the user.")
             await client.send_message(
                 chat_id=user_id,
@@ -2288,16 +2299,23 @@ async def upi_plan_qr_cb(client, query):
     # Price is read live and per user, so the QR always matches /plan_rate and
     # an already-used one-time offer falls back to the standard price.
     pricing = await get_user_pricing(client.me.id, query.from_user.id)
-    markup = InlineKeyboardMarkup([
+    rows_after = [
         [InlineKeyboardButton("ᴘᴀɪᴅ? sᴇɴᴅ sᴄʀᴇᴇɴsʜᴏᴛ 🧾", url=OWNER_LNK)],
         [InlineKeyboardButton("⚠️ ᴄʟᴏsᴇ / ᴅᴇʟᴇᴛᴇ ⚠️", callback_data="close_data")],
-    ])
+    ]
     try:
-        await send_plan_qr(client, query.from_user.id, plan, STAR_PLAN_LABELS, pricing, reply_markup=markup)
+        await send_plan_qr(client, query.from_user.id, plan, STAR_PLAN_LABELS, pricing, rows_after=rows_after)
     except Exception as e:
         logger.exception(e)
         return await query.answer("Couldn't send the QR here — open the bot in private chat and send /plan.", show_alert=True)
-    await query.answer("QR sent — check your chat with me 👇")
+    # The plan list has done its job: remove it so only the QR is left in the chat.
+    # (Only in a private chat - in a group that message is shared with everybody.)
+    if query.message and query.message.chat.id == query.from_user.id:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+    await query.answer("QR sent 👇")
 
 
 # ── Telegram Stars (XTR) — instant premium ─────────────────────────────
@@ -2396,7 +2414,16 @@ async def star_payment_success_handler(client, message):
         "expiry_reminder_sent": False,
         "expired_notified": False,
     }
-    await db.update_user(user_data)
+    try:
+        await db.update_user(user_data)
+    except PyMongoError as e:
+        # The user already paid. Never fail silently - log the charge id so an admin can add premium by hand.
+        logger.error(f"[stars_premium] DB write failed for user {user_id}, charge_id={charge_id}, plan={plan}: {e}")
+        return await message.reply_text(
+            "⚠️ <b>Payment received, but I couldn't activate premium right now.</b>\n\n"
+            "Please contact the admin and share this payment ID:\n"
+            f"<code>{charge_id}</code>"
+        )
 
     await message.reply_text(
         f"<b>👑 ᴘᴀʏᴍᴇɴᴛ sᴜᴄᴄᴇssꜰᴜʟ — ᴘʀᴇᴍɪᴜᴍ ᴀᴄᴛɪᴠᴀᴛᴇᴅ ɪɴsᴛᴀɴᴛʟʏ! 👑</b>\n\n"

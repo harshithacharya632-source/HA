@@ -19,6 +19,7 @@ from TechVJ.util.file_properties import get_hash, get_name
 
 from database.ia_filterdb import get_search_results
 from utils import is_premium_user
+from upi_qr import upi_enabled, verify_pay_sig, render_pay_page, render_open_page, UPI_APPS
 
 WEBAPP_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "webapp")
@@ -63,6 +64,38 @@ async def watch_page(request: web.Request):
 @routes.get("/app", allow_head=True)
 async def goflix_app(request: web.Request):
     return web.FileResponse(os.path.join(WEBAPP_DIR, "goflix_home.html"))
+
+
+# ---------------- UPI APP REDIRECT PAGE (PhonePe / GPay / Paytm / Navi buttons) ----------------
+# Telegram buttons only accept https links, so the "pay with your UPI app" buttons
+# land here and this page hands the payment over to the app. The link is signed
+# (see upi_qr.sign_pay): the amount can't be edited and the payee is always OUR
+# UPI ID from the environment, so this can't be used to send anyone elsewhere.
+# Registered before the catch-all "/{path}" stream route below, which would
+# otherwise answer it first.
+@routes.get("/pay", allow_head=True)
+async def upi_pay_page(request: web.Request):
+    q = request.rel_url.query
+    amount, note, sig, app = q.get("am", ""), q.get("tn", ""), q.get("sig", ""), q.get("app", "")
+    if not upi_enabled() or not verify_pay_sig(amount, note, sig):
+        raise web.HTTPNotFound()
+    try:
+        page = render_pay_page(amount, note, app, request.headers.get("User-Agent", ""))
+    except ValueError:
+        raise web.HTTPNotFound()
+    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
+
+
+# ---------------- "JUST OPEN THE UPI APP" PAGE (the PhonePe / GPay / Paytm buttons under the QR) ----------------
+# Only opens the app - no amount or UPI id is passed to it. Must stay above the catch-all "/{path}" route.
+@routes.get("/open", allow_head=True)
+@routes.get("/open/{app_key}", allow_head=True)
+async def upi_open_page(request: web.Request):
+    app_key = request.match_info.get("app_key", "")
+    if app_key and app_key not in UPI_APPS:
+        raise web.HTTPNotFound()
+    page = render_open_page(app_key or None, request.headers.get("User-Agent", ""))
+    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 # ---------------- CONFIG: tell the frontend the real, configured stream URL ----------------
