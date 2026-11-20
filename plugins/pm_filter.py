@@ -8,7 +8,7 @@ from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerId
 from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from utils import get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap, is_premium_user
 from database.users_chats_db import db
-from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files, delete_file_docs, file_cols, count_extra_files
+from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files, delete_file_docs, file_cols, count_extra_files, DB_EXECUTOR
 from database.stats_view import build_stats_text
 from database.filters_mdb import del_all, find_filter, get_filters
 from database.connections_mdb import mydb, active_connection, all_connections, delete_connection, if_active, make_active, make_inactive
@@ -748,6 +748,7 @@ def format_file_button_text(file):
 _KNOWN_TITLES_CACHE = {"titles": [], "ts": 0}
 _KNOWN_TITLES_TTL   = 3600     # refresh once an hour
 _KNOWN_TITLES_LIMIT = 20000    # sample size, not the whole DB — keeps this cheap
+_KNOWN_TITLES_FORCE_MIN_AGE = 120   # seconds: a miss may only force a fresh reload this often
 
 
 _YEAR_TOKEN_RE = re.compile(r'^(19|20)\d{2}$')
@@ -836,7 +837,7 @@ async def _get_known_titles(force_refresh=False):
         return _KNOWN_TITLES_CACHE["titles"]
 
     try:
-        titles = await asyncio.to_thread(_sync_fetch_known_titles, _KNOWN_TITLES_LIMIT)
+        titles = await asyncio.get_running_loop().run_in_executor(DB_EXECUTOR, _sync_fetch_known_titles, _KNOWN_TITLES_LIMIT)
         print(f"[spell-fuzzy] loaded {len(titles)} known titles for fuzzy suggestions (force_refresh={force_refresh})")
     except Exception as e:
         print(f"[spell-fuzzy] _get_known_titles ERROR: {e}")
@@ -924,7 +925,10 @@ async def get_similar_titles(query, limit=5):
         return []
 
     matches = await asyncio.to_thread(_score, titles)
-    if not matches:
+    # A movie that is simply NOT in the library has no close title, so this used to reload up
+    # to 20,000 titles from every database on EVERY such search - the slowest part of a
+    # "not available" answer. Reload at most once per _KNOWN_TITLES_FORCE_MIN_AGE seconds.
+    if not matches and (datetime.now().timestamp() - _KNOWN_TITLES_CACHE["ts"]) >= _KNOWN_TITLES_FORCE_MIN_AGE:
         # Nothing in the (possibly stale, up to an hour old) cached pool —
         # before giving up, force one fresh reload straight from the DB.
         # This is what makes a movie uploaded 5 minutes ago still
@@ -1093,7 +1097,7 @@ DISPLAY_POOL_SIZE = 500     # fetch/rank cap for the main results list
 # time the quick 500-file list is shown instead (the old behaviour), so a
 # search never hangs. Set FULL_POOL_WAIT = 0 for the old speed-only
 # behaviour; raise it to get an accurate page count more often.
-FULL_POOL_WAIT = 2.0        # first page of a new search
+FULL_POOL_WAIT = 0.7        # first page of a new search (was 2.0 - every search with results paid it)
 FULL_POOL_WAIT_NEXT = 6.0   # NEXT / BACK taps
 
 
@@ -1108,7 +1112,7 @@ async def _fetch_display_pool(chat_id, search, pool_size):
     # instead of "Searching..." sitting on screen until Mongo unsticks.
     files, _, _ = await asyncio.wait_for(
         get_search_results(chat_id, search, max_results=pool_size, need_count=False),
-        timeout=15,
+        timeout=8,
     )
     if not files:
         return _RawEmpty()
@@ -1138,31 +1142,22 @@ async def get_display_ranked_files(chat_id, key, search, pool_size=DISPLAY_POOL_
             if files:
                 return files
         return entry["files"]
-    # 3) cold: run the quick pool AND the full pool together; use the full
-    #    one if it lands inside the time box, otherwise the quick one.
+    # 3) cold: the quick pool decides HIT or MISS first. The big 50,000-file pool is started
+    #    only AFTER a hit (it used to start together with the quick one, so every search -
+    #    even "movie not available" - also paid for a 50,000-file fetch). A definite miss
+    #    is answered immediately.
+    files = await _fetch_display_pool(chat_id, search, pool_size)
+    if isinstance(files, _RawEmpty):
+        DISPLAY_CACHE[key] = {"files": [], "ts": datetime.now().timestamp()}
+        _prune_cache(DISPLAY_CACHE, DISPLAY_CACHE_TTL)
+        return []
     full_task = _season_task(chat_id, key, search)
-    quick_task = asyncio.ensure_future(_fetch_display_pool(chat_id, search, pool_size))
-    quick_task.add_done_callback(lambda t: t.cancelled() or t.exception())  # no "never retrieved" warning
     if wait:
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        await asyncio.wait({full_task, quick_task}, timeout=wait, return_when=asyncio.FIRST_COMPLETED)
-        # ⚡ Definite miss (the DB has nothing for this search): answer NOW
-        # instead of also waiting on the 50k-file pool, which cannot find more.
-        if (quick_task.done() and not quick_task.cancelled()
-                and quick_task.exception() is None
-                and isinstance(quick_task.result(), _RawEmpty)):
-            DISPLAY_CACHE[key] = {"files": [], "ts": datetime.now().timestamp()}
-            _prune_cache(DISPLAY_CACHE, DISPLAY_CACHE_TTL)
-            return []
-        remaining = wait - (loop.time() - started)
-        if remaining > 0 and not full_task.done():
-            await asyncio.wait({full_task}, timeout=remaining)
-        files = _fresh_full_pool(key)
-        if files:
-            quick_task.cancel()
-            return files
-    files = await quick_task
+        # give the full pool a short moment (exact page count); otherwise show the quick list
+        await asyncio.wait({full_task}, timeout=wait)
+        full = _fresh_full_pool(key)
+        if full:
+            return full
     DISPLAY_CACHE[key] = {"files": files, "ts": datetime.now().timestamp()}
     _prune_cache(DISPLAY_CACHE, DISPLAY_CACHE_TTL)
     return files
