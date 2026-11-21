@@ -1,11 +1,13 @@
 import re
 import os
 import math
+import time
+import json as _json
+import asyncio
 import logging
 import hashlib
 import hmac
-import json as _json
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 
 import aiohttp
 from aiohttp import web
@@ -13,7 +15,7 @@ from info import *
 
 from TechVJ.bot import multi_clients, work_loads
 from TechVJ.server.exceptions import FIleNotFound, InvalidHash
-from TechVJ.util.custom_dl import ByteStreamer
+from TechVJ.util.custom_dl import ByteStreamer, file_id_from_message, remember_file_id
 from TechVJ.util.render_template import render_page
 from TechVJ.util.file_properties import get_hash, get_name
 
@@ -28,6 +30,15 @@ WEBAPP_DIR = os.path.normpath(
 routes = web.RouteTableDef()
 class_cache = {}
 
+
+def _get_streamer(client):
+    tg = class_cache.get(client)
+    if not tg:
+        tg = ByteStreamer(client)
+        class_cache[client] = tg
+    return tg
+
+
 # ---------------- ROOT (Health Check) ----------------
 @routes.get("/", allow_head=True)
 async def root(request):
@@ -35,7 +46,11 @@ async def root(request):
 
 
 # ---------------- WATCH PAGE (HTML PLAYER) ----------------
-@routes.get(r"/watch/{path:\S+}", allow_head=True)
+# NOTE on the "{path:.+}" patterns in this file: they used to be "{path:\S+}".
+# Newer aiohttp versions match the route against the DECODED path, where a
+# file name like "My%20Movie.mkv" has become "My Movie.mkv" - and \S+ refuses
+# spaces, so every file with a space in its name answered 404.
+@routes.get(r"/watch/{path:.+}", allow_head=True)
 async def watch_page(request: web.Request):
     path = request.match_info["path"]
     match = re.search(r"(\d+)", path)
@@ -54,16 +69,54 @@ async def watch_page(request: web.Request):
     except FIleNotFound:
         raise web.HTTPNotFound()
     except Exception as e:
-        # Was silently turning every failure (network hiccup, TMDB timeout,
-        # etc.) into an indistinguishable 404 with no trace in the logs.
         logging.exception(f"watch_page failed for id={id}: {e}")
         raise web.HTTPNotFound()
 
 
 # ---------------- MINI APP (GOFLIX HOME PAGE) ----------------
+# The new player lives in webapp/goflix_player.css + webapp/goflix_player.js.
+# They are injected into goflix_home.html right here, when the page is served,
+# so goflix_home.html itself does not have to be edited. If either file is
+# missing the page is served exactly as before.
+_APP_ASSETS = ("goflix_player.css", "goflix_player.js")
+_app_cache = {"key": None, "html": None}
+
+
+def _app_html():
+    page = os.path.join(WEBAPP_DIR, "goflix_home.html")
+    paths = [page] + [os.path.join(WEBAPP_DIR, n) for n in _APP_ASSETS]
+    try:
+        key = tuple(os.stat(p).st_mtime_ns for p in paths)
+    except OSError:
+        return None
+    if _app_cache["key"] != key:
+        with open(page, encoding="utf-8") as f:
+            html_ = f.read()
+        v = str(max(key))
+        inject = (
+            f'<link rel="stylesheet" href="/app-assets/goflix_player.css?v={v}">\n'
+            f'<script src="/app-assets/goflix_player.js?v={v}"></script>\n'
+        )
+        idx = html_.rfind("</body>")
+        html_ = html_ + inject if idx == -1 else html_[:idx] + inject + html_[idx:]
+        _app_cache.update(key=key, html=html_)
+    return _app_cache["html"]
+
+
 @routes.get("/app", allow_head=True)
 async def goflix_app(request: web.Request):
-    return web.FileResponse(os.path.join(WEBAPP_DIR, "goflix_home.html"))
+    page = _app_html()
+    if page is None:
+        return web.FileResponse(os.path.join(WEBAPP_DIR, "goflix_home.html"))
+    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+@routes.get(r"/app-assets/{name}", allow_head=True)
+async def goflix_app_asset(request: web.Request):
+    name = request.match_info["name"]
+    if name not in _APP_ASSETS:
+        raise web.HTTPNotFound()
+    return web.FileResponse(os.path.join(WEBAPP_DIR, name), headers={"Cache-Control": "no-cache"})
 
 
 # ---------------- UPI APP REDIRECT PAGE (PhonePe / GPay / Paytm / Navi buttons) ----------------
@@ -95,6 +148,74 @@ async def upi_open_page(request: web.Request):
     if app_key and app_key not in UPI_APPS:
         raise web.HTTPNotFound()
     page = render_open_page(app_key or None, request.headers.get("User-Agent", ""))
+    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
+
+
+def html_escape(s):
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+# ---------------- "PLAY IN VLC / MX PLAYER" LAUNCHER PAGE ----------------
+# Telegram's Mini App can only hand https links to the phone's browser, so the
+# player's VLC button opens THIS page in the browser, and this page launches
+# the player app (Android intent / iOS vlc-x-callback). Same idea as /open above.
+# Must stay above the catch-all "/{path}" route.
+_VLC_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Play in VLC - GOFLIX</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box;margin:0}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(900px 480px at 50% -10%,#3a0509,#07080d 62%);color:#f4f5f8;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.card{width:100%;max-width:420px;background:#12141d;border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:26px 22px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.logo{font-weight:900;letter-spacing:2px;font-size:20px;margin-bottom:16px}.logo b{color:#e50914}
+h1{font-size:18px;margin-bottom:6px}.sub{color:#9aa0ae;font-size:13px;line-height:1.5;margin-bottom:18px;word-break:break-word}
+button{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:15px;margin-top:10px;border-radius:14px;border:1px solid rgba(255,255,255,.1);background:#1b1e2b;color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+button:active{transform:scale(.98)}.vlc{background:linear-gradient(135deg,#ff9a1f,#ff5e00);border:0}.mx{background:#2563eb;border:0}
+.hint{margin-top:16px;color:#9aa0ae;font-size:12px;line-height:1.5}.hide{display:none}
+</style></head><body><div class="card">
+<div class="logo">GO<b>FLIX</b></div>
+<h1>Play in an external player</h1>
+<p class="sub">__TITLE__</p>
+<button class="vlc" id="vlc">&#9654; Open in VLC</button>
+<button class="mx" id="mx">&#9654; Open in MX Player</button>
+<button id="any">Choose another app</button>
+<button id="copy">Copy stream link</button>
+<p class="hint" id="hint">Tap a button. If nothing opens, install the app first, or copy the link and paste it in VLC &rsaquo; Media &rsaquo; Open Network Stream.</p>
+</div>
+<script>
+const D=__DATA__;
+const ua=navigator.userAgent,android=/Android/i.test(ua),ios=/iPhone|iPad|iPod/i.test(ua);
+const $=id=>document.getElementById(id),hint=t=>{$('hint').textContent=t};
+function intent(pkg,store){const u=new URL(D.url);let s='intent://'+u.host+u.pathname+u.search+'#Intent;scheme='+u.protocol.slice(0,-1)+';action=android.intent.action.VIEW;type=video/*;';if(pkg)s+='package='+pkg+';';s+='S.title='+encodeURIComponent(D.title)+';';if(store)s+='S.browser_fallback_url='+encodeURIComponent(store)+';';return s+'end'}
+async function copy(){try{await navigator.clipboard.writeText(D.url)}catch(e){const t=document.createElement('textarea');t.value=D.url;document.body.appendChild(t);t.select();try{document.execCommand('copy')}catch(_){}t.remove()}hint('Link copied. In VLC: Media > Open Network Stream > paste it.')}
+$('vlc').onclick=()=>{if(android)location.href=intent('org.videolan.vlc','https://play.google.com/store/apps/details?id=org.videolan.vlc');else if(ios)location.href='vlc-x-callback://x-callback-url/stream?url='+encodeURIComponent(D.url);else copy()};
+$('mx').onclick=()=>{if(android)location.href=intent('com.mxtech.videoplayer.ad','https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad');else copy()};
+$('any').onclick=()=>{if(android)location.href=intent('');else copy()};
+$('copy').onclick=copy;
+if(!android){$('mx').classList.add('hide');$('any').classList.add('hide')}
+if(D.auto==='vlc')setTimeout(()=>$('vlc').click(),350);
+if(D.auto==='mx')setTimeout(()=>$('mx').click(),350);
+</script></body></html>"""
+
+
+@routes.get(r"/vlc/{path:.+}", allow_head=True)
+async def vlc_open_page(request: web.Request):
+    path = request.match_info["path"]
+    match = re.search(r"(\d+)", path)
+    secure_hash = request.rel_url.query.get("hash", "")
+    if not match or not re.fullmatch(r"[A-Za-z0-9_\-]{1,32}", secure_hash):
+        raise web.HTTPNotFound()
+    id = int(match.group(1))
+    name = path.split("/", 1)[1] if "/" in path else "GOFLIX"
+    title = (request.rel_url.query.get("t") or re.sub(r"\.[A-Za-z0-9]{2,4}$", "", name) or "GOFLIX")[:200]
+    auto = request.rel_url.query.get("app", "")
+    auto = auto if auto in ("vlc", "mx") else ""
+    stream_url = f"{URL.rstrip('/')}/{id}/{quote(name, safe='')}?hash={secure_hash}"
+    data = (
+        _json.dumps({"url": stream_url, "title": title, "auto": auto})
+        .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    )
+    page = _VLC_PAGE.replace("__TITLE__", html_escape(title)).replace("__DATA__", data)
     return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
@@ -278,13 +399,17 @@ _LANGUAGE_PATTERNS = [
 def _detect_languages(filename):
     """Best-effort: which configured languages are tagged in this filename
     (e.g. "...HIN ENG..." -> ["hin","eng"]). A file can match more than one
-    (dual-audio releases)."""
+    (dual-audio releases). They come back in the order they appear in the
+    filename, so the first one is the language the file most likely plays by
+    default."""
     name = filename or ""
     found = []
     for code, patterns in _LANGUAGE_PATTERNS:
-        if any(p.search(name) for p in patterns):
-            found.append(code)
-    return found
+        starts = [m.start() for m in (p.search(name) for p in patterns) if m]
+        if starts:
+            found.append((min(starts), code))
+    found.sort()
+    return [code for _, code in found]
 
 
 def guess_title_from_filename(filename):
@@ -347,6 +472,61 @@ async def search_database(request: web.Request):
 
 
 # ---------------- QUALITIES: list every matching file for a title ----------------
+def _cmp_title(s):
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+# Words that may sit between a title and its year/quality tag without making it
+# a different title ("Avatar Tamil 720p" is still Avatar; "Avatar The Way Of
+# Water 2022" is not).
+_TITLE_HARD_STOP = re.compile(
+    r"(19\d{2}|20\d{2}|\d{3,4}p|4k|2k|s\d{1,2}e\d{1,3}|s\d{1,2}|hdrip|webrip|web|bluray|brrip|"
+    r"dvdrip|hdtv|hdcam|x264|x265|hevc|avc|aac|dd|ddp\d*|esubs?|mkv|mp4|avi|\d+gb|\d+mb)"
+)
+_TITLE_SOFT_WORDS = {a for l in LANGUAGES for a in l["aliases"]} | {
+    "dual", "audio", "multi", "org", "original", "hq", "uncut", "extended", "proper", "hd",
+    "full", "movie", "film", "amzn", "nf", "zee5", "hotstar", "dsnp",
+}
+
+
+def _same_title(file_name, want_tokens):
+    toks = _cmp_title(file_name).split()
+    n = len(want_tokens)
+    for i in range(len(toks) - n + 1):
+        if toks[i:i + n] == want_tokens:
+            for t in toks[i + n:]:
+                if _TITLE_HARD_STOP.fullmatch(t):
+                    return True
+                if t not in _TITLE_SOFT_WORDS:
+                    return False
+            return True
+    return False
+
+
+async def _collect_files(user_id, title, year, season, episode, limit=60):
+    """Every file in the DB that belongs to this title (up to `limit`).
+
+    Episodes: the first query that finds anything wins (SxxEyy, then year, then
+    plain title), exactly as before. Movies: the "title year" hit is used, and
+    files of the SAME title whose name just lacks the year are added to it -
+    before, those were silently dropped, which made languages and qualities
+    that really exist in the DB disappear from the picker."""
+    queries = _build_queries(title, year, season, episode)
+    results = await asyncio.gather(*[
+        get_search_results(user_id, q, max_results=limit, need_count=False) for q in queries
+    ])
+    results = [r[0] for r in results]
+    first = next((r for r in results if r), [])
+    if season and episode or not year or not results[0] or len(results) < 2:
+        return first[:limit]
+    want = _cmp_title(normalize_query(title)).split()
+    merged = {f["file_id"]: f for f in results[0]}
+    for f in results[-1]:
+        if _same_title(f.get("file_name", ""), want):
+            merged.setdefault(f["file_id"], f)
+    return list(merged.values())[:limit]
+
+
 @routes.post("/api/qualities")
 async def list_qualities(request: web.Request):
     try:
@@ -367,26 +547,25 @@ async def list_qualities(request: web.Request):
     if premium_block:
         return premium_block
 
-    queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
-    files = []
-    for q in queries:
-        files, _, _ = await get_search_results(user_id, q, max_results=10, need_count=False)
-        if files:
-            break
+    files = await _collect_files(user_id, title, body.get("year"), body.get("season"), body.get("episode"))
 
-    results = [
-        {
+    results = []
+    for f in files:
+        try:
+            nbytes = int(f.get("file_size") or 0)
+        except (TypeError, ValueError):
+            nbytes = 0
+        results.append({
             "file_id": f["file_id"],
             "name": f.get("file_name", ""),
             "quality": parse_quality(f.get("file_size")),
             "size": format_size(f.get("file_size")),
+            "bytes": nbytes,
             "languages": _detect_languages(f.get("file_name", "")),
-        }
-        for f in files
-    ]
-    # Best quality first.
+        })
+    # Best quality first, biggest file first inside the same quality.
     order = {"4K": 0, "2K": 1, "1080p": 2, "720p": 3, "480p": 4, "SD": 5}
-    results.sort(key=lambda r: order.get(r["quality"], 9))
+    results.sort(key=lambda r: (order.get(r["quality"], 9), -r["bytes"]))
 
     return web.json_response({"files": results})
 
@@ -460,6 +639,7 @@ async def browse_language(request: web.Request):
             "name": f.get("file_name", ""),
             "quality": parse_quality(f.get("file_size")),
             "size": format_size(f.get("file_size")),
+            "languages": _detect_languages(f.get("file_name", "")),
         }
         for f in files
     ]
@@ -470,8 +650,62 @@ async def browse_language(request: web.Request):
 # Mirrors what plugins/pm_filter.py's "generate_stream_link" callback does:
 # find the matching stored file, check premium, forward it to LOG_CHANNEL,
 # and hand back the fresh message id + hash that /watch and the direct
-# stream route expect. Nothing is pre-stored — this happens live per tap,
-# same as the bot's own Watch button.
+# stream route expect.
+#
+# Forwarding a file to LOG_CHANNEL takes a second or more and posts a new
+# message every time. Switching language/quality in the player (or just
+# reopening a movie) used to forward the very same file again and again, which
+# was slow and could trigger Telegram flood limits. The result is now cached
+# per file for a few hours, and the stream is "warmed up" (file properties +
+# Telegram media session) before the player asks for the first byte.
+_RESOLVE_TTL = 6 * 3600
+_resolve_cache = {}   # file_id -> (timestamp, {"id", "hash", "name"})
+_resolve_locks = {}   # file_id -> asyncio.Lock (one forward per file at a time)
+
+
+async def _warm_stream(client, file_id):
+    try:
+        await _get_streamer(client).generate_media_session(client, file_id)
+    except Exception as e:
+        logging.debug(f"stream warm-up skipped: {e!r}")
+
+
+async def _forward_to_log(client, file_id):
+    log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=file_id)
+    try:
+        fid = file_id_from_message(log_msg)
+        if fid:
+            remember_file_id(log_msg.id, fid)
+            asyncio.ensure_future(_warm_stream(client, fid))
+    except Exception as e:  # warming is only an optimisation - never fail the request over it
+        logging.debug(f"stream warm-up skipped: {e!r}")
+    return {"id": log_msg.id, "hash": get_hash(log_msg), "name": get_name(log_msg)}
+
+
+async def _resolve_one(client, file_id, fresh=False):
+    def cached():
+        hit = _resolve_cache.get(file_id)
+        if hit and not fresh and time.time() - hit[0] < _RESOLVE_TTL:
+            return hit[1]
+        return None
+
+    data = cached()
+    if data:
+        return data
+    if len(_resolve_locks) > 2000:
+        _resolve_locks.clear()
+    async with _resolve_locks.setdefault(file_id, asyncio.Lock()):
+        data = cached()
+        if data:
+            return data
+        data = await _forward_to_log(client, file_id)
+        if len(_resolve_cache) > 2000:
+            for key in sorted(_resolve_cache, key=lambda k: _resolve_cache[k][0])[:500]:
+                _resolve_cache.pop(key, None)
+        _resolve_cache[file_id] = (time.time(), data)
+        return data
+
+
 @routes.post("/api/resolve")
 async def resolve_stream(request: web.Request):
     try:
@@ -482,6 +716,7 @@ async def resolve_stream(request: web.Request):
     init_data = body.get("init_data", "")
     explicit_file_id = body.get("file_id")
     title = (body.get("title") or "").strip()
+    fresh = bool(body.get("fresh"))  # player asks for this after a dead link
 
     if not explicit_file_id and not title:
         raise web.HTTPBadRequest(text="missing 'file_id' or 'title'")
@@ -511,11 +746,11 @@ async def resolve_stream(request: web.Request):
 
     index = min(work_loads, key=work_loads.get)
     client = multi_clients[index]
-    log_msg = None
+    result = None
     last_error = None
     for candidate in candidates:
         try:
-            log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=candidate["file_id"])
+            result = await _resolve_one(client, candidate["file_id"], fresh)
             break
         except Exception as e:
             # This specific match's stored file_id is bad/corrupted (e.g. MediaEmpty) —
@@ -528,7 +763,7 @@ async def resolve_stream(request: web.Request):
     # this is what "MEDIA_EMPTY" means) and we haven't already tried a
     # title search, fall back to one now so a single bad copy doesn't kill
     # the whole request when a working copy of the same title exists.
-    if log_msg is None and title:
+    if result is None and title:
         already_tried = {c.get("file_id") for c in candidates}
         queries = _build_queries(title, body.get("year"), body.get("season"), body.get("episode"))
         fallback_candidates = []
@@ -539,15 +774,15 @@ async def resolve_stream(request: web.Request):
                 break
         for candidate in fallback_candidates:
             try:
-                log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=candidate["file_id"])
+                result = await _resolve_one(client, candidate["file_id"], fresh)
                 break
             except Exception as e:
                 last_error = e
                 logging.warning(f"send_cached_media failed for a fallback candidate, trying next: {e}")
                 continue
 
-    if log_msg is None:
-        logging.exception(last_error)
+    if result is None:
+        logging.error(f"resolve failed: {last_error!r}")
         # Every candidate we tried was rejected by Telegram (MEDIA_EMPTY etc.)
         # — that's "found it, but it's corrupted/deleted", not a server crash,
         # so tell the frontend clearly instead of a bare 500.
@@ -556,13 +791,7 @@ async def resolve_stream(request: web.Request):
             status=502,
         )
 
-    return web.json_response(
-        {
-            "id": log_msg.id,
-            "hash": get_hash(log_msg),
-            "name": get_name(log_msg),
-        }
-    )
+    return web.json_response(result)
 
 
 # ---------------- DOWNLOAD ----------------
@@ -571,7 +800,7 @@ async def resolve_stream(request: web.Request):
 # if the catch-all "/{path:\S+}" came first (as it previously did), it would
 # swallow every "/download/..." request itself, streaming it inline instead
 # of as an attachment. That's why Download was opening the web player.
-@routes.get(r"/download/{path:\S+}", allow_head=True)
+@routes.get(r"/download/{path:.+}", allow_head=True)
 async def download_handler(request: web.Request):
     path = request.match_info["path"]
     match = re.search(r"(\d+)", path)
@@ -591,7 +820,7 @@ async def download_handler(request: web.Request):
 
 
 # ---------------- DIRECT STREAM (ROOT PATH – REQUIRED FOR VLC/MX) ----------------
-@routes.get(r"/{path:\S+}", allow_head=True)
+@routes.get(r"/{path:.+}", allow_head=True)
 async def direct_stream_handler(request: web.Request):
     path = request.match_info["path"]
     match = re.search(r"(\d+)", path)
@@ -613,6 +842,35 @@ async def direct_stream_handler(request: web.Request):
 
 
 # ---------------- CORE STREAMER ----------------
+def _parse_range(header, file_size):
+    """-> (start, end, is_partial), or None if the range can't be satisfied.
+    Handles bytes=a-b, bytes=a- and bytes=-n, clamps an end past the file (as
+    browsers expect) and ignores anything it doesn't understand (multi-range)
+    by serving the whole file."""
+    if not header:
+        return 0, file_size - 1, False
+    m = re.fullmatch(r"\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*", header)
+    if not m or not (m.group(1) or m.group(2)):
+        return 0, file_size - 1, False
+    first, last = m.groups()
+    if first == "":
+        n = int(last)
+        if n == 0:
+            return None
+        start, end = max(0, file_size - n), file_size - 1
+    else:
+        start = int(first)
+        end = min(int(last), file_size - 1) if last else file_size - 1
+    if start >= file_size or start > end:
+        return None
+    return start, end, True
+
+
+def _content_disposition(inline, name):
+    ascii_name = re.sub(r'[^\x20-\x7e]|["\\]', "_", name) or "file"
+    return f"{'inline' if inline else 'attachment'}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+
+
 async def media_streamer(
     request: web.Request,
     id: int,
@@ -623,34 +881,26 @@ async def media_streamer(
 
     # pick least-loaded client, but don't let one flaky client session turn
     # into a false 404 — if it can't resolve the file, try the others before
-    # giving up. (This is the fix for "file forwarded to the log channel
-    # fine, but the stream/watch URL still 404s": a single client's session
-    # occasionally can't resolve a very-recently-forwarded message yet.)
-    tried = set()
+    # giving up.
     file_id = None
     last_err = None
-    ordered_indexes = sorted(work_loads, key=work_loads.get)
-    for index in ordered_indexes:
-        if index in tried:
-            continue
-        tried.add(index)
-        client = multi_clients[index]
-        tg = class_cache.get(client)
-        if not tg:
-            tg = ByteStreamer(client)
-            class_cache[client] = tg
+    index = tg = None
+    for idx in sorted(work_loads, key=work_loads.get):
+        client = multi_clients[idx]
+        streamer = _get_streamer(client)
         try:
-            file_id = await tg.get_file_properties(id)
+            file_id = await streamer.get_file_properties(id)
+            index, tg = idx, streamer
             break
         except FIleNotFound:
             raise
         except Exception as e:
             last_err = e
-            logging.warning(f"get_file_properties failed on client {index} for id={id}, trying next: {e}")
+            logging.warning(f"get_file_properties failed on client {idx} for id={id}, trying next: {e}")
             continue
 
     if file_id is None:
-        logging.exception(last_err)
+        logging.warning(f"no client could resolve id={id}: {last_err!r}")
         raise FIleNotFound
 
     if file_id.unique_id[:6] != secure_hash:
@@ -658,28 +908,18 @@ async def media_streamer(
 
     file_size = file_id.file_size
     file_name = file_id.file_name or "file.bin"
+    if not file_size:
+        raise FIleNotFound
 
-    # ---------------- RANGE PARSING (SAFE) ----------------
-    if range_header:
-        match = re.match(r"bytes=(\d+)-(\d*)", range_header)
-        if match:
-            start = int(match.group(1))
-            end = int(match.group(2)) if match.group(2) else file_size - 1
-            status = 206
-        else:
-            start = 0
-            end = file_size - 1
-            status = 200
-    else:
-        start = 0
-        end = file_size - 1
-        status = 200
-
-    if start < 0 or end >= file_size or start > end:
+    # ---------------- RANGE PARSING ----------------
+    parsed = _parse_range(range_header, file_size)
+    if parsed is None:
         return web.Response(
             status=416,
             headers={"Content-Range": f"bytes */{file_size}"}
         )
+    start, end, partial = parsed
+    status = 206 if partial else 200
 
     # ---------------- STREAM SETUP ----------------
     chunk_size = 1024 * 1024
@@ -691,16 +931,10 @@ async def media_streamer(
 
     # ---------------- MIME FIX (CRITICAL FOR VLC/MX AND THE IN-BROWSER PLAYER) ----------------
     # Telegram frequently drops/mangles mime_type on video uploads (or hands
-    # back a generic "application/octet-stream"). The old fallback only
-    # covered .mp4/.mkv/.avi and defaulted everything else — including a
-    # perfectly playable .mov/.webm/.m4v/.ts, or an mp4 with a weird mime —
-    # to application/octet-stream. Browsers refuse to even attempt inline
-    # playback for that content-type, so the <video> tag fires an instant
-    # "error" event and the app wrongly falls back to "open in VLC/MX" for
-    # files that could have played fine in-browser. Trust an existing
+    # back a generic "application/octet-stream"). Browsers refuse to even
+    # attempt inline playback for that content-type, so trust an existing
     # video/* mime as-is; otherwise map by extension; otherwise assume
-    # video/mp4 (this bot only ever serves videos) instead of a type that
-    # guarantees browser refusal.
+    # video/mp4 (this bot only ever serves videos).
     mime = file_id.mime_type
     if not mime or not mime.startswith("video/"):
         ext_map = {
@@ -716,26 +950,26 @@ async def media_streamer(
         lower_name = file_name.lower()
         mime = next((v for ext, v in ext_map.items() if lower_name.endswith(ext)), "video/mp4")
 
-    response = web.StreamResponse(
-        status=status,
-        headers={
-            "Content-Type": mime,
-            "Content-Length": str(length),
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Disposition": (
-                f'inline; filename="{file_name}"'
-                if inline else
-                f'attachment; filename="{file_name}"'
-            ),
-            "Cache-Control": "no-store",
-            "Connection": "keep-alive",
-        }
-    )
+    headers = {
+        "Content-Type": mime,
+        "Content-Length": str(length),
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": _content_disposition(inline, file_name),
+        "Cache-Control": "no-store",
+    }
+    if partial:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 
+    # HEAD: headers only. The player uses it to find out whether a link is
+    # still alive (404/403) or the file just can't be decoded.
+    if request.method == "HEAD":
+        return web.Response(status=status, headers=headers)
+
+    response = web.StreamResponse(status=status, headers=headers)
     await response.prepare(request)
 
-    async for chunk in tg.yield_file(
+    sent = 0
+    agen = tg.yield_file(
         file_id,
         index,
         offset,
@@ -743,8 +977,25 @@ async def media_streamer(
         last_cut,
         part_count,
         chunk_size
-    ):
-        await response.write(chunk)
+    )
+    try:
+        async for chunk in agen:
+            await response.write(chunk)
+            sent += len(chunk)
+    except (ConnectionResetError, ConnectionError):
+        # The player left (seek, quality switch, closed the video). Normal.
+        return response
+    finally:
+        await agen.aclose()
+
+    if sent < length:
+        # Telegram stopped delivering part-way. Closing the connection makes the
+        # player notice at once and re-request from where it stopped; ending the
+        # response quietly would leave it waiting for bytes that never come.
+        logging.warning(f"stream for id={id} ended early: sent {sent} of {length} bytes")
+        if request.transport is not None:
+            request.transport.close()
+        return response
 
     await response.write_eof()
     return response
