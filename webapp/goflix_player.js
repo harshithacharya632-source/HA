@@ -1,7 +1,9 @@
-/* GOFLIX player v2.
+/* GOFLIX player v3.
    Loaded after the main app script (plugins/route.py injects it into /app).
    It replaces the built-in player and the "watch" sheet flow:
-   movie -> language (only if there is more than one) -> plays at once, with
+   movie -> language (only if there is more than one) -> plays at once - inside the
+   banner of the detail page (Hotstar-style, pinned while you scroll) with a fullscreen
+   button, or fullscreen when started from a home row - with
    language / quality / speed / volume switching and VLC / MX Player inside
    the player. Downloads still use the original quality picker. */
 (() => {
@@ -60,7 +62,7 @@ function autoRank() {
   }
   let p = null;
   try { p = effectivePreferredQuality(); } catch (e) {}
-  return p && p in RANK ? RANK[p] : RANK["1080p"];
+  return p && p in RANK ? RANK[p] : RANK["720p"];
 }
 /* Best file for a language + quality. A file that may not play in a browser
    (HEVC / 10-bit / AC3 / DTS ...) loses to a playable one that is close in
@@ -86,6 +88,7 @@ const streamUrl = r => buildStreamUrls(r).directStreamUrl;
 /* ------------------------------------------------------------------ icons */
 const I = {
   back: '<svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>',
+  close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path class="f" d="M8 5v14l11-7z"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><path class="f" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
   replay: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>',
@@ -99,7 +102,7 @@ const I = {
   fs: '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
   lock: '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   unlock: '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>',
-  cone: '<svg viewBox="0 0 24 24"><path class="f" d="M12 2.5l6.4 17.5H5.6z"/><path d="M9.3 10.5h5.4M7.9 14.8h8.2" stroke="#ff6a00" stroke-width="2.2"/><path class="f" d="M4 21h16v1.5H4z"/></svg>',
+  cone: '<svg viewBox="0 0 24 24"><path class="f" d="M12 2.5l6.4 17.5H5.6z"/><path d="M9.3 10.5h5.4M7.9 14.8h8.2" stroke="#111" stroke-width="2.2"/><path class="f" d="M4 21h16v1.5H4z"/></svg>',
   check: '<svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>',
   retry: '<svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>',
 };
@@ -143,6 +146,7 @@ root.innerHTML = `
   </div>
 </div>
 <button class="gx-ib gx-lock" id="gxLock" aria-label="Lock controls">${I.lock}</button>
+<button class="gx-suggest" id="gxSuggest" hidden></button>
 <div class="gx-toast" id="gxToast"></div>
 <div class="gx-mw" id="gxMw"><div class="gx-menu" id="gxMenu"></div></div>
 <div class="gx-err" id="gxErr">
@@ -165,6 +169,8 @@ const S = {
   lastTap: 0, lastSide: null, acc: 0, accT: 0, accSide: null,
   seeking: false, dragT: 0, locked: false, brightness: 1, fill: false, speed: 1,
   histDone: false, lastSave: 0, wake: null, menu: null, slowToast: false, volWarned: false,
+  inline: false, full: false, hero: null, nfs: false, sysFs: false,
+  lastData: 0, loadStart: 0, waitAt: 0, netT: 0, sugT: 0, sugAt: -1e9, stalls: [], loadSub: "",
 };
 
 /* ------------------------------------------------------------------ small UI helpers */
@@ -321,8 +327,11 @@ function load(url, o) {
   S.errored = false;
   E.err.classList.remove("on");
   clearTimeout(S.stallT); clearTimeout(S.bufT); clearTimeout(S.loadT);
-  /* no first frame after 20s: Telegram or the link is stuck - retry instead of spinning forever */
-  S.loadT = setTimeout(() => { if (S.open && S.pending && S.url === url) recover(false); }, 20000);
+  S.loadStart = S.lastData = performance.now();
+  netReset();
+  /* Only when NO data at all arrives for ~18s is the link treated as stuck. A slow but moving
+     download is left alone - restarting it every 20s is what kept big files from ever loading. */
+  S.loadT = setTimeout(loadTick, 3000);
   v.pause();
   v.defaultPlaybackRate = S.speed;
   v.src = url;
@@ -335,29 +344,84 @@ function play() {
     if (err && err.name === "NotAllowedError") { loader(false); unfreeze(); showUI(true); toast("Tap play to start"); }
   });
 }
-function bufStart() {
+const NET = { t: 0, b: 0, ema: 0 };
+function netReset() { NET.t = 0; NET.b = 0; NET.ema = 0; }
+/* Download speed estimated from how fast the buffered range grows x the file's bitrate. */
+function netSample() {
+  if (!v.duration || !S.file || !S.file.bytes) return;
+  const now = performance.now(), b = bufEnd();
+  if (!NET.t) { NET.t = now; NET.b = b; return; }
+  const dt = (now - NET.t) / 1000;
+  if (dt < 0.9) return;
+  const db = b - NET.b;
+  NET.t = now; NET.b = b;
+  if (db < 0 || db > 120) return;          // a seek / new range, not a download sample
+  const bps = db * (S.file.bytes / v.duration) / dt;
+  NET.ema = NET.ema ? NET.ema * 0.6 + bps * 0.4 : bps;
+}
+function netText() {
+  if (NET.ema > 0 && v.duration) {
+    return Math.round(Math.max(0, bufEnd() - v.currentTime)) + "s buffered · " + (NET.ema / 1048576).toFixed(1) + " MB/s";
+  }
+  return S.loadSub || "";
+}
+function netLoop() {
+  if (!S.open) return;
+  netSample();
+  if (E.loader.classList.contains("on")) E.ls.textContent = netText();
+  S.netT = setTimeout(netLoop, 1000);
+}
+function bumpData() { S.lastData = performance.now(); }
+function loadTick() {
+  if (!S.open || !S.pending) return;
+  const now = performance.now();
+  if (now - S.lastData > 18000) return recover(false);
+  if (now - S.loadStart > 10000) suggestLower();
+  S.loadT = setTimeout(loadTick, 3000);
+}
+/* "Slow network - switch to 480p" - one tap, never forced. */
+function suggestLower() {
+  const now = performance.now();
+  if (!S.file || !S.open || S.locked || now - S.sugAt < 90000) return;
+  const cur = RANK[S.file.quality] || 0;
+  const lower = S.files
+    .filter(f => !f._bad && inLang(f, S.lang) && (RANK[f.quality] || 0) < cur)
+    .sort((a, b) => (RANK[b.quality] || 0) - (RANK[a.quality] || 0) || (a.bytes || 0) - (b.bytes || 0))[0];
+  if (!lower) return;
+  S.sugAt = now;
+  E.suggest.textContent = "Slow network - switch to " + lower.quality + (lower.size ? " (" + lower.size + ")" : "");
+  E.suggest.hidden = false;
+  E.suggest.onclick = () => { E.suggest.hidden = true; switchTo(lower, S.lang); };
+  clearTimeout(S.sugT);
+  S.sugT = setTimeout(() => { E.suggest.hidden = true; }, 10000);
+}
+function bufStart(isStall) {
   clearTimeout(S.bufT);
-  S.bufT = setTimeout(() => { if (S.open && !v.paused && !S.errored) loader(true, "Buffering…", "", true); }, 350);
+  const now = performance.now();
+  S.waitAt = now;
+  if (isStall) {
+    S.stalls = S.stalls.filter(t => now - t < 60000);
+    S.stalls.push(now);
+    if (S.stalls.length >= 3) suggestLower();
+  }
+  S.bufT = setTimeout(() => { if (S.open && !v.paused && !S.errored) loader(true, "Buffering…", netText(), true); }, 350);
   armStall();
 }
 function bufDone() {
   clearTimeout(S.bufT); clearTimeout(S.stallT);
   if (!S.pending) loader(false);
 }
-/* Not "no timeupdate for 10s" like before (that fired during every slow seek
-   and restarted the video). Only when NO new data has arrived for 12s do we
-   treat the connection as dead. */
+/* A stalled video is only restarted when NO new data has arrived for 12s (before it was "no
+   timeupdate for 10s", which fired during every slow seek and restarted the video). */
 function armStall() {
   clearTimeout(S.stallT);
-  const snap = bufEnd();
   S.stallT = setTimeout(() => {
     if (!S.open || S.pending || S.errored || v.paused || v.readyState >= 3) return;
-    if (bufEnd() > snap + 0.5) {
-      if (!S.slowToast) { S.slowToast = true; toast("Slow connection…"); }
-      return armStall();
-    }
-    recover(false);
-  }, 12000);
+    const now = performance.now();
+    if (now - S.lastData > 12000) return recover(false);
+    if (now - S.waitAt > 8000 && !S.slowToast) { S.slowToast = true; toast("Slow connection…"); }
+    armStall();
+  }, 3000);
 }
 async function recover(forceFresh) {
   if (!S.open || !S.file) return;
@@ -438,8 +502,20 @@ v.addEventListener("playing", () => {
   clearTimeout(S.okT);
   S.okT = setTimeout(() => { S.retries = 0; S.slowToast = false; }, 25000);
 });
-v.addEventListener("waiting", () => { if (S.started && !S.pending) bufStart(); });
-v.addEventListener("seeking", () => { if (S.started && !S.pending) bufStart(); });
+v.addEventListener("waiting", () => { if (S.started && !S.pending) bufStart(true); });
+v.addEventListener("seeking", () => { if (S.started && !S.pending) bufStart(false); });
+/* first frame is ready: start right away instead of waiting for "canplay" (instant play) */
+v.addEventListener("loadeddata", () => {
+  const p = S.pending;
+  if (p && p.autoplay && v.readyState >= 2) {
+    S.pending = null;
+    clearTimeout(S.loadT);
+    loader(true, "Starting…", netText(), false);
+    play();
+  }
+});
+["progress", "loadedmetadata", "loadeddata", "canplay", "playing", "timeupdate", "seeked", "durationchange"]
+  .forEach(t => v.addEventListener(t, bumpData));
 v.addEventListener("seeked", () => { if (!S.pending) bufDone(); });
 v.addEventListener("pause", () => { setPlayIcon(); if (S.open && !S.errored) showUI(true); unwake(); });
 v.addEventListener("play", () => { setPlayIcon(); armHide(); });
@@ -540,12 +616,24 @@ function extUrl(app) {
   return CONFIG.STREAM_BASE_URL.replace(/\/$/, "") + "/vlc/" + r.id + "/" + encodeURIComponent(r.name || "GOFLIX") +
     "?hash=" + encodeURIComponent(r.hash) + (app ? "&app=" + app : "") + "&t=" + encodeURIComponent(title);
 }
+function openLinkExt(u) {
+  try {
+    if (tg && tg.openLink) {
+      /* Telegram's built-in browser cannot hand a link over to another app (that is the
+         "Webpage not available" error), so ask for the phone's real browser instead
+         (Bot API 7.6+; older clients ignore the option). */
+      const p = String(tg.platform || "").toLowerCase();
+      const opts = p.indexOf("android") === 0 ? { try_browser: "chrome" } : (p === "ios" ? { try_browser: "safari" } : {});
+      tg.openLink(u, opts);
+      return;
+    }
+  } catch (e) {}
+  window.open(u, "_blank");
+}
 function openExternal(app) {
   if (!S.resolved) return toast("Stream isn't ready yet");
   try { v.pause(); } catch (e) {}
-  const u = extUrl(app);
-  try { if (tg && tg.openLink) { tg.openLink(u); return; } } catch (e) {}
-  window.open(u, "_blank");
+  openLinkExt(extUrl(app));
 }
 async function copyLink() {
   if (!S.resolved) return;
@@ -610,7 +698,8 @@ function menuHtml(kind) {
     row({ icon: I.cone, a: "VLC Player", b: "Best for HEVC, 4K and dual-audio files", data: 'data-ext="vlc"' }) +
     row({ icon: "MX", a: "MX Player", b: "Android", data: 'data-ext="mx"' }) +
     row({ icon: "↗", a: "Choose another app", b: "Opens your phone's app picker", data: 'data-ext="any"' }) +
-    row({ icon: "🔗", a: "Copy stream link", b: "Paste into any player", data: 'data-ext="copy"' });
+    row({ icon: "🔗", a: "Copy stream link", b: "Paste into any player", data: 'data-ext="copy"' }) +
+    '<div class="gx-note">VLC and MX open from your browser. If nothing happens, copy the link and paste it in the app under Network Stream.</div>';
 }
 function paintVolMenu() {
   const r = $id("gxRange"), m = $id("gxMute");
@@ -624,6 +713,7 @@ function openMenu(kind) {
   S.menu = kind;
   E.menu.innerHTML = '<div class="gx-mh"></div>' + menuHtml(kind);
   E.mw.classList.add("on");
+  setLift();
   showUI(true);
   if (kind === "volume") {
     const r = $id("gxRange"), m = $id("gxMute");
@@ -635,6 +725,7 @@ function openMenu(kind) {
 function closeMenu(silent) {
   S.menu = null;
   E.mw.classList.remove("on");
+  setLift();
   if (!silent) armHide();
 }
 E.mw.addEventListener("click", e => {
@@ -686,7 +777,7 @@ function skip(d) {
   v.currentTime = clamp(v.currentTime + d, 0, v.duration - 0.1);
   paintTime(v.currentTime);
 }
-bindBtn(E.back, () => closePlayer());
+bindBtn(E.back, () => { if (S.inline && S.full) setFull(false); else closePlayer(); });
 bindBtn(E.play, togglePlay);
 bindBtn(E.skipB, () => skip(-10));
 bindBtn(E.skipF, () => skip(10));
@@ -793,24 +884,56 @@ function onKey(e) {
   else if (k === "ArrowDown") { e.preventDefault(); setVolume(v.volume - 0.1); }
   else if (k === "m") v.muted = !v.muted;
   else if (k === "f") toggleFs();
-  else if (k === "Escape") { if (S.menu) closeMenu(); else if (!document.fullscreenElement) closePlayer(); }
+  else if (k === "Escape") { if (S.menu) closeMenu(); else if (S.inline && S.full) setFull(false); else if (!document.fullscreenElement) closePlayer(); }
   showUI();
 }
 
 /* ------------------------------------------------------------------ fullscreen / wake lock / media session */
-async function toggleFs() {
-  const full = document.fullscreenElement || document.webkitFullscreenElement;
+function setLift() { if (S.hero) S.hero.classList.toggle("gx-lift", S.full || !!S.menu); }
+function setBackIcon() { E.back.innerHTML = (S.inline && !S.full) ? I.close : I.back; }
+function onTgBack() { if (S.inline && S.full) setFull(false); else closePlayer(); }
+function syncTgBack() {
   try {
-    if (full) {
-      await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-      try { screen.orientation.unlock(); } catch (e) {}
-    } else {
-      const req = root.requestFullscreen || root.webkitRequestFullscreen;
-      if (req) await req.call(root); else if (tg && tg.requestFullscreen) tg.requestFullscreen();
-      try { await screen.orientation.lock("landscape"); } catch (e) {}
-    }
-  } catch (e) { try { if (tg && tg.requestFullscreen) tg.requestFullscreen(); } catch (e2) {} }
+    if (!tg || !tg.BackButton) return;
+    if (S.open && S.full) { tg.BackButton.show(); tg.BackButton.onClick(onTgBack); }
+    else { tg.BackButton.offClick(onTgBack); tg.BackButton.hide(); }
+  } catch (e) {}
 }
+/* the phone's own fullscreen / landscape (best effort - inside Telegram only some of these exist) */
+function nativeFs(on) {
+  S.nfs = !!on;
+  if (on) {
+    try { if (tg && tg.requestFullscreen) tg.requestFullscreen(); } catch (e) {}
+    try { const req = root.requestFullscreen || root.webkitRequestFullscreen; if (req) Promise.resolve(req.call(root)).catch(() => {}); } catch (e) {}
+    try { Promise.resolve(screen.orientation.lock("landscape")).catch(() => {}); } catch (e) {}
+  } else {
+    try { if (tg && tg.exitFullscreen) tg.exitFullscreen(); } catch (e) {}
+    try { if (document.fullscreenElement || document.webkitFullscreenElement) Promise.resolve((document.exitFullscreen || document.webkitExitFullscreen).call(document)).catch(() => {}); } catch (e) {}
+    try { screen.orientation.unlock(); } catch (e) {}
+  }
+}
+/* inline player: "full" = the same player stretched over the whole screen */
+function setFull(on) {
+  S.full = !!on || !S.inline;
+  root.classList.toggle("full", S.full);
+  document.body.style.overflow = S.full ? "hidden" : "";
+  setLift(); setBackIcon(); syncTgBack();
+  if (S.inline) nativeFs(!!on);
+}
+function toggleFs() {
+  if (S.inline) setFull(!S.full);
+  else nativeFs(!S.nfs);
+}
+document.addEventListener("fullscreenchange", () => {
+  const el = document.fullscreenElement || document.webkitFullscreenElement;
+  if (el === root) S.sysFs = true;
+  else if (S.sysFs) { S.sysFs = false; S.nfs = false; if (S.open && S.inline && S.full) setFull(false); }
+});
+try {
+  if (tg && tg.onEvent) tg.onEvent("fullscreenChanged", () => {
+    if (tg.isFullscreen === false && S.nfs && S.open) { S.nfs = false; if (S.inline && S.full) setFull(false); }
+  });
+} catch (e) {}
 async function wake() {
   try {
     if (navigator.wakeLock && !S.wake) {
@@ -837,21 +960,52 @@ function mediaSession() {
 }
 
 /* ------------------------------------------------------------------ open / close */
+/* Opened from the detail page: the player lives inside the banner (.detail-hero), which becomes a pinned
+   16:9 block while it plays. Anywhere else (e.g. a home row) it is a fullscreen overlay. */
+function placeRoot() {
+  const view = $id("view-detail");
+  const hero = view && view.querySelector(".detail-hero");
+  const inline = !!(view && view.classList.contains("active") && hero);
+  if (inline) {
+    hero.appendChild(root);
+    S.hero = hero;
+    hero.classList.add("gx-active");
+    const tb = document.querySelector(".topbar");
+    const th = tb && getComputedStyle(tb).display !== "none" ? Math.round(tb.getBoundingClientRect().height) : 0;
+    hero.style.top = th + "px";
+    requestAnimationFrame(() => {
+      const r = hero.getBoundingClientRect();
+      if (r.top < th - 2 || r.top > innerHeight * 0.6) window.scrollTo({ top: Math.max(0, window.scrollY + r.top - th), behavior: "smooth" });
+    });
+  } else {
+    document.body.appendChild(root);
+    S.hero = null;
+  }
+  S.inline = inline;
+  root.classList.toggle("inline", inline);
+}
 function showPlayer() {
   if (S.open) return;
   S.open = true;
+  placeRoot();
   root.classList.add("open");
   root.classList.remove("started", "ui", "locked", "fill");
-  S.locked = false; S.fill = false; S.brightness = 1; S.speed = 1;
+  S.locked = false; S.fill = false; S.brightness = 1; S.speed = 1; S.stalls = []; S.sugAt = -1e9;
+  S.full = !S.inline;
+  root.classList.toggle("full", S.full);
   root.style.setProperty("--gx-bri", 1);
   E.lock.innerHTML = I.unlock;
-  document.body.style.overflow = "hidden";
+  E.suggest.hidden = true;
+  document.body.style.overflow = S.full ? "hidden" : "";
+  setLift(); setBackIcon();
   try { if (tg && tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
-  try { if (tg && tg.BackButton) { tg.BackButton.show(); tg.BackButton.onClick(closePlayer); } } catch (e) {}
+  syncTgBack();
   document.addEventListener("keydown", onKey);
   setPlayIcon(); setVolIcon();
   E.cur.textContent = "0:00"; E.dur.textContent = "0:00";
   E.fill.style.width = "0"; E.buf.style.width = "0"; E.thumb.style.left = "0";
+  clearTimeout(S.netT);
+  S.netT = setTimeout(netLoop, 1000);
 }
 function closePlayer() {
   if (!S.open) return;
@@ -859,23 +1013,35 @@ function closePlayer() {
   S.open = false;
   S.token++;
   S.pending = null;
-  ["stallT", "bufT", "uiT", "tapT", "hudT", "hintT", "okT", "loadT", "toastT"].forEach(k => clearTimeout(S[k]));
+  ["stallT", "bufT", "uiT", "tapT", "hudT", "hintT", "okT", "loadT", "toastT", "netT", "sugT"].forEach(k => clearTimeout(S[k]));
   E.toast.classList.remove("on");
+  E.suggest.hidden = true;
   try { v.pause(); } catch (e) {}
   v.removeAttribute("src");
   try { v.load(); } catch (e) {}
   closeMenu(true);
   loader(false); unfreeze(); hideHud(); hideHint();
   E.err.classList.remove("on");
-  root.classList.remove("open", "started", "ui", "locked", "fill");
+  root.classList.remove("open", "started", "ui", "locked", "fill", "full", "inline");
   document.body.style.overflow = "";
   document.removeEventListener("keydown", onKey);
   unwake();
-  try { if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
-  try { screen.orientation.unlock(); } catch (e) {}
+  if (S.nfs || S.sysFs) nativeFs(false);
+  S.nfs = false; S.sysFs = false;
   try { if (tg && tg.enableVerticalSwipes) tg.enableVerticalSwipes(); } catch (e) {}
-  try { if (tg && tg.BackButton) { tg.BackButton.offClick(closePlayer); tg.BackButton.hide(); } } catch (e) {}
+  if (S.hero) { S.hero.classList.remove("gx-active", "gx-lift"); S.hero.style.top = ""; S.hero = null; }
+  document.body.appendChild(root);
+  S.inline = false; S.full = false;
+  syncTgBack();
 }
+/* leaving the detail page (back button, tab bar) must stop the inline player */
+try {
+  const dv = $id("view-detail");
+  if (dv && window.MutationObserver) {
+    new MutationObserver(() => { if (S.open && S.inline && !dv.classList.contains("active")) closePlayer(); })
+      .observe(dv, { attributes: true, attributeFilter: ["class"] });
+  }
+} catch (e) {}
 
 async function start(item, files, lang, file, resolved) {
   if (S.open) closePlayer();
@@ -887,7 +1053,8 @@ async function start(item, files, lang, file, resolved) {
   const art = item.backdrop_path || item.poster_path;
   E.bg.style.backgroundImage = art ? `url(${IMG_BASE}/w780${art})` : "none";
   const my = ++S.token;
-  loader(true, "Preparing your stream…", (lang !== "und" ? langName(lang) + " · " : "") + file.quality, false);
+  S.loadSub = (lang !== "und" ? langName(lang) + " · " : "") + file.quality;
+  loader(true, "Preparing your stream…", S.loadSub, false);
   try {
     const best = resolved ? { file, resolved } : await resolveBest(file, lang);
     if (my !== S.token) return;
@@ -925,7 +1092,7 @@ function renderLangSheet(item, files, groups) {
 
 window.openWatchSheet = async function (item, action) {
   if (action === "download") return legacyWatch.apply(this, arguments);
-  if (S.open) return;
+  if (S.open) closePlayer();
   activeItem = item;
   pendingAction = "watch";
   try { if (serverConfigPromise) await serverConfigPromise; } catch (e) {}
