@@ -165,26 +165,30 @@ _VLC_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Play in VLC - GOFLIX</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box;margin:0}
-body{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(900px 480px at 50% -10%,#3a0509,#07080d 62%);color:#f4f5f8;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-.card{width:100%;max-width:420px;background:#12141d;border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:26px 22px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)}
-.logo{font-weight:900;letter-spacing:2px;font-size:20px;margin-bottom:16px}.logo b{color:#e50914}
-h1{font-size:18px;margin-bottom:6px}.sub{color:#9aa0ae;font-size:13px;line-height:1.5;margin-bottom:18px;word-break:break-word}
-button{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:15px;margin-top:10px;border-radius:14px;border:1px solid rgba(255,255,255,.1);background:#1b1e2b;color:#fff;font-size:15px;font-weight:700;cursor:pointer}
-button:active{transform:scale(.98)}.vlc{background:linear-gradient(135deg,#ff9a1f,#ff5e00);border:0}.mx{background:#2563eb;border:0}
-.hint{margin-top:16px;color:#9aa0ae;font-size:12px;line-height:1.5}.hide{display:none}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#0b0c10;color:#f2f3f5;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.card{width:100%;max-width:400px;background:#15171d;border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:24px 20px;text-align:center}
+.logo{font-weight:800;letter-spacing:1.5px;font-size:18px;margin-bottom:14px}
+h1{font-size:17px;font-weight:600;margin-bottom:6px}.sub{color:#9aa0ae;font-size:13px;line-height:1.5;margin-bottom:16px;word-break:break-word}
+.note{display:none;text-align:left;background:#22242c;border:1px solid rgba(255,255,255,.16);border-radius:10px;padding:11px 12px;font-size:12.5px;line-height:1.5;color:#d6d9e0;margin-bottom:12px}
+.note.on{display:block}
+button{display:flex;align-items:center;justify-content:center;width:100%;padding:14px;margin-top:9px;border-radius:10px;border:1px solid rgba(255,255,255,.16);background:#1f2230;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+button:active{opacity:.8}.main{background:#fff;color:#000;border:0}
+.hint{margin-top:14px;color:#8d93a1;font-size:12px;line-height:1.5}.hide{display:none}
 </style></head><body><div class="card">
-<div class="logo">GO<b>FLIX</b></div>
+<div class="logo">GOFLIX</div>
 <h1>Play in an external player</h1>
 <p class="sub">__TITLE__</p>
-<button class="vlc" id="vlc">&#9654; Open in VLC</button>
-<button class="mx" id="mx">&#9654; Open in MX Player</button>
+<div class="note" id="wv">This page is open inside Telegram's own browser, which can't launch other apps. Tap the menu (three dots) at the top right, choose <b>Open in Chrome</b>, then press <b>Open in VLC</b> again. Or copy the link below.</div>
+<button class="main" id="vlc">Open in VLC</button>
+<button id="mx">Open in MX Player</button>
 <button id="any">Choose another app</button>
 <button id="copy">Copy stream link</button>
-<p class="hint" id="hint">Tap a button. If nothing opens, install the app first, or copy the link and paste it in VLC &rsaquo; Media &rsaquo; Open Network Stream.</p>
+<p class="hint" id="hint">If nothing opens, install the app first, or copy the link and paste it in VLC under Media &rsaquo; Open Network Stream.</p>
 </div>
 <script>
 const D=__DATA__;
 const ua=navigator.userAgent,android=/Android/i.test(ua),ios=/iPhone|iPad|iPod/i.test(ua);
+const webview=android&&(ua.indexOf('; wv)')>-1||/Telegram/i.test(ua));
 const $=id=>document.getElementById(id),hint=t=>{$('hint').textContent=t};
 function intent(pkg,store){const u=new URL(D.url);let s='intent://'+u.host+u.pathname+u.search+'#Intent;scheme='+u.protocol.slice(0,-1)+';action=android.intent.action.VIEW;type=video/*;';if(pkg)s+='package='+pkg+';';s+='S.title='+encodeURIComponent(D.title)+';';if(store)s+='S.browser_fallback_url='+encodeURIComponent(store)+';';return s+'end'}
 async function copy(){try{await navigator.clipboard.writeText(D.url)}catch(e){const t=document.createElement('textarea');t.value=D.url;document.body.appendChild(t);t.select();try{document.execCommand('copy')}catch(_){}t.remove()}hint('Link copied. In VLC: Media > Open Network Stream > paste it.')}
@@ -193,8 +197,8 @@ $('mx').onclick=()=>{if(android)location.href=intent('com.mxtech.videoplayer.ad'
 $('any').onclick=()=>{if(android)location.href=intent('');else copy()};
 $('copy').onclick=copy;
 if(!android){$('mx').classList.add('hide');$('any').classList.add('hide')}
-if(D.auto==='vlc')setTimeout(()=>$('vlc').click(),350);
-if(D.auto==='mx')setTimeout(()=>$('mx').click(),350);
+if(webview)$('wv').classList.add('on');
+else{if(D.auto==='vlc')setTimeout(()=>$('vlc').click(),350);if(D.auto==='mx')setTimeout(()=>$('mx').click(),350)}
 </script></body></html>"""
 
 
@@ -871,6 +875,17 @@ def _content_disposition(inline, name):
     return f"{'inline' if inline else 'attachment'}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
 
 
+def _log_stream(id, sent, t0, first):
+    """One line per stream in the Koyeb logs: how much was sent, how fast, and how long the first byte took.
+    A slow first byte means Telegram / the media session is slow; a low MB/s while the player is buffering
+    means the Telegram -> server or server -> phone link is the bottleneck."""
+    dt = time.monotonic() - t0
+    if first is not None and first > 3:
+        logging.warning(f"stream id={id}: slow first byte ({first:.1f}s)")
+    if sent >= 2 * 1024 * 1024 and dt > 0.5:
+        logging.info(f"stream id={id}: {sent / 1048576:.1f} MB in {dt:.1f}s = {sent / 1048576 / dt:.2f} MB/s (first byte {first or 0:.2f}s)")
+
+
 async def media_streamer(
     request: web.Request,
     id: int,
@@ -969,6 +984,8 @@ async def media_streamer(
     await response.prepare(request)
 
     sent = 0
+    t0 = time.monotonic()
+    first = None
     agen = tg.yield_file(
         file_id,
         index,
@@ -980,6 +997,8 @@ async def media_streamer(
     )
     try:
         async for chunk in agen:
+            if first is None:
+                first = time.monotonic() - t0
             await response.write(chunk)
             sent += len(chunk)
     except (ConnectionResetError, ConnectionError):
@@ -987,6 +1006,7 @@ async def media_streamer(
         return response
     finally:
         await agen.aclose()
+        _log_stream(id, sent, t0, first)
 
     if sent < length:
         # Telegram stopped delivering part-way. Closing the connection makes the
