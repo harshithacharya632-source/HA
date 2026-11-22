@@ -9,7 +9,7 @@ from TechVJ.bot import work_loads
 from pyrogram import Client, utils, raw
 from TechVJ.util.file_properties import get_file_ids, get_media_from_message
 from pyrogram.session import Session, Auth
-from pyrogram.errors import AuthBytesInvalid, FloodWait
+from pyrogram.errors import AuthBytesInvalid, FloodWait, RPCError, InternalServerError, ServiceUnavailable
 from TechVJ.server.exceptions import FIleNotFound
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 
@@ -17,14 +17,17 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 # stream. Before, every chunk was fetched only after the previous one had been
 # written to the player, so the stream could never be faster than
 # (1 MB / Telegram round-trip) and any slow round-trip froze the video.
-PREFETCH_PARTS = 6
+# Keep this small: all the requests share ONE connection, so on a slow link the
+# last of them waits behind the others - 3 keeps that wait well inside the timeout.
+PREFETCH_PARTS = 3
+
+# Pyrogram's default wait for a reply is 15 s. With several 1 MB chunks queued on
+# one connection that is too short on a slow link: the timeouts then triggered a
+# session rebuild that killed every other chunk in flight ("Connection lost").
+GETFILE_TIMEOUT = 60
 
 # FileId objects (with their file_reference) are cached for this long.
 FILE_ID_TTL = 20 * 60
-
-# Shared by every ByteStreamer (one per Telegram client): a message that was
-# looked up / warmed by one client is instantly known to all of them.
-_FILE_ID_CACHE: Dict[int, Tuple[float, FileId]] = {}
 
 
 def file_id_from_message(message) -> Optional[FileId]:
@@ -41,20 +44,13 @@ def file_id_from_message(message) -> Optional[FileId]:
     return file_id
 
 
-def remember_file_id(message_id: int, file_id: FileId) -> None:
-    now = time.monotonic()
-    if len(_FILE_ID_CACHE) > 500:
-        for key in [k for k, (ts, _) in _FILE_ID_CACHE.items() if now - ts > FILE_ID_TTL]:
-            _FILE_ID_CACHE.pop(key, None)
-    _FILE_ID_CACHE[message_id] = (now, file_id)
-
-
 class ByteStreamer:
     def __init__(self, client: Client):
         """A custom class that holds the cache of a specific client and class functions.
         attributes:
             client: the client that the cache is for.
-            cached_file_ids: a dict of cached file IDs (shared between clients).
+            cached_file_ids: a dict of cached file IDs (per client: a FileId's access_hash and
+                file_reference only work for the client that fetched it).
 
         functions:
             generate_file_properties: returns the properties for a media of a specific message contained in Tuple.
@@ -65,7 +61,7 @@ class ByteStreamer:
         Thanks to Eyaadh <https://github.com/eyaadh>
         """
         self.client: Client = client
-        self.cached_file_ids = _FILE_ID_CACHE
+        self.cached_file_ids: Dict[int, Tuple[float, FileId]] = {}
         # Browsers open 2-3 range requests at once when a video starts. Without
         # this lock each of them built its own media session for the same DC and
         # all but one leaked.
@@ -77,10 +73,18 @@ class ByteStreamer:
         if the properties are cached, then it'll return the cached results.
         or it'll generate the properties from the Message ID and cache them.
         """
-        hit = _FILE_ID_CACHE.get(id)
+        hit = self.cached_file_ids.get(id)
         if hit and not refresh and time.monotonic() - hit[0] < FILE_ID_TTL:
             return hit[1]
         return await self.generate_file_properties(id)
+
+    def remember(self, message_id: int, file_id: FileId) -> None:
+        """Cache a FileId this client already holds (e.g. from the message it just forwarded)."""
+        now = time.monotonic()
+        if len(self.cached_file_ids) > 500:
+            for key in [k for k, (ts, _) in self.cached_file_ids.items() if now - ts > FILE_ID_TTL]:
+                self.cached_file_ids.pop(key, None)
+        self.cached_file_ids[message_id] = (now, file_id)
 
     async def generate_file_properties(self, id: int) -> FileId:
         """
@@ -109,7 +113,7 @@ class ByteStreamer:
         if not file_id:
             logging.debug(f"Message with ID {id} not found")
             raise FIleNotFound
-        remember_file_id(id, file_id)
+        self.remember(id, file_id)
         return file_id
 
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
@@ -236,27 +240,45 @@ class ByteStreamer:
         in-flight chunk requests of a stream, so a rebuilt session is picked up
         by every one of them."""
         last_exc = None
-        for attempt in range(3):
+        timeouts = 0
+        for attempt in range(4):
             session = state["session"]
             try:
                 return await session.send(
                     raw.functions.upload.GetFile(location=location, offset=off, limit=limit),
+                    timeout=GETFILE_TIMEOUT,
                 )
             except FloodWait as e:
                 last_exc = e
                 logging.warning(f"GetFile FloodWait {e.value}s at offset={off}, client {index}")
                 await asyncio.sleep(min(int(e.value), 5))
-            except (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError) as e:
+            except (InternalServerError, ServiceUnavailable) as e:
                 last_exc = e
-                logging.warning(
-                    f"GetFile failed at offset={off} (attempt {attempt + 1}/3), client {index}: {e!r}"
-                )
-                if attempt >= 1:
-                    # Failed twice in a row: the session itself is most likely dead.
+                logging.warning(f"GetFile server error at offset={off} (attempt {attempt + 1}/4), client {index}: {type(e).__name__}")
+                await asyncio.sleep(0.5 * (attempt + 1))
+            except RPCError as e:
+                # A real refusal from Telegram (expired file reference, bad offset ...):
+                # retrying cannot help, and the name is exactly what is needed to diagnose it.
+                logging.error(f"GetFile refused by Telegram at offset={off}, client {index}: {type(e).__name__}: {e}")
+                raise
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                last_exc = e
+                timeouts += 1
+                logging.warning(f"GetFile timed out after {GETFILE_TIMEOUT}s at offset={off} (attempt {attempt + 1}/4), client {index}")
+                if timeouts >= 2:
+                    # Two long waits in a row: the connection itself is most likely dead.
                     try:
                         state["session"] = await self._rebuild_media_session(self.client, file_id, session)
                     except Exception as rebuild_err:
                         logging.warning(f"media session rebuild failed: {rebuild_err!r}")
+                await asyncio.sleep(0.4)
+            except (ConnectionError, OSError) as e:
+                last_exc = e
+                logging.warning(f"GetFile connection error at offset={off} (attempt {attempt + 1}/4), client {index}: {e!r}")
+                try:
+                    state["session"] = await self._rebuild_media_session(self.client, file_id, session)
+                except Exception as rebuild_err:
+                    logging.warning(f"media session rebuild failed: {rebuild_err!r}")
                 await asyncio.sleep(0.4 * (attempt + 1))
             except AttributeError as e:
                 # Not a network hiccup - an unexpected None/missing attribute is
@@ -266,7 +288,7 @@ class ByteStreamer:
                     f"at offset={off}, client {index}: {e!r}"
                 )
                 raise
-        logging.error(f"GetFile permanently failed at offset={off} after 3 attempts, client {index}: {last_exc!r}")
+        logging.error(f"GetFile permanently failed at offset={off} after 4 attempts, client {index}: {last_exc!r}")
         raise last_exc
 
     async def yield_file(
@@ -327,10 +349,10 @@ class ByteStreamer:
                 current_part += 1
                 if current_part > part_count:
                     break
-        except (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError, AttributeError) as e:
+        except (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError, AttributeError, RPCError) as e:
             # _get_chunk already logged the details; the caller notices the short
             # body and closes the connection so the player retries immediately.
-            logging.warning(f"yield_file aborted early for client {index}: {e!r}")
+            logging.warning(f"yield_file aborted early for client {index}: {type(e).__name__}: {e}")
         finally:
             for task in pending:
                 task.cancel()
