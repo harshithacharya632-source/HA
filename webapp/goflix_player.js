@@ -1,4 +1,4 @@
-/* GOFLIX player v3.
+/* GOFLIX player v4.
    Loaded after the main app script (plugins/route.py injects it into /app).
    It replaces the built-in player and the "watch" sheet flow:
    movie -> language (only if there is more than one) -> plays at once - inside the
@@ -124,7 +124,7 @@ root.innerHTML = `
   <div class="gx-top">
     <button class="gx-ib" id="gxBack" aria-label="Close">${I.back}</button>
     <div class="gx-tb"><div class="gx-title" id="gxTitle"></div><div class="gx-chips" id="gxChips"></div></div>
-    <button class="gx-vlc" id="gxVlc" aria-label="Play in VLC">${I.cone}<span>VLC</span></button>
+    <button class="gx-vlc" id="gxVlc" aria-label="Play in VLC or another player">${I.cone}<span>VLC</span></button>
   </div>
   <div class="gx-mid">
     <button class="gx-skip" id="gxSkipB" aria-label="Back 10 seconds">${I.sb}</button>
@@ -154,6 +154,7 @@ root.innerHTML = `
   <button class="gx-eb pri" id="gxEbPri"></button>
   <button class="gx-eb" id="gxEbSec"></button>
   <button class="gx-eb" id="gxEbAlt" hidden></button>
+  <button class="gx-eb" id="gxEbDet">Details</button>
   <button class="gx-eb" id="gxEbClose">Close</button>
 </div>`;
 document.body.appendChild(root);
@@ -168,7 +169,7 @@ const S = {
   retries: 0, retryT: 0, okT: 0, loadT: 0, stallT: 0, bufT: 0, uiT: 0, tapT: 0, hudT: 0, hintT: 0, toastT: 0,
   lastTap: 0, lastSide: null, acc: 0, accT: 0, accSide: null,
   seeking: false, dragT: 0, locked: false, brightness: 1, fill: false, speed: 1,
-  histDone: false, lastSave: 0, wake: null, menu: null, slowToast: false, volWarned: false,
+  histDone: false, lastSave: 0, wake: null, menu: null, slowToast: false, volWarned: false, diagBusy: false,
   inline: false, full: false, hero: null, nfs: false, sysFs: false,
   lastData: 0, loadStart: 0, waitAt: 0, netT: 0, sugT: 0, sugAt: -1e9, stalls: [], loadSub: "",
 };
@@ -427,7 +428,7 @@ async function recover(forceFresh) {
   if (!S.open || !S.file) return;
   const now = Date.now();
   if (now - S.retryT > 120000) { S.retries = 0; S.retryT = now; }
-  if (++S.retries > 4) return fail("net");
+  if (++S.retries > 3) return fail("net");
   const t = v.currentTime || (S.pending && S.pending.resumeAt) || 0;
   const my = ++S.token;
   toast(S.retries > 1 ? "Reconnecting…" : "Connection hiccup - retrying…");
@@ -461,7 +462,7 @@ function fail(kind) {
   E.et.textContent = codec ? "This file can't play in the browser" : "Connection lost";
   E.es.textContent = codec
     ? "Your phone's browser doesn't support this video or audio format. VLC plays everything."
-    : "The stream stopped and couldn't be restored. Check your internet, then retry.";
+    : "The stream stopped and couldn't be restored. Tap Details to see why, or retry.";
   const vlcFirst = codec;
   const retry = { html: I.retry + " Retry", fn: () => { E.err.classList.remove("on"); S.retries = 0; recover(true); } };
   const vlc = { html: I.cone + " Open in VLC", fn: () => openExternal("vlc") };
@@ -610,12 +611,9 @@ async function switchTo(file, lang) {
 }
 
 /* ------------------------------------------------------------------ VLC / MX / copy */
-function extUrl(app) {
-  const r = S.resolved || {};
-  const title = (E.title.textContent || "GOFLIX");
-  return CONFIG.STREAM_BASE_URL.replace(/\/$/, "") + "/vlc/" + r.id + "/" + encodeURIComponent(r.name || "GOFLIX") +
-    "?hash=" + encodeURIComponent(r.hash) + (app ? "&app=" + app : "") + "&t=" + encodeURIComponent(title);
-}
+/* "VLC": open the stream page (/watch/...) - the page you already have, where VLC, MX Player and the
+   other players are listed. Its address is built from the URL in info.py (CONFIG.STREAM_BASE_URL). */
+function pageUrl() { return buildStreamUrls(S.resolved).webPlayerUrl; }
 function openLinkExt(u) {
   try {
     if (tg && tg.openLink) {
@@ -630,22 +628,42 @@ function openLinkExt(u) {
   } catch (e) {}
   window.open(u, "_blank");
 }
-function openExternal(app) {
+function openExternal() {
   if (!S.resolved) return toast("Stream isn't ready yet");
   try { v.pause(); } catch (e) {}
-  openLinkExt(extUrl(app));
+  toast("Opening the stream page…", 2000);
+  openLinkExt(pageUrl());
 }
-async function copyLink() {
-  if (!S.resolved) return;
-  const u = streamUrl(S.resolved);
-  try { await navigator.clipboard.writeText(u); }
-  catch (e) {
-    const t = document.createElement("textarea");
-    t.value = u; t.style.cssText = "position:fixed;opacity:0"; document.body.appendChild(t); t.select();
-    try { document.execCommand("copy"); } catch (e2) {}
-    t.remove();
+/* "Details" on the error screen: finds out WHY the stream fails (browser -> server, and Telegram -> server). */
+async function showDiag() {
+  if (S.diagBusy) return;
+  S.diagBusy = true;
+  toast("Running tests…", 15000);
+  const base = CONFIG.STREAM_BASE_URL.replace(/\/$/, "");
+  const r = S.resolved || {};
+  const lines = ["Stream host: " + base.replace(/^https?:\/\//, "")];
+  let same = true;
+  try { same = new URL(S.url, location.href).origin === location.origin; } catch (e) {}
+  try {
+    const t0 = performance.now();
+    const res = await fetch(S.url, { headers: { Range: "bytes=0-65535" }, cache: "no-store", mode: same ? "cors" : "no-cors" });
+    if (res.type === "opaque") lines.push("Browser test: reached the server (details hidden cross-site)");
+    else {
+      const buf = await res.arrayBuffer();
+      lines.push("Browser test: HTTP " + res.status + ", " + Math.round(buf.byteLength / 1024) + " KB in " + ((performance.now() - t0) / 1000).toFixed(1) + "s");
+    }
+  } catch (e) { lines.push("Browser test FAILED: " + (e && e.message ? e.message : e)); }
+  if (r.id) {
+    try {
+      const res = await fetch(base + "/api/diag?id=" + encodeURIComponent(r.id) + "&hash=" + encodeURIComponent(r.hash) + "&mb=4");
+      const d = await res.json();
+      lines.push("Server: TgCrypto " + (d.tgcrypto ? "ok" : "MISSING (very slow)") + ", Python " + d.python + ", " + d.clients + " client(s)");
+      if (d.test) lines.push(d.test.error ? "Telegram test FAILED: " + d.test.error : "Telegram to server: " + d.test.mb_per_s + " MB/s (first byte " + d.test.first_byte_s + "s)");
+    } catch (e) { lines.push("Server test FAILED: " + (e && e.message ? e.message : e)); }
   }
-  toast("Link copied - in VLC: Media › Open Network Stream", 3200);
+  S.diagBusy = false;
+  E.toast.classList.remove("on");
+  say(lines.join("\n"));
 }
 
 /* ------------------------------------------------------------------ menus */
@@ -693,13 +711,7 @@ function menuHtml(kind) {
     return '<div class="gx-mt">Volume</div><div class="gx-vol"><button class="gx-pill" id="gxMute"></button><input class="gx-range" id="gxRange" type="range" min="0" max="100" step="1" aria-label="Volume"></div>' +
       (IOS_VOL ? '<div class="gx-note">On iPhone use the side volume buttons.</div>' : "");
   }
-  /* external players */
-  return '<div class="gx-mt">Play in another app</div>' +
-    row({ icon: I.cone, a: "VLC Player", b: "Best for HEVC, 4K and dual-audio files", data: 'data-ext="vlc"' }) +
-    row({ icon: "MX", a: "MX Player", b: "Android", data: 'data-ext="mx"' }) +
-    row({ icon: "↗", a: "Choose another app", b: "Opens your phone's app picker", data: 'data-ext="any"' }) +
-    row({ icon: "🔗", a: "Copy stream link", b: "Paste into any player", data: 'data-ext="copy"' }) +
-    '<div class="gx-note">VLC and MX open from your browser. If nothing happens, copy the link and paste it in the app under Network Stream.</div>';
+  return "";
 }
 function paintVolMenu() {
   const r = $id("gxRange"), m = $id("gxMute");
@@ -756,10 +768,6 @@ E.mw.addEventListener("click", e => {
     E.speed.textContent = S.speed + "x";
     return closeMenu();
   }
-  if (b.dataset.ext != null) {
-    closeMenu(true);
-    return b.dataset.ext === "copy" ? copyLink() : openExternal(b.dataset.ext === "any" ? "" : b.dataset.ext);
-  }
 });
 
 /* ------------------------------------------------------------------ controls wiring */
@@ -781,7 +789,8 @@ bindBtn(E.back, () => { if (S.inline && S.full) setFull(false); else closePlayer
 bindBtn(E.play, togglePlay);
 bindBtn(E.skipB, () => skip(-10));
 bindBtn(E.skipF, () => skip(10));
-bindBtn(E.vlc, () => openMenu("ext"));
+bindBtn(E.vlc, () => openExternal());
+bindBtn(E.ebDet, () => showDiag());
 bindBtn(E.lang, () => openMenu("lang"));
 bindBtn(E.qual, () => openMenu("quality"));
 bindBtn(E.speed, () => openMenu("speed"));
