@@ -17,7 +17,7 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 # stream. Before, every chunk was fetched only after the previous one had been
 # written to the player, so the stream could never be faster than
 # (1 MB / Telegram round-trip) and any slow round-trip froze the video.
-PREFETCH_PARTS = 4
+PREFETCH_PARTS = 6
 
 # FileId objects (with their file_reference) are cached for this long.
 FILE_ID_TTL = 20 * 60
