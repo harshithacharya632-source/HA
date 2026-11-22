@@ -8,7 +8,7 @@ from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerId
 from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from utils import get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap, is_premium_user
 from database.users_chats_db import db
-from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files, delete_file_docs, file_cols, count_extra_files, DB_EXECUTOR
+from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files, delete_file_docs, file_cols, count_extra_files, DB_EXECUTOR, added_ts
 from database.stats_view import build_stats_text
 from database.filters_mdb import del_all, find_filter, get_filters
 from database.connections_mdb import mydb, active_connection, all_connections, delete_connection, if_active, make_active, make_inactive
@@ -1000,7 +1000,11 @@ def filter_and_rank(files: list, search: str) -> list:
 
         scored.append((score, f))
 
-    scored.sort(key=lambda x: x[0])
+    # NEWEST FIRST: the file added to the bot last is shown first, whichever database it
+    # lives in. (Used to sort only by the match score below, so with several databases the
+    # newest files - which go to the newest database - ended up at the very end.)
+    # Equal add times keep the earlier order, then the match score breaks the tie.
+    scored.sort(key=lambda x: (-added_ts(x[1]), x[0]))
     return [f for _, f in scored]
 
 
