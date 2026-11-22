@@ -216,6 +216,16 @@ DB_DOWN_SKIP_S = 45
 _DB_DOWN_UNTIL = {}
 
 
+def added_ts(doc):
+    """When a file was added to the bot, in seconds. A file's _id is a MongoDB ObjectId made at
+    the moment it was saved, and its first 4 bytes are that time. Old documents whose _id is
+    plain text return 0 (= oldest)."""
+    try:
+        return int.from_bytes(doc.get('_id').binary[:4], 'big')
+    except AttributeError:
+        return 0
+
+
 def _live_cols():
     now = time.time()
     live = [c for c in file_cols if _DB_DOWN_UNTIL.get(id(c), 0) <= now]
@@ -377,6 +387,11 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
                 total_ += count
             if errors and len(errors) == len(cols):
                 raise errors[0]
+            if len(cols) > 1:
+                # Each database answers newest-first, but they were simply joined one after the
+                # other (1st database, then 2nd ...), so a file added to the 2nd/3rd database
+                # always came AFTER every file of the 1st. Merge them by add time instead.
+                files_.sort(key=added_ts, reverse=True)
             return files_, total_
 
         if not term_sets:
