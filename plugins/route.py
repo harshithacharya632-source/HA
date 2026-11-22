@@ -1,5 +1,6 @@
 import re
 import os
+import sys
 import math
 import time
 import json as _json
@@ -15,7 +16,7 @@ from info import *
 
 from TechVJ.bot import multi_clients, work_loads
 from TechVJ.server.exceptions import FIleNotFound, InvalidHash
-from TechVJ.util.custom_dl import ByteStreamer, file_id_from_message, remember_file_id
+from TechVJ.util.custom_dl import ByteStreamer, file_id_from_message
 from TechVJ.util.render_template import render_page
 from TechVJ.util.file_properties import get_hash, get_name
 
@@ -151,78 +152,6 @@ async def upi_open_page(request: web.Request):
     return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
-def html_escape(s):
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-
-# ---------------- "PLAY IN VLC / MX PLAYER" LAUNCHER PAGE ----------------
-# Telegram's Mini App can only hand https links to the phone's browser, so the
-# player's VLC button opens THIS page in the browser, and this page launches
-# the player app (Android intent / iOS vlc-x-callback). Same idea as /open above.
-# Must stay above the catch-all "/{path}" route.
-_VLC_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Play in VLC - GOFLIX</title>
-<style>
-:root{color-scheme:dark}*{box-sizing:border-box;margin:0}
-body{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#0b0c10;color:#f2f3f5;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-.card{width:100%;max-width:400px;background:#15171d;border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:24px 20px;text-align:center}
-.logo{font-weight:800;letter-spacing:1.5px;font-size:18px;margin-bottom:14px}
-h1{font-size:17px;font-weight:600;margin-bottom:6px}.sub{color:#9aa0ae;font-size:13px;line-height:1.5;margin-bottom:16px;word-break:break-word}
-.note{display:none;text-align:left;background:#22242c;border:1px solid rgba(255,255,255,.16);border-radius:10px;padding:11px 12px;font-size:12.5px;line-height:1.5;color:#d6d9e0;margin-bottom:12px}
-.note.on{display:block}
-button{display:flex;align-items:center;justify-content:center;width:100%;padding:14px;margin-top:9px;border-radius:10px;border:1px solid rgba(255,255,255,.16);background:#1f2230;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
-button:active{opacity:.8}.main{background:#fff;color:#000;border:0}
-.hint{margin-top:14px;color:#8d93a1;font-size:12px;line-height:1.5}.hide{display:none}
-</style></head><body><div class="card">
-<div class="logo">GOFLIX</div>
-<h1>Play in an external player</h1>
-<p class="sub">__TITLE__</p>
-<div class="note" id="wv">This page is open inside Telegram's own browser, which can't launch other apps. Tap the menu (three dots) at the top right, choose <b>Open in Chrome</b>, then press <b>Open in VLC</b> again. Or copy the link below.</div>
-<button class="main" id="vlc">Open in VLC</button>
-<button id="mx">Open in MX Player</button>
-<button id="any">Choose another app</button>
-<button id="copy">Copy stream link</button>
-<p class="hint" id="hint">If nothing opens, install the app first, or copy the link and paste it in VLC under Media &rsaquo; Open Network Stream.</p>
-</div>
-<script>
-const D=__DATA__;
-const ua=navigator.userAgent,android=/Android/i.test(ua),ios=/iPhone|iPad|iPod/i.test(ua);
-const webview=android&&(ua.indexOf('; wv)')>-1||/Telegram/i.test(ua));
-const $=id=>document.getElementById(id),hint=t=>{$('hint').textContent=t};
-function intent(pkg,store){const u=new URL(D.url);let s='intent://'+u.host+u.pathname+u.search+'#Intent;scheme='+u.protocol.slice(0,-1)+';action=android.intent.action.VIEW;type=video/*;';if(pkg)s+='package='+pkg+';';s+='S.title='+encodeURIComponent(D.title)+';';if(store)s+='S.browser_fallback_url='+encodeURIComponent(store)+';';return s+'end'}
-async function copy(){try{await navigator.clipboard.writeText(D.url)}catch(e){const t=document.createElement('textarea');t.value=D.url;document.body.appendChild(t);t.select();try{document.execCommand('copy')}catch(_){}t.remove()}hint('Link copied. In VLC: Media > Open Network Stream > paste it.')}
-$('vlc').onclick=()=>{if(android)location.href=intent('org.videolan.vlc','https://play.google.com/store/apps/details?id=org.videolan.vlc');else if(ios)location.href='vlc-x-callback://x-callback-url/stream?url='+encodeURIComponent(D.url);else copy()};
-$('mx').onclick=()=>{if(android)location.href=intent('com.mxtech.videoplayer.ad','https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad');else copy()};
-$('any').onclick=()=>{if(android)location.href=intent('');else copy()};
-$('copy').onclick=copy;
-if(!android){$('mx').classList.add('hide');$('any').classList.add('hide')}
-if(webview)$('wv').classList.add('on');
-else{if(D.auto==='vlc')setTimeout(()=>$('vlc').click(),350);if(D.auto==='mx')setTimeout(()=>$('mx').click(),350)}
-</script></body></html>"""
-
-
-@routes.get(r"/vlc/{path:.+}", allow_head=True)
-async def vlc_open_page(request: web.Request):
-    path = request.match_info["path"]
-    match = re.search(r"(\d+)", path)
-    secure_hash = request.rel_url.query.get("hash", "")
-    if not match or not re.fullmatch(r"[A-Za-z0-9_\-]{1,32}", secure_hash):
-        raise web.HTTPNotFound()
-    id = int(match.group(1))
-    name = path.split("/", 1)[1] if "/" in path else "GOFLIX"
-    title = (request.rel_url.query.get("t") or re.sub(r"\.[A-Za-z0-9]{2,4}$", "", name) or "GOFLIX")[:200]
-    auto = request.rel_url.query.get("app", "")
-    auto = auto if auto in ("vlc", "mx") else ""
-    stream_url = f"{URL.rstrip('/')}/{id}/{quote(name, safe='')}?hash={secure_hash}"
-    data = (
-        _json.dumps({"url": stream_url, "title": title, "auto": auto})
-        .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
-    )
-    page = _VLC_PAGE.replace("__TITLE__", html_escape(title)).replace("__DATA__", data)
-    return web.Response(text=page, content_type="text/html", headers={"Cache-Control": "no-store"})
-
-
 # ---------------- CONFIG: tell the frontend the real, configured stream URL ----------------
 # URL comes from info.py's environment variable — this is the source of truth
 # for wherever streaming/watch actually lives, set by you on Koyeb. The
@@ -230,6 +159,67 @@ async def vlc_open_page(request: web.Request):
 @routes.get("/api/config", allow_head=True)
 async def app_config(request: web.Request):
     return web.json_response({"stream_base_url": URL.rstrip("/")})
+
+
+# ---------------- DIAGNOSTICS: why is a stream slow or failing? ----------------
+# GET /api/diag                      -> environment (is TgCrypto active? versions, clients)
+# GET /api/diag?id=<msg id>&hash=<h> -> also downloads a few MB of that file from Telegram right here
+#                                       on the server and reports MB/s and first-byte time, which
+#                                       separates "Telegram -> server is slow" from "server -> phone
+#                                       is slow". The player's "Details" button calls this.
+# The file test needs a valid id + hash (the same secret every stream link carries) and is capped at 16 MB.
+def _has_tgcrypto():
+    try:
+        import tgcrypto  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@routes.get("/api/diag", allow_head=True)
+async def diag(request: web.Request):
+    q = request.rel_url.query
+    out = {
+        "python": sys.version.split()[0],
+        "aiohttp": aiohttp.__version__,
+        "tgcrypto": _has_tgcrypto(),
+        "clients": len(multi_clients),
+        "work_loads": {str(k): v for k, v in work_loads.items()},
+        "stream_url": URL.rstrip("/"),
+    }
+    try:
+        import pyrogram
+        out["pyrogram"] = pyrogram.__version__
+    except Exception:
+        pass
+    if q.get("id") and q.get("hash"):
+        try:
+            id = int(q["id"])
+            mb = max(1, min(int(q.get("mb", "4")), 16))
+            idx = min(work_loads, key=work_loads.get)
+            streamer = _get_streamer(multi_clients[idx])
+            file_id = await streamer.get_file_properties(id)
+            if file_id.unique_id[:6] != q["hash"]:
+                out["test"] = {"error": "bad hash"}
+            else:
+                parts = max(1, min(mb, math.ceil((file_id.file_size or 0) / 1048576)))
+                t0 = time.monotonic()
+                first = None
+                got = 0
+                async for chunk in streamer.yield_file(file_id, idx, 0, 0, 1048576, parts, 1048576):
+                    if first is None:
+                        first = time.monotonic() - t0
+                    got += len(chunk)
+                dt = time.monotonic() - t0
+                out["test"] = {
+                    "mb": round(got / 1048576, 1),
+                    "seconds": round(dt, 2),
+                    "mb_per_s": round(got / 1048576 / dt, 2) if dt else None,
+                    "first_byte_s": round(first or 0, 2),
+                }
+        except Exception as e:
+            out["test"] = {"error": f"{type(e).__name__}: {e}"}
+    return web.json_response(out, headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"})
 
 
 # ---------------- TMDB PROXY (keeps TMDB_API_KEY off the client) ----------------
@@ -679,7 +669,7 @@ async def _forward_to_log(client, file_id):
     try:
         fid = file_id_from_message(log_msg)
         if fid:
-            remember_file_id(log_msg.id, fid)
+            _get_streamer(client).remember(log_msg.id, fid)
             asyncio.ensure_future(_warm_stream(client, fid))
     except Exception as e:  # warming is only an optimisation - never fail the request over it
         logging.debug(f"stream warm-up skipped: {e!r}")
