@@ -1,7 +1,8 @@
-/* GOFLIX player v4.
+/* GOFLIX player v5.
    Loaded after the main app script (plugins/route.py injects it into /app).
    It replaces the built-in player and the "watch" sheet flow:
-   movie -> language (only if there is more than one) -> plays at once - inside the
+   Watch -> starts at once with ONE file (language / quality / speed / volume are switched inside the
+   player) - inside the
    banner of the detail page (Hotstar-style, pinned while you scroll) with a fullscreen
    button, or fullscreen when started from a home row - with
    language / quality / speed / volume switching and VLC / MX Player inside
@@ -18,6 +19,7 @@ const legacyWatch = window.openWatchSheet;
 const RANK = { SD: 0, "480p": 1, "720p": 2, "1080p": 3, "2K": 4, "4K": 5 };
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const POS_KEY = "goflix_resume_v2";
+const LANG_KEY = "goflix_lang_v1";
 const RISKY_V = /(^|[^a-z0-9])(x265|hevc|h[ .]?265|10[ -]?bit|hdr10?|dovi|dolby[ .-]?vision)([^a-z0-9]|$)/i;
 const RISKY_A = /(^|[^a-z0-9])(dts|truehd|atmos|e-?ac-?3|ac-?3|ddp|dd\+|dd[ .]?[257][ .]?[01])/i;
 const $id = id => document.getElementById(id);
@@ -169,7 +171,7 @@ const S = {
   retries: 0, retryT: 0, okT: 0, loadT: 0, stallT: 0, bufT: 0, uiT: 0, tapT: 0, hudT: 0, hintT: 0, toastT: 0,
   lastTap: 0, lastSide: null, acc: 0, accT: 0, accSide: null,
   seeking: false, dragT: 0, locked: false, brightness: 1, fill: false, speed: 1,
-  histDone: false, lastSave: 0, wake: null, menu: null, slowToast: false, volWarned: false, diagBusy: false,
+  histDone: false, lastSave: 0, wake: null, menu: null, slowToast: false, volWarned: false, diagBusy: false, blocked: false, playedThisLoad: false,
   inline: false, full: false, hero: null, nfs: false, sysFs: false,
   lastData: 0, loadStart: 0, waitAt: 0, netT: 0, sugT: 0, sugAt: -1e9, stalls: [], loadSub: "",
 };
@@ -325,7 +327,7 @@ function load(url, o) {
   const opt = o || {};
   S.url = url;
   S.pending = { resumeAt: opt.resumeAt || 0, autoplay: opt.autoplay !== false };
-  S.errored = false;
+  S.errored = false; S.blocked = false; S.playedThisLoad = false;
   E.err.classList.remove("on");
   clearTimeout(S.stallT); clearTimeout(S.bufT); clearTimeout(S.loadT);
   S.loadStart = S.lastData = performance.now();
@@ -338,11 +340,14 @@ function load(url, o) {
   v.src = url;
   v.load();
   v.playbackRate = S.speed;
+  /* Do NOT wait for "canplay": Chrome on mobile data treats preload as "metadata" and only starts
+     buffering once play() is called, so waiting for canplay never ended (endless loading). */
+  if (S.pending.autoplay) play();
 }
 function play() {
   const pr = v.play();
   if (pr && pr.catch) pr.catch(err => {
-    if (err && err.name === "NotAllowedError") { loader(false); unfreeze(); showUI(true); toast("Tap play to start"); }
+    if (err && err.name === "NotAllowedError") { S.blocked = true; loader(false); unfreeze(); showUI(true); toast("Tap play to start"); }
   });
 }
 const NET = { t: 0, b: 0, ema: 0 };
@@ -374,7 +379,7 @@ function netLoop() {
 }
 function bumpData() { S.lastData = performance.now(); }
 function loadTick() {
-  if (!S.open || !S.pending) return;
+  if (!S.open || S.playedThisLoad || S.errored || S.blocked) return;
   const now = performance.now();
   if (now - S.lastData > 18000) return recover(false);
   if (now - S.loadStart > 10000) suggestLower();
@@ -458,12 +463,15 @@ function fail(kind) {
   loader(false); unfreeze();
   root.classList.remove("ui");
   const codec = kind === "codec";
+  const never = !codec && !S.started;          // the web player never managed to show a single frame
   E.ei.textContent = codec ? "🎞️" : "📡";
-  E.et.textContent = codec ? "This file can't play in the browser" : "Connection lost";
+  E.et.textContent = codec ? "This file can't play in the browser" : (never ? "The web player couldn't start" : "Connection lost");
   E.es.textContent = codec
     ? "Your phone's browser doesn't support this video or audio format. VLC plays everything."
-    : "The stream stopped and couldn't be restored. Tap Details to see why, or retry.";
-  const vlcFirst = codec;
+    : (never
+      ? "Open it in VLC or another player from the stream page, or tap Details to see why."
+      : "The stream stopped and couldn't be restored. Tap Details to see why, or retry.");
+  const vlcFirst = codec || never;
   const retry = { html: I.retry + " Retry", fn: () => { E.err.classList.remove("on"); S.retries = 0; recover(true); } };
   const vlc = { html: I.cone + " Open in VLC", fn: () => openExternal("vlc") };
   const a = vlcFirst ? vlc : retry, b = vlcFirst ? retry : vlc;
@@ -484,17 +492,22 @@ v.addEventListener("loadedmetadata", () => {
   const p = S.pending;
   if (p && p.resumeAt > 1 && isFinite(v.duration) && p.resumeAt < v.duration - 3) { try { v.currentTime = p.resumeAt; } catch (e) {} }
   setMeta();
+  if (p) {
+    S.pending = null;
+    if (p.autoplay) { loader(true, "Starting…", netText(), S.started); play(); }
+    else { loader(false); unfreeze(); S.playedThisLoad = true; }
+  }
 });
 v.addEventListener("canplay", () => {
   const p = S.pending;
   clearTimeout(S.loadT);
   if (p) {
     S.pending = null;
-    if (p.autoplay) play(); else { loader(false); unfreeze(); }
+    if (p.autoplay) play(); else { loader(false); unfreeze(); S.playedThisLoad = true; }
   } else bufDone();
 });
 v.addEventListener("playing", () => {
-  S.started = true; S.errored = false;
+  S.started = true; S.errored = false; S.playedThisLoad = true;
   root.classList.add("started");
   setPlayIcon();
   clearTimeout(S.bufT); clearTimeout(S.stallT);
@@ -601,6 +614,7 @@ async function switchTo(file, lang) {
     freeze();
     loader(true, "Switching…", "", true);
     S.file = best.file; S.lang = lang; S.resolved = best.resolved; S.slowToast = false;
+    if (lang !== "und") store.set(LANG_KEY, lang);
     setMeta();
     load(streamUrl(best.resolved), { resumeAt: t, autoplay: wasPlaying });
   } catch (e) {
@@ -1052,12 +1066,12 @@ try {
   }
 } catch (e) {}
 
-async function start(item, files, lang, file, resolved) {
-  if (S.open) closePlayer();
+async function start(item, files, lang, file, resolved, already) {
+  if (!already && S.open) closePlayer();
   files.forEach(f => { delete f._bad; });
   S.item = item; S.files = files; S.lang = lang; S.file = file; S.resolved = resolved || null;
   S.histDone = false; S.retries = 0; S.slowToast = false; S.started = false; S.errored = false; S.pending = null;
-  showPlayer();
+  if (!already) showPlayer();
   setMeta();
   const art = item.backdrop_path || item.poster_path;
   E.bg.style.backgroundImage = art ? `url(${IMG_BASE}/w780${art})` : "none";
@@ -1080,23 +1094,25 @@ async function start(item, files, lang, file, resolved) {
   }
 }
 
-/* ------------------------------------------------------------------ the "watch" sheet: movie -> language -> play */
-function renderLangSheet(item, files, groups) {
-  sheetTitleEl.textContent = "Choose language";
-  qualityStep.innerHTML = "";
-  groups.forEach((fl, code) => {
-    const best = fl.reduce((m, f) => Math.max(m, RANK[f.quality] || 0), 0);
-    const bestQ = Object.keys(RANK).find(k => RANK[k] === best) || "";
-    const btn = document.createElement("button");
-    btn.className = "play-opt quality";
-    btn.innerHTML = `<div class="oicon">${langFlag(code)}</div><div class="otext"><div class="otitle">${esc(langName(code))}</div><div class="osub">${fl.length} file${fl.length > 1 ? "s" : ""} · up to ${esc(bestQ)}</div></div>`;
-    btn.addEventListener("click", () => {
-      try { goHaptic("impact", "medium"); } catch (e) {}
-      closeSheet();
-      start(item, files, code, pick(files, { lang: code }));
-    });
-    qualityStep.appendChild(btn);
-  });
+/* ------------------------------------------------------------------ Watch: straight into the player */
+/* The player opens at once (loader in the banner), finds the files, and starts ONE of them. The viewer
+   switches language / quality inside the video. First choice of language: the one picked last time,
+   otherwise the language with the most files. */
+function defaultLang(groups) {
+  const saved = store.get(LANG_KEY);
+  if (saved && groups.has(saved)) return saved;
+  return groups.keys().next().value;
+}
+function begin(item) {
+  S.item = item; S.files = []; S.file = null; S.lang = null; S.resolved = null;
+  S.started = false; S.errored = false; S.pending = null; S.loadSub = "";
+  S.token++;
+  showPlayer();
+  E.title.textContent = item._episodeLabel || item.title || item.name || "GOFLIX";
+  E.chips.innerHTML = ""; E.qualT.textContent = ""; E.lang.style.display = "none";
+  const art = item.backdrop_path || item.poster_path;
+  E.bg.style.backgroundImage = art ? `url(${IMG_BASE}/w780${art})` : "none";
+  loader(true, "Finding your movie…", "", false);
 }
 
 window.openWatchSheet = async function (item, action) {
@@ -1105,27 +1121,19 @@ window.openWatchSheet = async function (item, action) {
   activeItem = item;
   pendingAction = "watch";
   try { if (serverConfigPromise) await serverConfigPromise; } catch (e) {}
-  sheetTitleEl.textContent = "Finding your movie…";
-  qualityStep.innerHTML = '<div class="play-opt skeleton" style="height:58px"></div>'.repeat(3);
-  sheet.classList.add("open");
-  sheetBackdrop.classList.add("open");
   try { goHaptic("impact", "light"); } catch (e) {}
+  begin(item);
   try {
     const data = await fetchQualities(item);
+    if (!S.open || S.item !== item) return;           // closed while searching
     const files = (data && data.files) || [];
     sheetFiles = files;
-    if (!files.length) {
-      qualityStep.innerHTML = '<div class="empty-state" style="padding:24px 8px;text-align:center;color:var(--text-dim)">No files for this title yet.</div>';
-      return;
-    }
-    const groups = groupsOf(files);
-    if (groups.size > 1) return renderLangSheet(item, files, groups);
-    closeSheet();
-    const code = groups.keys().next().value;
-    start(item, files, code, pick(files, { lang: code }));
+    if (!files.length) { closePlayer(); say("No files for this title yet."); return; }
+    const code = defaultLang(groupsOf(files));
+    start(item, files, code, pick(files, { lang: code }), null, true);
   } catch (err) {
+    if (S.open && S.item === item) closePlayer();
     try { goHaptic("notification", "error"); } catch (e) {}
-    closeSheet();
     say(errorMessageFor(err));
   }
 };
