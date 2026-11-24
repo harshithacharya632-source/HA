@@ -1,4 +1,4 @@
-/* GOFLIX player v4 - styles. Loaded after the main app (see plugins/route.py: /app).
+/* GOFLIX player v6 - styles. Loaded after the main app (see plugins/route.py: /app).
    Neutral, monochrome controls on purpose: white on black glass, no colour accents. */
 .gx{position:fixed;inset:0;z-index:300;display:none;background:#000;color:#fff;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:none;font-family:inherit;--gx-bri:1}
 .gx.open{display:block;animation:gxIn .2s ease both}
@@ -91,8 +91,9 @@
 .gx-lock{position:absolute;left:calc(12px + env(safe-area-inset-left));top:50%;transform:translateY(-50%);z-index:6;opacity:0;pointer-events:none;transition:opacity .2s;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.25)}
 .gx.ui .gx-lock{opacity:1;pointer-events:auto}
 
-.gx-suggest{position:absolute;left:50%;bottom:calc(112px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:12;max-width:90%;padding:9px 16px;border-radius:999px;background:rgba(0,0,0,.78);border:1px solid rgba(255,255,255,.3);font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gx-suggest{position:absolute;left:50%;top:calc(64px + env(safe-area-inset-top));transform:translateX(-50%);z-index:12;max-width:90%;padding:9px 16px;border-radius:999px;background:rgba(0,0,0,.78);border:1px solid rgba(255,255,255,.3);font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gx-suggest[hidden]{display:none}
+.gx-suggest.gx-slow{top:auto;bottom:calc(36px + env(safe-area-inset-bottom));background:rgba(0,0,0,.55);font-weight:500}
 .gx-toast{position:absolute;left:50%;bottom:calc(120px + env(safe-area-inset-bottom));transform:translate(-50%,8px);z-index:12;max-width:88%;padding:9px 16px;border-radius:999px;background:rgba(20,20,24,.94);border:1px solid rgba(255,255,255,.14);font-size:13px;font-weight:500;text-align:center;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s}
 .gx-toast.on{opacity:1;transform:translate(-50%,0)}
 
@@ -133,7 +134,7 @@
 .gx-eb[hidden]{display:none}
 
 /* ---- inside the detail page (Hotstar-style): the banner becomes the player ---- */
-.detail-hero.gx-active{position:sticky;top:0;z-index:30;height:56.25vw;min-height:0;max-height:70vh;background:#000}
+.detail-hero.gx-active{position:sticky;top:0;z-index:45;height:56.25vw;min-height:0;max-height:70vh;background:#000}
 .detail-hero.gx-active>img,.detail-hero.gx-active>.hero-fade,.detail-hero.gx-active>.detail-back{display:none}
 .detail-hero.gx-active+.detail-body{margin-top:0;padding-top:16px}
 .detail-hero.gx-active.gx-lift{z-index:500}
@@ -169,7 +170,8 @@
 .gx.inline:not(.full) .gx-hud-bar{height:56px}
 .gx.inline:not(.full) .gx-hint{font-size:15px;top:18%}
 .gx.inline:not(.full) .gx-toast{bottom:64px;font-size:12px;padding:7px 12px}
-.gx.inline:not(.full) .gx-suggest{bottom:64px;font-size:12px;padding:7px 12px}
+.gx.inline:not(.full) .gx-suggest{top:44px;font-size:12px;padding:7px 12px}
+.gx.inline:not(.full) .gx-suggest.gx-slow{top:auto;bottom:10px}
 .gx.inline:not(.full) .gx-err{padding:10px;gap:6px}
 .gx.inline:not(.full) .gx-ei,.gx.inline:not(.full) .gx-es{display:none}
 .gx.inline:not(.full) .gx-et{font-size:14px}
