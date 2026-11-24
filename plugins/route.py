@@ -497,28 +497,61 @@ def _same_title(file_name, want_tokens):
     return False
 
 
-async def _collect_files(user_id, title, year, season, episode, limit=60):
-    """Every file in the DB that belongs to this title (up to `limit`).
+# Things that are in the file databases but are not a movie / episode: subtitles, posters, archives,
+# samples, stray tiny files (a 20 KB "480p" used to show up in the quality list).
+_NOT_VIDEO_EXT = (
+    ".srt", ".ass", ".ssa", ".sub", ".vtt", ".idx", ".nfo", ".txt", ".jpg", ".jpeg", ".png", ".gif", ".webp",
+    ".zip", ".rar", ".7z", ".gz", ".pdf", ".apk", ".exe", ".iso", ".torrent", ".m3u", ".m3u8", ".url", ".html",
+    ".json", ".xml", ".md5", ".sfv", ".mp3", ".flac", ".aac", ".wav", ".opus",
+)
+MIN_VIDEO_BYTES = 30 * 1024 * 1024
 
-    Episodes: the first query that finds anything wins (SxxEyy, then year, then
-    plain title), exactly as before. Movies: the "title year" hit is used, and
-    files of the SAME title whose name just lacks the year are added to it -
-    before, those were silently dropped, which made languages and qualities
-    that really exist in the DB disappear from the picker."""
+
+def _is_video_file(f):
+    name = (f.get("file_name") or "").lower()
+    if name.endswith(_NOT_VIDEO_EXT):
+        return False
+    try:
+        size = int(f.get("file_size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size and size < MIN_VIDEO_BYTES:
+        return False
+    if size and size < 150 * 1024 * 1024 and re.search(r"(^|[^a-z0-9])sample([^a-z0-9]|$)", name):
+        return False
+    return True
+
+
+def _clean_files(files, limit):
+    """Drop duplicates (the same file can sit in more than one database) and non-video files."""
+    seen = {}
+    for f in files:
+        fid = f.get("file_id")
+        if fid and fid not in seen and _is_video_file(f):
+            seen[fid] = f
+    return list(seen.values())[:limit]
+
+
+async def _collect_files(user_id, title, year, season, episode, limit=150, per_db=60):
+    """Every file that belongs to this title, from ALL file databases (get_search_results asks every database
+    - DB1, DB2, DB3 ... - at once and returns `per_db` hits from each, so no database gets cut off by another's).
+
+    Episodes: the first query that finds anything wins (SxxEyy, then year, then plain title), exactly as
+    before. Movies: the "title year" hit is used, and files of the SAME title whose name just lacks the year
+    are added to it - before, those were silently dropped, which made languages and qualities that really
+    exist in the DB disappear from the picker."""
     queries = _build_queries(title, year, season, episode)
     results = await asyncio.gather(*[
-        get_search_results(user_id, q, max_results=limit, need_count=False) for q in queries
+        get_search_results(user_id, q, max_results=per_db, need_count=False) for q in queries
     ])
     results = [r[0] for r in results]
     first = next((r for r in results if r), [])
     if season and episode or not year or not results[0] or len(results) < 2:
-        return first[:limit]
+        return _clean_files(first, limit)
     want = _cmp_title(normalize_query(title)).split()
-    merged = {f["file_id"]: f for f in results[0]}
-    for f in results[-1]:
-        if _same_title(f.get("file_name", ""), want):
-            merged.setdefault(f["file_id"], f)
-    return list(merged.values())[:limit]
+    merged = list(results[0])
+    merged += [f for f in results[-1] if _same_title(f.get("file_name", ""), want)]
+    return _clean_files(merged, limit)
 
 
 @routes.post("/api/qualities")
@@ -626,7 +659,7 @@ async def browse_language(request: web.Request):
     except (TypeError, ValueError):
         limit = 30
 
-    files = await _search_language_files(user_id, lang["aliases"], limit)
+    files = _clean_files(await _search_language_files(user_id, lang["aliases"], limit), limit)
     results = [
         {
             "file_id": f["file_id"],
@@ -657,9 +690,18 @@ _resolve_cache = {}   # file_id -> (timestamp, {"id", "hash", "name"})
 _resolve_locks = {}   # file_id -> asyncio.Lock (one forward per file at a time)
 
 
-async def _warm_stream(client, file_id):
+async def _warm_stream(client, file_id, wait=0.0):
+    """Open the Telegram connection and start loading the START and END of the file into memory right now,
+    so the player's first requests are answered instantly. With wait > 0 this also waits (at most that many
+    seconds) for the first chunks - the stream carries on from them if Telegram is slower than that."""
     try:
-        await _get_streamer(client).generate_media_session(client, file_id)
+        streamer = _get_streamer(client)
+        await streamer.generate_media_session(client, file_id)
+        heads = streamer.warm(file_id)
+        if wait and heads:
+            await asyncio.wait_for(asyncio.shield(asyncio.gather(*heads, return_exceptions=True)), wait)
+    except asyncio.TimeoutError:
+        pass
     except Exception as e:
         logging.debug(f"stream warm-up skipped: {e!r}")
 
@@ -670,7 +712,7 @@ async def _forward_to_log(client, file_id):
         fid = file_id_from_message(log_msg)
         if fid:
             _get_streamer(client).remember(log_msg.id, fid)
-            asyncio.ensure_future(_warm_stream(client, fid))
+            await _warm_stream(client, fid, wait=6.0)
     except Exception as e:  # warming is only an optimisation - never fail the request over it
         logging.debug(f"stream warm-up skipped: {e!r}")
     return {"id": log_msg.id, "hash": get_hash(log_msg), "name": get_name(log_msg)}
