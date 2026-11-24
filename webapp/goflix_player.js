@@ -1,4 +1,4 @@
-/* GOFLIX player v5.
+/* GOFLIX player v6.
    Loaded after the main app script (plugins/route.py injects it into /app).
    It replaces the built-in player and the "watch" sheet flow:
    Watch -> starts at once with ONE file (language / quality / speed / volume are switched inside the
@@ -20,6 +20,7 @@ const RANK = { SD: 0, "480p": 1, "720p": 2, "1080p": 3, "2K": 4, "4K": 5 };
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const POS_KEY = "goflix_resume_v2";
 const LANG_KEY = "goflix_lang_v1";
+const MIN_VIDEO_BYTES = 30 * 1024 * 1024;   // smaller "files" are subtitles / samples, never a movie
 const RISKY_V = /(^|[^a-z0-9])(x265|hevc|h[ .]?265|10[ -]?bit|hdr10?|dovi|dolby[ .-]?vision)([^a-z0-9]|$)/i;
 const RISKY_A = /(^|[^a-z0-9])(dts|truehd|atmos|e-?ac-?3|ac-?3|ddp|dd\+|dd[ .]?[257][ .]?[01])/i;
 const $id = id => document.getElementById(id);
@@ -149,6 +150,7 @@ root.innerHTML = `
 </div>
 <button class="gx-ib gx-lock" id="gxLock" aria-label="Lock controls">${I.lock}</button>
 <button class="gx-suggest" id="gxSuggest" hidden></button>
+<button class="gx-suggest gx-slow" id="gxSlow" hidden>Taking long? Tap for details</button>
 <div class="gx-toast" id="gxToast"></div>
 <div class="gx-mw" id="gxMw"><div class="gx-menu" id="gxMenu"></div></div>
 <div class="gx-err" id="gxErr">
@@ -332,6 +334,8 @@ function load(url, o) {
   clearTimeout(S.stallT); clearTimeout(S.bufT); clearTimeout(S.loadT);
   S.loadStart = S.lastData = performance.now();
   netReset();
+  E.slow.hidden = true;
+  if (!S.started) loader(true, "Loading video…", S.loadSub, false);
   /* Only when NO data at all arrives for ~18s is the link treated as stuck. A slow but moving
      download is left alone - restarting it every 20s is what kept big files from ever loading. */
   S.loadT = setTimeout(loadTick, 3000);
@@ -381,8 +385,9 @@ function bumpData() { S.lastData = performance.now(); }
 function loadTick() {
   if (!S.open || S.playedThisLoad || S.errored || S.blocked) return;
   const now = performance.now();
-  if (now - S.lastData > 18000) return recover(false);
+  if (now - S.lastData > 30000) return recover(false);
   if (now - S.loadStart > 10000) suggestLower();
+  if (now - S.loadStart > 15000 && !S.started) E.slow.hidden = false;
   S.loadT = setTimeout(loadTick, 3000);
 }
 /* "Slow network - switch to 480p" - one tap, never forced. */
@@ -511,7 +516,7 @@ v.addEventListener("playing", () => {
   root.classList.add("started");
   setPlayIcon();
   clearTimeout(S.bufT); clearTimeout(S.stallT);
-  loader(false); unfreeze();
+  loader(false); unfreeze(); E.slow.hidden = true;
   armHide(); wake(); mediaSession();
   clearTimeout(S.okT);
   S.okT = setTimeout(() => { S.retries = 0; S.slowToast = false; }, 25000);
@@ -805,6 +810,7 @@ bindBtn(E.skipB, () => skip(-10));
 bindBtn(E.skipF, () => skip(10));
 bindBtn(E.vlc, () => openExternal());
 bindBtn(E.ebDet, () => showDiag());
+E.slow.addEventListener("click", () => showDiag());
 bindBtn(E.lang, () => openMenu("lang"));
 bindBtn(E.qual, () => openMenu("quality"));
 bindBtn(E.speed, () => openMenu("speed"));
@@ -993,12 +999,11 @@ function placeRoot() {
     hero.appendChild(root);
     S.hero = hero;
     hero.classList.add("gx-active");
-    const tb = document.querySelector(".topbar");
-    const th = tb && getComputedStyle(tb).display !== "none" ? Math.round(tb.getBoundingClientRect().height) : 0;
-    hero.style.top = th + "px";
+    /* pinned at the very top of the screen by CSS (sticky, above the top bar); if it is not on screen
+       (page scrolled past it and sticky did not take), bring it into view */
     requestAnimationFrame(() => {
       const r = hero.getBoundingClientRect();
-      if (r.top < th - 2 || r.top > innerHeight * 0.6) window.scrollTo({ top: Math.max(0, window.scrollY + r.top - th), behavior: "smooth" });
+      if (r.top < -2 || r.top > innerHeight * 0.6) window.scrollTo({ top: Math.max(0, window.scrollY + r.top), behavior: "smooth" });
     });
   } else {
     document.body.appendChild(root);
@@ -1018,7 +1023,7 @@ function showPlayer() {
   root.classList.toggle("full", S.full);
   root.style.setProperty("--gx-bri", 1);
   E.lock.innerHTML = I.unlock;
-  E.suggest.hidden = true;
+  E.suggest.hidden = true; E.slow.hidden = true;
   document.body.style.overflow = S.full ? "hidden" : "";
   setLift(); setBackIcon();
   try { if (tg && tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
@@ -1038,7 +1043,7 @@ function closePlayer() {
   S.pending = null;
   ["stallT", "bufT", "uiT", "tapT", "hudT", "hintT", "okT", "loadT", "toastT", "netT", "sugT"].forEach(k => clearTimeout(S[k]));
   E.toast.classList.remove("on");
-  E.suggest.hidden = true;
+  E.suggest.hidden = true; E.slow.hidden = true;
   try { v.pause(); } catch (e) {}
   v.removeAttribute("src");
   try { v.load(); } catch (e) {}
@@ -1052,7 +1057,7 @@ function closePlayer() {
   if (S.nfs || S.sysFs) nativeFs(false);
   S.nfs = false; S.sysFs = false;
   try { if (tg && tg.enableVerticalSwipes) tg.enableVerticalSwipes(); } catch (e) {}
-  if (S.hero) { S.hero.classList.remove("gx-active", "gx-lift"); S.hero.style.top = ""; S.hero = null; }
+  if (S.hero) { S.hero.classList.remove("gx-active", "gx-lift"); S.hero = null; }
   document.body.appendChild(root);
   S.inline = false; S.full = false;
   syncTgBack();
@@ -1077,7 +1082,7 @@ async function start(item, files, lang, file, resolved, already) {
   E.bg.style.backgroundImage = art ? `url(${IMG_BASE}/w780${art})` : "none";
   const my = ++S.token;
   S.loadSub = (lang !== "und" ? langName(lang) + " · " : "") + file.quality;
-  loader(true, "Preparing your stream…", S.loadSub, false);
+  loader(true, "Connecting…", S.loadSub, false);
   try {
     const best = resolved ? { file, resolved } : await resolveBest(file, lang);
     if (my !== S.token) return;
@@ -1126,7 +1131,8 @@ window.openWatchSheet = async function (item, action) {
   try {
     const data = await fetchQualities(item);
     if (!S.open || S.item !== item) return;           // closed while searching
-    const files = (data && data.files) || [];
+    const all = (data && data.files) || [];
+    const files = all.filter(f => !f.bytes || f.bytes >= MIN_VIDEO_BYTES);   // the server filters too; this is a safety net
     sheetFiles = files;
     if (!files.length) { closePlayer(); say("No files for this title yet."); return; }
     const code = defaultLang(groupsOf(files));
