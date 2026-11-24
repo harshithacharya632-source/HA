@@ -2,7 +2,7 @@ import math
 import time
 import asyncio
 import logging
-from collections import deque
+from collections import deque, OrderedDict
 from info import *
 from typing import Dict, Optional, Tuple, Union
 from TechVJ.bot import work_loads
@@ -19,7 +19,17 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 # (1 MB / Telegram round-trip) and any slow round-trip froze the video.
 # Keep this small: all the requests share ONE connection, so on a slow link the
 # last of them waits behind the others - 3 keeps that wait well inside the timeout.
-PREFETCH_PARTS = 3
+PREFETCH_PARTS = 4
+
+# At most this many GetFile requests are in flight per Telegram client at once (all streams and the
+# warm-up together), so they never queue up behind each other long enough to time out.
+MAX_PARALLEL_GETFILE = 4
+
+# Downloaded chunks are kept in memory (least recently used go first). A chunk is fetched ONCE, even when
+# several requests want it, and a download keeps going when the player drops the request - so a player
+# that restarts loses nothing, and the start / end of a file (what a player asks for first) is ready
+# before it asks.
+CHUNK_CACHE_BYTES = 64 * 1024 * 1024
 
 # Pyrogram's default wait for a reply is 15 s. With several 1 MB chunks queued on
 # one connection that is too short on a slow link: the timeouts then triggered a
@@ -66,6 +76,10 @@ class ByteStreamer:
         # this lock each of them built its own media session for the same DC and
         # all but one leaked.
         self._session_lock = asyncio.Lock()
+        self._chunks: "OrderedDict[tuple, asyncio.Future]" = OrderedDict()   # (file, chunk_size, index) -> Future[bytes]
+        self._chunk_len: Dict[tuple, int] = {}
+        self._chunk_bytes = 0
+        self._getfile_slots = asyncio.Semaphore(MAX_PARALLEL_GETFILE)
 
     async def get_file_properties(self, id: int, refresh: bool = False) -> FileId:
         """
@@ -291,6 +305,54 @@ class ByteStreamer:
         logging.error(f"GetFile permanently failed at offset={off} after 4 attempts, client {index}: {last_exc!r}")
         raise last_exc
 
+    # ---------------- chunk cache ----------------
+    def _chunk_future(self, file_id: FileId, idx: int, chunk_size: int, index: int) -> "asyncio.Future":
+        """The (shared) download of chunk `idx`. It runs as its own task, not as part of any HTTP request."""
+        key = (file_id.unique_id, chunk_size, idx)
+        fut = self._chunks.get(key)
+        if fut is not None:
+            self._chunks.move_to_end(key)
+            return fut
+        fut = asyncio.ensure_future(self._fetch_chunk(file_id, idx, chunk_size, index))
+        self._chunks[key] = fut
+        fut.add_done_callback(lambda f, k=key: self._chunk_done(k, f))
+        return fut
+
+    def _chunk_done(self, key, fut) -> None:
+        if fut.cancelled() or fut.exception() is not None:   # exception() also marks it as retrieved
+            self._chunks.pop(key, None)                      # never keep a failure: the next request tries again
+            return
+        n = len(fut.result())
+        self._chunk_len[key] = n
+        self._chunk_bytes += n
+        if self._chunk_bytes > CHUNK_CACHE_BYTES:
+            for k in list(self._chunks):
+                if self._chunk_bytes <= CHUNK_CACHE_BYTES:
+                    break
+                if self._chunks[k].done():
+                    self._chunks.pop(k, None)
+                    self._chunk_bytes -= self._chunk_len.pop(k, 0)
+
+    async def _fetch_chunk(self, file_id: FileId, idx: int, chunk_size: int, index: int) -> bytes:
+        async with self._getfile_slots:
+            session = await self.generate_media_session(self.client, file_id)
+            location = await self.get_location(file_id)
+            r = await self._get_chunk({"session": session}, file_id, location, idx * chunk_size, chunk_size, index)
+        if not isinstance(r, raw.types.upload.File):
+            raise ConnectionError("unexpected GetFile reply")
+        return r.bytes
+
+    def warm(self, file_id: FileId, head: int = 3, tail: int = 1, chunk_size: int = 1024 * 1024, index: int = 0):
+        """Start downloading the first `head` and last `tail` chunks of a file in the background and return the
+        futures of the first ones. A player asks for the beginning first, and (MP4 'moov' / MKV index) for the
+        end of the file next - both are then answered from memory."""
+        total = max(1, math.ceil((getattr(file_id, "file_size", 0) or 0) / chunk_size))
+        n_head = min(head, total)
+        heads = [self._chunk_future(file_id, i, chunk_size, index) for i in range(n_head)]
+        for i in range(max(n_head, total - tail), total):
+            self._chunk_future(file_id, i, chunk_size, index)
+        return heads
+
     async def yield_file(
         self,
         file_id: FileId,
@@ -306,36 +368,28 @@ class ByteStreamer:
         Modded from <https://github.com/eyaadh/megadlbot_oss/blob/master/mega/telegram/utils/custom_download.py#L20>
         Thanks to Eyaadh <https://github.com/eyaadh>
 
-        Up to PREFETCH_PARTS chunks are requested ahead of the one being sent,
-        so Telegram latency overlaps with the time spent writing to the player.
+        Chunks come from the shared chunk cache; up to PREFETCH_PARTS are requested ahead of the one being
+        sent, so Telegram latency overlaps with the time spent writing to the player. `offset` is always
+        a multiple of `chunk_size`.
         """
-        client = self.client
         work_loads[index] += 1
-        pending = deque()
+        wanted = deque()
         try:
-            media_session = await self.generate_media_session(client, file_id)
-            location = await self.get_location(file_id)
-            state = {"session": media_session}
-            next_offset = offset
-            scheduled = 0
+            first_idx = offset // chunk_size
+            next_part = 0
 
             def schedule():
-                nonlocal next_offset, scheduled
-                while scheduled < part_count and len(pending) < PREFETCH_PARTS:
-                    pending.append(asyncio.ensure_future(
-                        self._get_chunk(state, file_id, location, next_offset, chunk_size, index)
-                    ))
-                    next_offset += chunk_size
-                    scheduled += 1
+                nonlocal next_part
+                while next_part < part_count and len(wanted) < PREFETCH_PARTS:
+                    wanted.append(self._chunk_future(file_id, first_idx + next_part, chunk_size, index))
+                    next_part += 1
 
             schedule()
             current_part = 1
-            while pending:
-                r = await pending.popleft()
+            while wanted:
+                # shield: if the player drops this request, the download itself keeps going for the next one
+                chunk = await asyncio.shield(wanted.popleft())
                 schedule()  # keep the pipeline full while this chunk is written out
-                if not isinstance(r, raw.types.upload.File):
-                    break
-                chunk = r.bytes
                 if not chunk:
                     break
                 if part_count == 1:
@@ -354,8 +408,4 @@ class ByteStreamer:
             # body and closes the connection so the player retries immediately.
             logging.warning(f"yield_file aborted early for client {index}: {type(e).__name__}: {e}")
         finally:
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
             work_loads[index] -= 1
