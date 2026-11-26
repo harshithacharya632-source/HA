@@ -1,4 +1,4 @@
-/* GOFLIX player v6.
+/* GOFLIX player v7.
    Loaded after the main app script (plugins/route.py injects it into /app).
    It replaces the built-in player and the "watch" sheet flow:
    Watch -> starts at once with ONE file (language / quality / speed / volume are switched inside the
@@ -164,7 +164,17 @@ root.innerHTML = `
 document.body.appendChild(root);
 const E = {};
 root.querySelectorAll("[id]").forEach(n => { E[n.id.charAt(2).toLowerCase() + n.id.slice(3)] = n; });
-const v = E.video;
+/* Two <video> elements: `v` is the one on screen, `vs` the spare. Switching language / quality loads the new
+   file in the spare one (muted) while the old keeps playing, then swaps when ~5 s are buffered - no gap. */
+const VIDS = [E.video, document.createElement("video")];
+VIDS[1].className = "gx-video gx-standby";
+VIDS[1].setAttribute("playsinline", ""); VIDS[1].setAttribute("webkit-playsinline", "");
+VIDS[1].preload = "auto"; VIDS[1].muted = true;
+E.video.insertAdjacentElement("afterend", VIDS[1]);
+let v = VIDS[0];
+let vs = VIDS[1];
+/* listen on both, but only react to the one that is on screen */
+function onVid(type, fn) { VIDS.forEach(el => el.addEventListener(type, e => { if (el === v) fn(e); })); }
 
 /* ------------------------------------------------------------------ state */
 const S = {
@@ -174,7 +184,7 @@ const S = {
   lastTap: 0, lastSide: null, acc: 0, accT: 0, accSide: null,
   seeking: false, dragT: 0, locked: false, brightness: 1, fill: false, speed: 1,
   histDone: false, lastSave: 0, wake: null, menu: null, slowToast: false, volWarned: false, diagBusy: false, blocked: false, playedThisLoad: false,
-  inline: false, full: false, hero: null, nfs: false, sysFs: false,
+  inline: false, full: false, hero: null, nfs: false, sysFs: false, auto: true, standby: null,
   lastData: 0, loadStart: 0, waitAt: 0, netT: 0, sugT: 0, sugAt: -1e9, stalls: [], loadSub: "",
 };
 
@@ -273,7 +283,7 @@ function setMeta() {
   if (f.size) chips += `<span class="gx-chip">${esc(f.size)}</span>`;
   if (risky(f)) chips += `<span class="gx-chip w">VLC recommended</span>`;
   E.chips.innerHTML = chips;
-  E.qualT.textContent = f.quality || "";
+  E.qualT.textContent = (S.auto ? "Auto · " : "") + (f.quality || "");
   E.langT.textContent = S.lang === "und" ? "AUDIO" : String(S.lang || "").toUpperCase();
   const tracks = v.audioTracks ? v.audioTracks.length : 0;
   E.lang.style.display = (multi || tracks > 1) ? "" : "none";
@@ -327,6 +337,7 @@ function bufEnd() {
 }
 function load(url, o) {
   const opt = o || {};
+  cancelStandby();
   S.url = url;
   S.pending = { resumeAt: opt.resumeAt || 0, autoplay: opt.autoplay !== false };
   S.errored = false; S.blocked = false; S.playedThisLoad = false;
@@ -393,13 +404,18 @@ function loadTick() {
 /* "Slow network - switch to 480p" - one tap, never forced. */
 function suggestLower() {
   const now = performance.now();
-  if (!S.file || !S.open || S.locked || now - S.sugAt < 90000) return;
+  if (!S.file || !S.open || S.locked || now - S.sugAt < 60000) return;
   const cur = RANK[S.file.quality] || 0;
   const lower = S.files
     .filter(f => !f._bad && inLang(f, S.lang) && (RANK[f.quality] || 0) < cur)
     .sort((a, b) => (RANK[b.quality] || 0) - (RANK[a.quality] || 0) || (a.bytes || 0) - (b.bytes || 0))[0];
   if (!lower) return;
   S.sugAt = now;
+  if (S.auto) {            // Auto quality: just do it
+    toast("Slow network - switched to " + lower.quality, 3500);
+    switchTo(lower, S.lang, { auto: true });
+    return;
+  }
   E.suggest.textContent = "Slow network - switch to " + lower.quality + (lower.size ? " (" + lower.size + ")" : "");
   E.suggest.hidden = false;
   E.suggest.onclick = () => { E.suggest.hidden = true; switchTo(lower, S.lang); };
@@ -430,7 +446,7 @@ function armStall() {
     if (!S.open || S.pending || S.errored || v.paused || v.readyState >= 3) return;
     const now = performance.now();
     if (now - S.lastData > 12000) return recover(false);
-    if (now - S.waitAt > 8000 && !S.slowToast) { S.slowToast = true; toast("Slow connection…"); }
+    if (now - S.waitAt > 8000) { suggestLower(); if (!S.slowToast) { S.slowToast = true; toast("Slow connection…"); } }
     armStall();
   }, 3000);
 }
@@ -492,7 +508,7 @@ function fail(kind) {
 }
 
 /* ------------------------------------------------------------------ video events */
-v.addEventListener("loadedmetadata", () => {
+onVid("loadedmetadata", () => {
   E.dur.textContent = fmt(v.duration);
   const p = S.pending;
   if (p && p.resumeAt > 1 && isFinite(v.duration) && p.resumeAt < v.duration - 3) { try { v.currentTime = p.resumeAt; } catch (e) {} }
@@ -503,7 +519,7 @@ v.addEventListener("loadedmetadata", () => {
     else { loader(false); unfreeze(); S.playedThisLoad = true; }
   }
 });
-v.addEventListener("canplay", () => {
+onVid("canplay", () => {
   const p = S.pending;
   clearTimeout(S.loadT);
   if (p) {
@@ -511,7 +527,7 @@ v.addEventListener("canplay", () => {
     if (p.autoplay) play(); else { loader(false); unfreeze(); S.playedThisLoad = true; }
   } else bufDone();
 });
-v.addEventListener("playing", () => {
+onVid("playing", () => {
   S.started = true; S.errored = false; S.playedThisLoad = true;
   root.classList.add("started");
   setPlayIcon();
@@ -521,10 +537,10 @@ v.addEventListener("playing", () => {
   clearTimeout(S.okT);
   S.okT = setTimeout(() => { S.retries = 0; S.slowToast = false; }, 25000);
 });
-v.addEventListener("waiting", () => { if (S.started && !S.pending) bufStart(true); });
-v.addEventListener("seeking", () => { if (S.started && !S.pending) bufStart(false); });
+onVid("waiting", () => { if (S.started && !S.pending) bufStart(true); });
+onVid("seeking", () => { if (S.started && !S.pending) bufStart(false); });
 /* first frame is ready: start right away instead of waiting for "canplay" (instant play) */
-v.addEventListener("loadeddata", () => {
+onVid("loadeddata", () => {
   const p = S.pending;
   if (p && p.autoplay && v.readyState >= 2) {
     S.pending = null;
@@ -534,26 +550,23 @@ v.addEventListener("loadeddata", () => {
   }
 });
 ["progress", "loadedmetadata", "loadeddata", "canplay", "playing", "timeupdate", "seeked", "durationchange"]
-  .forEach(t => v.addEventListener(t, bumpData));
-v.addEventListener("seeked", () => { if (!S.pending) bufDone(); });
-v.addEventListener("pause", () => { setPlayIcon(); if (S.open && !S.errored) showUI(true); unwake(); });
-v.addEventListener("play", () => { setPlayIcon(); armHide(); });
-v.addEventListener("ended", () => { setPlayIcon(); showUI(true); persist(true); });
-v.addEventListener("ratechange", () => { E.speed.textContent = (v.playbackRate === 1 ? "1" : v.playbackRate) + "x"; });
-v.addEventListener("volumechange", () => { setVolIcon(); if (S.menu === "volume") paintVolMenu(); });
-v.addEventListener("progress", paintBuf);
-v.addEventListener("durationchange", () => { E.dur.textContent = fmt(v.duration); });
-v.addEventListener("timeupdate", () => {
+  .forEach(t => onVid(t, bumpData));
+onVid("seeked", () => { if (!S.pending) bufDone(); });
+onVid("pause", () => { setPlayIcon(); if (S.open && !S.errored) showUI(true); unwake(); });
+onVid("play", () => { setPlayIcon(); armHide(); });
+onVid("ended", () => { setPlayIcon(); showUI(true); persist(true); });
+onVid("ratechange", () => { E.speed.textContent = (v.playbackRate === 1 ? "1" : v.playbackRate) + "x"; });
+onVid("volumechange", () => { setVolIcon(); if (S.menu === "volume") paintVolMenu(); });
+onVid("progress", paintBuf);
+onVid("durationchange", () => { E.dur.textContent = fmt(v.duration); });
+onVid("timeupdate", () => {
   if (!isFinite(v.duration) || !v.duration) return;
   if (!S.seeking) paintTime(v.currentTime);
   paintBuf();
   persist(false);
-  if (!S.histDone && S.item && v.currentTime >= Math.min(300, v.duration * 0.5)) {
-    S.histDone = true;
-    try { recordHistory(S.item); } catch (e) {}
-  }
+  if (v.currentTime >= 20) markHistory();
 });
-v.addEventListener("error", async () => {
+onVid("error", async () => {
   if (!S.open || !v.getAttribute("src")) return;
   const code = v.error && v.error.code;
   if (code === 1) return;
@@ -571,6 +584,12 @@ v.addEventListener("error", async () => {
   }
   fail("codec");
 });
+/* "Continue Watching" on the home screen: recorded once you have really started watching (20 s). */
+function markHistory() {
+  if (S.histDone || !S.item) return;
+  S.histDone = true;
+  try { recordHistory(S.item); } catch (e) {}
+}
 function paintTime(t) {
   const p = clamp(t / v.duration, 0, 1) * 100;
   E.fill.style.width = p + "%";
@@ -607,14 +626,104 @@ function savedPos() {
 }
 
 /* ------------------------------------------------------------------ switching language / quality */
-async function switchTo(file, lang) {
+function bufAhead(el) {
+  for (let i = 0; i < el.buffered.length; i++) {
+    if (el.buffered.start(i) <= el.currentTime + 0.3 && el.buffered.end(i) >= el.currentTime) return el.buffered.end(i) - el.currentTime;
+  }
+  return 0;
+}
+function resetSpare() {
+  if (vs.getAttribute("src")) {
+    try { vs.pause(); } catch (e) {}
+    vs.removeAttribute("src");
+    try { vs.load(); } catch (e) {}
+  }
+  vs.muted = true;
+}
+function cancelStandby() {
+  const st = S.standby;
+  S.standby = null;
+  if (st) { try { st.cancel(); } catch (e) {} }
+  resetSpare();
+}
+/* Load the new file in the spare video (muted) and swap when ~5 s are buffered at the current position. */
+function seamlessSwap(best, lang) {
+  return new Promise((resolve, reject) => {
+    const my = S.token, nv = vs, url = streamUrl(best.resolved);
+    let done = false, timer = 0;
+    const t0 = performance.now();
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      nv.removeEventListener("loadedmetadata", onMeta);
+      nv.removeEventListener("error", onErr);
+      if (S.standby && S.standby.id === my) S.standby = null;
+      if (err) { if (vs === nv) resetSpare(); reject(err); } else resolve();
+    };
+    const onErr = () => finish(new Error("standby failed"));
+    const onMeta = () => {
+      try { nv.currentTime = Math.max(0, v.currentTime); } catch (e) {}
+      const p = nv.play();
+      if (p && p.catch) p.catch(() => finish(new Error("standby blocked")));
+    };
+    S.standby = { id: my, cancel: () => finish(new Error("cancelled")) };
+    nv.muted = true;
+    nv.addEventListener("loadedmetadata", onMeta);
+    nv.addEventListener("error", onErr);
+    nv.defaultPlaybackRate = S.speed;
+    nv.src = url;
+    nv.load();
+    nv.playbackRate = S.speed;
+    const check = () => {
+      if (done) return;
+      if (my !== S.token || !S.open) return finish(new Error("cancelled"));
+      if (performance.now() - t0 > 45000) return finish(new Error("standby timeout"));
+      const ahead = bufAhead(nv);
+      if (nv.readyState >= 3 && ahead >= 5) {
+        /* swap: bring the spare to exactly where the old one is, give it the sound, hide the old one */
+        const t = v.currentTime, old = v;
+        if (Math.abs(nv.currentTime - t) > 0.3) { try { nv.currentTime = t; } catch (e) {} }
+        nv.volume = old.volume; nv.muted = old.muted; nv.playbackRate = S.speed;
+        old.classList.add("gx-standby"); nv.classList.remove("gx-standby");
+        v = nv; vs = old;
+        resetSpare();
+        S.file = best.file; S.lang = lang; S.resolved = best.resolved; S.url = url; S.slowToast = false;
+        S.pending = null; S.playedThisLoad = true; S.started = true; S.errored = false;
+        netReset(); bumpData();
+        setMeta(); setPlayIcon(); setVolIcon();
+        E.dur.textContent = fmt(v.duration); paintTime(v.currentTime); paintBuf();
+        return finish(null);
+      }
+      timer = setTimeout(check, 300);
+    };
+    timer = setTimeout(check, 300);
+  });
+}
+async function switchTo(file, lang, opt) {
   if (!file || !S.open) return;
   if (S.file && file.file_id === S.file.file_id && lang === S.lang) return;
+  const o = opt || {};
+  cancelStandby();
   const my = ++S.token;
-  toast("Switching to " + (lang !== "und" ? langName(lang) + " · " : "") + file.quality + "…", 4000);
+  const label = (lang !== "und" ? langName(lang) + " · " : "") + file.quality;
+  if (!o.auto) toast("Switching to " + label + "…", 4000);
   try {
     const best = await resolveBest(file, lang);
     if (my !== S.token) return;
+    const healthy = S.started && !v.paused && !S.pending && !S.errored && v.readyState >= 3 && !IOS_VOL && bufAhead(v) >= 4;
+    if (healthy) {
+      try {
+        await seamlessSwap(best, lang);
+        if (my !== S.token) return;
+        if (lang !== "und") store.set(LANG_KEY, lang);
+        toast("Now playing " + label, 2200);
+        return;
+      } catch (e) {
+        if (my !== S.token || (e && e.message === "cancelled")) return;   // replaced by a newer switch / closed
+        /* the silent swap did not work out - fall through to the normal in-place switch */
+      }
+    }
     const t = v.currentTime, wasPlaying = !v.paused || !!S.pending;
     freeze();
     loader(true, "Switching…", "", true);
@@ -716,8 +825,9 @@ function menuHtml(kind) {
     if (!list.length) list = S.files.filter(f => !f._bad);
     list = list.slice().sort((a, b) => (RANK[b.quality] || 0) - (RANK[a.quality] || 0) || (b.bytes || 0) - (a.bytes || 0));
     let h = '<div class="gx-mt">Quality</div>';
+    h += row({ icon: "A", a: "Auto", b: "Lowers the quality by itself when your network is slow", cur: S.auto, data: 'data-auto="1"' });
     list.forEach(f => {
-      h += row({ icon: f.quality, a: f.quality + (f.size ? " · " + f.size : ""), b: cleanName(f.name).slice(0, 60), chip: risky(f) ? "VLC rec." : "", cur: !!S.file && f.file_id === S.file.file_id, data: `data-idx="${S.files.indexOf(f)}"` });
+      h += row({ icon: f.quality, a: f.quality + (f.size ? " · " + f.size : ""), b: cleanName(f.name).slice(0, 60), chip: risky(f) ? "VLC rec." : "", cur: !S.auto && !!S.file && f.file_id === S.file.file_id, data: `data-idx="${S.files.indexOf(f)}"` });
     });
     if (list.length < 2) h += '<div class="gx-note">Only one file is available for this language.</div>';
     return h;
@@ -777,8 +887,14 @@ E.mw.addEventListener("click", e => {
     closeMenu(true);
     return toast("Audio: " + (tr[i].label || tr[i].language || "track " + (i + 1)));
   }
+  if (b.dataset.auto != null) {
+    closeMenu(true);
+    S.auto = true; setMeta();
+    return toast("Auto quality on - it lowers itself when the network is slow");
+  }
   if (b.dataset.idx != null) {
     closeMenu(true);
+    S.auto = false; setMeta();                 // you chose a quality: keep it
     return switchTo(S.files[+b.dataset.idx], S.lang);
   }
   if (b.dataset.speed != null) {
@@ -1018,7 +1134,7 @@ function showPlayer() {
   placeRoot();
   root.classList.add("open");
   root.classList.remove("started", "ui", "locked", "fill");
-  S.locked = false; S.fill = false; S.brightness = 1; S.speed = 1; S.stalls = []; S.sugAt = -1e9;
+  S.locked = false; S.fill = false; S.brightness = 1; S.speed = 1; S.stalls = []; S.sugAt = -1e9; S.auto = true;
   S.full = !S.inline;
   root.classList.toggle("full", S.full);
   root.style.setProperty("--gx-bri", 1);
@@ -1037,7 +1153,8 @@ function showPlayer() {
 }
 function closePlayer() {
   if (!S.open) return;
-  try { persist(true); } catch (e) {}
+  try { persist(true); if (v.currentTime >= 20) markHistory(); } catch (e) {}
+  cancelStandby();
   S.open = false;
   S.token++;
   S.pending = null;
@@ -1123,6 +1240,15 @@ function begin(item) {
 window.openWatchSheet = async function (item, action) {
   if (action === "download") return legacyWatch.apply(this, arguments);
   if (S.open) closePlayer();
+  /* From the home banner (or any list) go to the movie's page first, so the video plays in the banner
+     (half screen) with the details under it - the same as pressing Watch on the movie page. A series has
+     no single file: its page opens so you can pick an episode. */
+  const dv = $id("view-detail");
+  const isSeries = !!item && (item.media_type === "tv" || !!item.first_air_date) && item._season == null;
+  if (dv && !dv.classList.contains("active") && typeof openDetail === "function") {
+    try { openDetail(item); } catch (e) {}
+    if (isSeries) return;
+  }
   activeItem = item;
   pendingAction = "watch";
   try { if (serverConfigPromise) await serverConfigPromise; } catch (e) {}
