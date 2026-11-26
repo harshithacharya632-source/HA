@@ -19,11 +19,17 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 # (1 MB / Telegram round-trip) and any slow round-trip froze the video.
 # Keep this small: all the requests share ONE connection, so on a slow link the
 # last of them waits behind the others - 3 keeps that wait well inside the timeout.
-PREFETCH_PARTS = 4
+PREFETCH_PARTS = 8
 
-# At most this many GetFile requests are in flight per Telegram client at once (all streams and the
-# warm-up together), so they never queue up behind each other long enough to time out.
-MAX_PARALLEL_GETFILE = 4
+# One Telegram connection only carries a few MB/s (it is limited per connection, and by the distance to the
+# data centre), which is what makes a video "buffer" even on a fast phone connection. So the file is read
+# over several connections to the same data centre at once - the first one exists from the start, the extra
+# ones are opened in the background while the first chunks are already flowing.
+SESSIONS_PER_DC = 3
+
+# At most this many GetFile requests are in flight per connection (all streams and the warm-up together), so
+# they never queue up behind each other long enough to time out.
+MAX_PER_SESSION = 4
 
 # Downloaded chunks are kept in memory (least recently used go first). A chunk is fetched ONCE, even when
 # several requests want it, and a download keeps going when the player drops the request - so a player
@@ -79,7 +85,10 @@ class ByteStreamer:
         self._chunks: "OrderedDict[tuple, asyncio.Future]" = OrderedDict()   # (file, chunk_size, index) -> Future[bytes]
         self._chunk_len: Dict[tuple, int] = {}
         self._chunk_bytes = 0
-        self._getfile_slots = asyncio.Semaphore(MAX_PARALLEL_GETFILE)
+        self._extra_sessions: Dict[int, list] = {}      # dc_id -> extra media connections (besides client.media_sessions[dc])
+        self._growing: Dict[int, float] = {}            # dc_id -> 0 while idle / start time while opening extras / retry-after
+        self._session_slots: Dict[int, asyncio.Semaphore] = {}
+        self._session_load: Dict[int, int] = {}
 
     async def get_file_properties(self, id: int, refresh: bool = False) -> FileId:
         """
@@ -194,6 +203,16 @@ class ByteStreamer:
         and every later GetFile on it fails until the whole bot restarts - which
         is what a video that 'buffers forever' after a network blip really was.
         Drop the dead one so the next call builds a fresh session."""
+        extras = self._extra_sessions.get(file_id.dc_id, [])
+        if broken in extras:
+            extras.remove(broken)
+            try:
+                await broken.stop()
+            except Exception:
+                pass
+            self._growing[file_id.dc_id] = time.monotonic() + 30     # open a replacement in 30 s
+            logging.warning(f"Dropped broken extra media connection for DC {file_id.dc_id}")
+            return await self.generate_media_session(client, file_id)
         async with self._session_lock:
             if client.media_sessions.get(file_id.dc_id) is broken:
                 client.media_sessions.pop(file_id.dc_id, None)
@@ -333,11 +352,66 @@ class ByteStreamer:
                     self._chunks.pop(k, None)
                     self._chunk_bytes -= self._chunk_len.pop(k, 0)
 
+    async def _new_media_session(self, dc_id: int) -> Session:
+        """An extra media connection to a DC (same steps as generate_media_session, but not stored as THE session)."""
+        client = self.client
+        if dc_id != await client.storage.dc_id():
+            session = Session(
+                client, dc_id,
+                await Auth(client, dc_id, await client.storage.test_mode()).create(),
+                await client.storage.test_mode(), is_media=True,
+            )
+            await session.start()
+            for _ in range(6):
+                exported_auth = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
+                try:
+                    await session.send(raw.functions.auth.ImportAuthorization(id=exported_auth.id, bytes=exported_auth.bytes))
+                    break
+                except AuthBytesInvalid:
+                    continue
+            else:
+                await session.stop()
+                raise AuthBytesInvalid
+        else:
+            session = Session(client, dc_id, await client.storage.auth_key(), await client.storage.test_mode(), is_media=True)
+            await session.start()
+        return session
+
+    async def _grow_sessions(self, dc_id: int) -> None:
+        """Open the extra connections in the background. A failure only means fewer connections (and a retry later)."""
+        try:
+            extras = self._extra_sessions.setdefault(dc_id, [])
+            while len(extras) < SESSIONS_PER_DC - 1:
+                extras.append(await self._new_media_session(dc_id))
+                logging.info(f"Opened extra media connection {len(extras) + 1}/{SESSIONS_PER_DC} to DC {dc_id}")
+            self._growing[dc_id] = float("inf")           # done: never try again
+        except Exception as e:
+            logging.warning(f"extra media connection to DC {dc_id} failed ({type(e).__name__}: {e}); using fewer, retry in 60s")
+            self._growing[dc_id] = time.monotonic() + 60
+
+    async def _pick_session(self, file_id: FileId) -> Session:
+        """The least busy connection to the file's DC; also starts opening the extra ones the first time."""
+        primary = await self.generate_media_session(self.client, file_id)
+        dc = file_id.dc_id
+        extras = self._extra_sessions.get(dc, [])
+        if len(extras) < SESSIONS_PER_DC - 1:
+            state = self._growing.get(dc, 0)
+            if state == 0 or (state != float("inf") and time.monotonic() > state and state > 1):
+                self._growing[dc] = 1                     # "busy opening"
+                asyncio.ensure_future(self._grow_sessions(dc))
+        return min([primary] + extras, key=lambda x: self._session_load.get(id(x), 0))
+
     async def _fetch_chunk(self, file_id: FileId, idx: int, chunk_size: int, index: int) -> bytes:
-        async with self._getfile_slots:
-            session = await self.generate_media_session(self.client, file_id)
-            location = await self.get_location(file_id)
-            r = await self._get_chunk({"session": session}, file_id, location, idx * chunk_size, chunk_size, index)
+        session = await self._pick_session(file_id)
+        key = id(session)
+        slots = self._session_slots.setdefault(key, asyncio.Semaphore(MAX_PER_SESSION))
+        self._session_load[key] = self._session_load.get(key, 0) + 1
+        try:
+            async with slots:
+                location = await self.get_location(file_id)
+                r = await self._get_chunk({"session": session}, file_id, location, idx * chunk_size, chunk_size, index)
+        finally:
+            self._session_load[key] -= 1
         if not isinstance(r, raw.types.upload.File):
             raise ConnectionError("unexpected GetFile reply")
         return r.bytes
