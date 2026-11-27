@@ -1,4 +1,4 @@
-/* GOFLIX player v7.
+/* GOFLIX player v8.
    Loaded after the main app script (plugins/route.py injects it into /app).
    It replaces the built-in player and the "watch" sheet flow:
    Watch -> starts at once with ONE file (language / quality / speed / volume are switched inside the
@@ -184,7 +184,7 @@ const S = {
   lastTap: 0, lastSide: null, acc: 0, accT: 0, accSide: null,
   seeking: false, dragT: 0, locked: false, brightness: 1, fill: false, speed: 1,
   histDone: false, lastSave: 0, wake: null, menu: null, slowToast: false, volWarned: false, diagBusy: false, blocked: false, playedThisLoad: false,
-  inline: false, full: false, hero: null, nfs: false, sysFs: false, auto: true, standby: null,
+  inline: false, full: false, hero: null, nfs: false, sysFs: false, auto: true, standby: null, seekAt: -1e9,
   lastData: 0, loadStart: 0, waitAt: 0, netT: 0, sugT: 0, sugAt: -1e9, stalls: [], loadSub: "",
 };
 
@@ -397,7 +397,7 @@ function loadTick() {
   if (!S.open || S.playedThisLoad || S.errored || S.blocked) return;
   const now = performance.now();
   if (now - S.lastData > 30000) return recover(false);
-  if (now - S.loadStart > 10000) suggestLower();
+  if (now - S.loadStart > 10000 && !S.auto) suggestLower();      // (Auto only lowers quality once the video has played)
   if (now - S.loadStart > 15000 && !S.started) E.slow.hidden = false;
   S.loadT = setTimeout(loadTick, 3000);
 }
@@ -410,6 +410,7 @@ function suggestLower() {
     .filter(f => !f._bad && inLang(f, S.lang) && (RANK[f.quality] || 0) < cur)
     .sort((a, b) => (RANK[b.quality] || 0) - (RANK[a.quality] || 0) || (a.bytes || 0) - (b.bytes || 0))[0];
   if (!lower) return;
+  if (S.auto && !S.started) return;     // Auto lowers quality only once the video has really played
   S.sugAt = now;
   if (S.auto) {            // Auto quality: just do it
     toast("Slow network - switched to " + lower.quality, 3500);
@@ -446,7 +447,10 @@ function armStall() {
     if (!S.open || S.pending || S.errored || v.paused || v.readyState >= 3) return;
     const now = performance.now();
     if (now - S.lastData > 12000) return recover(false);
-    if (now - S.waitAt > 8000) { suggestLower(); if (!S.slowToast) { S.slowToast = true; toast("Slow connection…"); } }
+    if (now - S.waitAt > 8000) {
+      if (now - S.seekAt > 25000) suggestLower();     // buffering long after a seek is the seek, not the network
+      if (!S.slowToast) { S.slowToast = true; toast("Slow connection…"); }
+    }
     armStall();
   }, 3000);
 }
@@ -511,7 +515,7 @@ function fail(kind) {
 onVid("loadedmetadata", () => {
   E.dur.textContent = fmt(v.duration);
   const p = S.pending;
-  if (p && p.resumeAt > 1 && isFinite(v.duration) && p.resumeAt < v.duration - 3) { try { v.currentTime = p.resumeAt; } catch (e) {} }
+  if (p && p.resumeAt > 1 && isFinite(v.duration) && p.resumeAt < v.duration - 3) { S.seekAt = performance.now(); try { v.currentTime = p.resumeAt; } catch (e) {} }
   setMeta();
   if (p) {
     S.pending = null;
@@ -537,8 +541,8 @@ onVid("playing", () => {
   clearTimeout(S.okT);
   S.okT = setTimeout(() => { S.retries = 0; S.slowToast = false; }, 25000);
 });
-onVid("waiting", () => { if (S.started && !S.pending) bufStart(true); });
-onVid("seeking", () => { if (S.started && !S.pending) bufStart(false); });
+onVid("waiting", () => { if (S.started && !S.pending) bufStart(performance.now() - S.seekAt > 5000); });
+onVid("seeking", () => { S.seekAt = performance.now(); if (S.started && !S.pending) bufStart(false); });
 /* first frame is ready: start right away instead of waiting for "canplay" (instant play) */
 onVid("loadeddata", () => {
   const p = S.pending;
