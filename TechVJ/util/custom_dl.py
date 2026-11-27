@@ -1,6 +1,8 @@
 import math
 import time
+import heapq
 import asyncio
+import itertools
 import logging
 from collections import deque, OrderedDict
 from info import *
@@ -60,6 +62,55 @@ def file_id_from_message(message) -> Optional[FileId]:
     return file_id
 
 
+class _PrioGate:
+    """A counting semaphore whose waiters are served by PRIORITY instead of first-come-first-served:
+    0 = a player is waiting for this chunk right now, 1 = read-ahead. After a seek, the chunk the player
+    waits for therefore never queues behind read-ahead of the part of the file it just left."""
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.used = 0
+        self._waiters = []                 # heap of [priority, seq, future, key]
+        self._seq = itertools.count()
+
+    async def acquire(self, key, prio: int) -> None:
+        if self.used < self.capacity and not self._waiters:
+            self.used += 1
+            return
+        fut = asyncio.get_event_loop().create_future()
+        heapq.heappush(self._waiters, [prio, next(self._seq), fut, key])
+        self._wake()
+        try:
+            await fut
+        except asyncio.CancelledError:
+            if fut.done() and not fut.cancelled():
+                self.release()             # the slot was handed to us just as we were cancelled
+            raise
+
+    def release(self) -> None:
+        self.used -= 1
+        self._wake()
+
+    def _wake(self) -> None:
+        while self._waiters and self.used < self.capacity:
+            fut = heapq.heappop(self._waiters)[2]
+            if fut.cancelled():
+                continue
+            self.used += 1
+            fut.set_result(None)
+
+    def set_capacity(self, n: int) -> None:
+        self.capacity = n
+        self._wake()
+
+    def bump(self, key, prio: int) -> None:
+        for e in self._waiters:
+            if e[3] == key and prio < e[0]:
+                e[0] = prio
+                heapq.heapify(self._waiters)
+                return
+
+
 class ByteStreamer:
     def __init__(self, client: Client):
         """A custom class that holds the cache of a specific client and class functions.
@@ -87,8 +138,11 @@ class ByteStreamer:
         self._chunk_bytes = 0
         self._extra_sessions: Dict[int, list] = {}      # dc_id -> extra media connections (besides client.media_sessions[dc])
         self._growing: Dict[int, float] = {}            # dc_id -> 0 while idle / start time while opening extras / retry-after
-        self._session_slots: Dict[int, asyncio.Semaphore] = {}
         self._session_load: Dict[int, int] = {}
+        self._gate = _PrioGate(MAX_PER_SESSION)         # grows with the number of connections
+        self._want: Dict[tuple, int] = {}               # chunk -> how many streams still want it (warm-up chunks are pinned)
+        self._started: set = set()                      # chunks whose GetFile is already on its way to Telegram
+        self._prio: Dict[tuple, int] = {}
 
     async def get_file_properties(self, id: int, refresh: bool = False) -> FileId:
         """
@@ -210,6 +264,7 @@ class ByteStreamer:
                 await broken.stop()
             except Exception:
                 pass
+            self._gate.set_capacity(MAX_PER_SESSION * (1 + len(extras)))
             self._growing[file_id.dc_id] = time.monotonic() + 30     # open a replacement in 30 s
             logging.warning(f"Dropped broken extra media connection for DC {file_id.dc_id}")
             return await self.generate_media_session(client, file_id)
@@ -325,19 +380,43 @@ class ByteStreamer:
         raise last_exc
 
     # ---------------- chunk cache ----------------
-    def _chunk_future(self, file_id: FileId, idx: int, chunk_size: int, index: int) -> "asyncio.Future":
+    @staticmethod
+    def _key(file_id: FileId, idx: int, chunk_size: int) -> tuple:
+        return (file_id.unique_id, chunk_size, idx)
+
+    def _chunk_future(self, file_id: FileId, idx: int, chunk_size: int, index: int, prio: int = 1) -> "asyncio.Future":
         """The (shared) download of chunk `idx`. It runs as its own task, not as part of any HTTP request."""
-        key = (file_id.unique_id, chunk_size, idx)
+        key = self._key(file_id, idx, chunk_size)
         fut = self._chunks.get(key)
         if fut is not None:
             self._chunks.move_to_end(key)
+            if prio < self._prio.get(key, 1) and key not in self._started and not fut.done():
+                self._prio[key] = prio
+                self._gate.bump(key, prio)
             return fut
-        fut = asyncio.ensure_future(self._fetch_chunk(file_id, idx, chunk_size, index))
+        self._prio[key] = prio
+        fut = asyncio.ensure_future(self._fetch_chunk(file_id, idx, chunk_size, index, key))
         self._chunks[key] = fut
         fut.add_done_callback(lambda f, k=key: self._chunk_done(k, f))
         return fut
 
+    def _release_want(self, key: tuple) -> None:
+        """A stream no longer needs this chunk (it was read, or the player left / seeked away). If nobody
+        else wants it and it has not been requested from Telegram yet, drop it - otherwise the read-ahead
+        of the old position would keep the connections busy while the player waits for the new one."""
+        n = self._want.get(key, 0) - 1
+        if n > 0:
+            self._want[key] = n
+            return
+        self._want.pop(key, None)
+        fut = self._chunks.get(key)
+        if fut is not None and not fut.done() and key not in self._started:
+            fut.cancel()
+            self._chunks.pop(key, None)
+
     def _chunk_done(self, key, fut) -> None:
+        self._started.discard(key)
+        self._prio.pop(key, None)
         if fut.cancelled() or fut.exception() is not None:   # exception() also marks it as retrieved
             self._chunks.pop(key, None)                      # never keep a failure: the next request tries again
             return
@@ -350,6 +429,7 @@ class ByteStreamer:
                     break
                 if self._chunks[k].done():
                     self._chunks.pop(k, None)
+                    self._want.pop(k, None)
                     self._chunk_bytes -= self._chunk_len.pop(k, 0)
 
     async def _new_media_session(self, dc_id: int) -> Session:
@@ -383,6 +463,7 @@ class ByteStreamer:
             extras = self._extra_sessions.setdefault(dc_id, [])
             while len(extras) < SESSIONS_PER_DC - 1:
                 extras.append(await self._new_media_session(dc_id))
+                self._gate.set_capacity(MAX_PER_SESSION * (1 + len(extras)))
                 logging.info(f"Opened extra media connection {len(extras) + 1}/{SESSIONS_PER_DC} to DC {dc_id}")
             self._growing[dc_id] = float("inf")           # done: never try again
         except Exception as e:
@@ -401,31 +482,37 @@ class ByteStreamer:
                 asyncio.ensure_future(self._grow_sessions(dc))
         return min([primary] + extras, key=lambda x: self._session_load.get(id(x), 0))
 
-    async def _fetch_chunk(self, file_id: FileId, idx: int, chunk_size: int, index: int) -> bytes:
-        session = await self._pick_session(file_id)
-        key = id(session)
-        slots = self._session_slots.setdefault(key, asyncio.Semaphore(MAX_PER_SESSION))
-        self._session_load[key] = self._session_load.get(key, 0) + 1
+    async def _fetch_chunk(self, file_id: FileId, idx: int, chunk_size: int, index: int, key: tuple) -> bytes:
+        await self._gate.acquire(key, self._prio.get(key, 1))
+        self._started.add(key)
         try:
-            async with slots:
+            session = await self._pick_session(file_id)
+            sid = id(session)
+            self._session_load[sid] = self._session_load.get(sid, 0) + 1
+            try:
                 location = await self.get_location(file_id)
                 r = await self._get_chunk({"session": session}, file_id, location, idx * chunk_size, chunk_size, index)
+            finally:
+                self._session_load[sid] -= 1
         finally:
-            self._session_load[key] -= 1
+            self._gate.release()
         if not isinstance(r, raw.types.upload.File):
             raise ConnectionError("unexpected GetFile reply")
         return r.bytes
 
-    def warm(self, file_id: FileId, head: int = 3, tail: int = 1, chunk_size: int = 1024 * 1024, index: int = 0):
+    def warm(self, file_id: FileId, head: int = 3, tail: int = 3, chunk_size: int = 1024 * 1024, index: int = 0):
         """Start downloading the first `head` and last `tail` chunks of a file in the background and return the
         futures of the first ones. A player asks for the beginning first, and (MP4 'moov' / MKV index) for the
-        end of the file next - both are then answered from memory."""
+        end of the file next - both are then answered from memory. These chunks stay until evicted."""
         total = max(1, math.ceil((getattr(file_id, "file_size", 0) or 0) / chunk_size))
         n_head = min(head, total)
-        heads = [self._chunk_future(file_id, i, chunk_size, index) for i in range(n_head)]
-        for i in range(max(n_head, total - tail), total):
-            self._chunk_future(file_id, i, chunk_size, index)
-        return heads
+        wanted = list(range(n_head)) + list(range(max(n_head, total - tail), total))
+        futs = []
+        for i in wanted:
+            futs.append(self._chunk_future(file_id, i, chunk_size, index, 0))
+            key = self._key(file_id, i, chunk_size)
+            self._want[key] = self._want.get(key, 0) + 1          # pinned: never released
+        return futs[:n_head]
 
     async def yield_file(
         self,
@@ -447,7 +534,8 @@ class ByteStreamer:
         a multiple of `chunk_size`.
         """
         work_loads[index] += 1
-        wanted = deque()
+        wanted = deque()            # (key, future) in the order the player needs them
+        current = None
         try:
             first_idx = offset // chunk_size
             next_part = 0
@@ -455,14 +543,24 @@ class ByteStreamer:
             def schedule():
                 nonlocal next_part
                 while next_part < part_count and len(wanted) < PREFETCH_PARTS:
-                    wanted.append(self._chunk_future(file_id, first_idx + next_part, chunk_size, index))
+                    i = first_idx + next_part
+                    # the first two chunks of a request are what the player is waiting for: urgent
+                    fut = self._chunk_future(file_id, i, chunk_size, index, 0 if next_part < 2 else 1)
+                    key = self._key(file_id, i, chunk_size)
+                    self._want[key] = self._want.get(key, 0) + 1
+                    wanted.append((key, fut))
                     next_part += 1
 
             schedule()
             current_part = 1
             while wanted:
+                current = wanted.popleft()
+                if not current[1].done():
+                    self._gate.bump(current[0], 0)       # the player is waiting for it now
                 # shield: if the player drops this request, the download itself keeps going for the next one
-                chunk = await asyncio.shield(wanted.popleft())
+                chunk = await asyncio.shield(current[1])
+                self._release_want(current[0])
+                current = None
                 schedule()  # keep the pipeline full while this chunk is written out
                 if not chunk:
                     break
@@ -482,4 +580,8 @@ class ByteStreamer:
             # body and closes the connection so the player retries immediately.
             logging.warning(f"yield_file aborted early for client {index}: {type(e).__name__}: {e}")
         finally:
+            if current is not None:
+                self._release_want(current[0])
+            for key, _ in wanted:
+                self._release_want(key)      # read-ahead nobody needs any more (seek / closed) is dropped
             work_loads[index] -= 1
